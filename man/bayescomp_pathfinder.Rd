@@ -32,7 +32,9 @@ bayescomp_pathfinder(
 
 \item{num_elbo_draws}{Draws per ELBO estimate.}
 
-\item{psis_resample}{Resample with Pareto smoothed importance weights.}
+\item{psis_resample}{Resample \code{num_draws} draws with Pareto smoothed
+importance weights. With \code{FALSE}, all \code{num_paths * num_draws} draws of
+the paths are returned, as in Stan.}
 
 \item{tol_rel_obj, tol_grad}{L-BFGS convergence tolerances.}
 

@@ -2,9 +2,9 @@
 # 2010) and differential evolution Markov chain Monte Carlo (ter Braak
 # 2006). Both move a population of walkers using the positions of the
 # others, so they adapt to linear correlations without gradients or tuning.
-# Each walker is reported as a chain. Walkers are not independent, so R-hat
-# and ESS computed across walkers are optimistic; run several ensembles
-# (`chains`) for a fair convergence check.
+# Each walker is reported as a chain. Walkers of one ensemble are not
+# independent, so summaries compute R-hat from the walker means of the
+# independent ensembles (`chains`) and not across walkers.
 
 #' Ensemble Markov chain Monte Carlo
 #'
@@ -19,9 +19,14 @@
 #'   tenth iteration uses 1 to jump between modes.
 #' @param noise Standard deviation of the small Gaussian added to `"de"`
 #'   proposals.
-#' @param init,seed As in [bayescomp_sample()].
-#' @return A `bayescomp_fit` with one chain per walker and element
-#'   `acceptance` (mean acceptance per walker).
+#' @param chains Number of independent ensembles.
+#' @param init,seed,cores As in [bayescomp_sample()].
+#' @return A `bayescomp_fit` with one chain per walker (the walkers of
+#'   ensemble 1 first) and element `acceptance` (mean acceptance per walker).
+#'   Its summary reports R-hat computed from the per iteration walker means of
+#'   the ensembles (split R-hat when `chains = 1`) and effective sample sizes
+#'   computed over all walkers, as in emcee; run several ensembles for a
+#'   reliable convergence check.
 #' @references Goodman, J. and Weare, J. (2010). Ensemble samplers with
 #'   affine invariance. *Communications in Applied Mathematics and
 #'   Computational Science* 5, 65 to 80. ter Braak, C. J. F. (2006). A Markov
@@ -30,7 +35,7 @@
 #' @export
 bayescomp_ensemble <- function(model, method = c("stretch", "de"), walkers = NULL, iter_warmup = 1000L,
                                iter_sampling = 1000L, thin = 1L, a = 2, gamma = NULL, noise = 1e-4,
-                               init = 2, seed = NULL) {
+                               chains = 1L, init = 2, seed = NULL, cores = getOption("mc.cores", 1L)) {
   check_model(model)
   method <- match.arg(method)
   n <- model$dim
@@ -45,11 +50,12 @@ bayescomp_ensemble <- function(model, method = c("stretch", "de"), walkers = NUL
   nw <- as_count(iter_warmup, "iter_warmup")
   ns <- as_count(iter_sampling, "iter_sampling", 1L)
   thin <- as_count(thin, "thin", 1L)
+  chains <- as_count(chains, "chains", 1L)
   if (is.null(gamma)) gamma <- 2.38 / sqrt(2 * n)
   t0 <- proc.time()[["elapsed"]]
-  rc <- run_chains(model, 1L, seed, 1L, function(id) {
+  rc <- run_chains(model, chains, seed, cores, function(id) {
     lpf <- lp_value_fun(model)
-    X <- t(vapply(seq_len(W), function(w) find_init(model, init, w, gradient = FALSE), numeric(n)))
+    X <- t(vapply(seq_len(W), function(w) find_init(model, init, (id - 1L) * W + w, gradient = FALSE), numeric(n)))
     if (n == 1L) X <- matrix(X, ncol = 1L)
     lp <- vapply(seq_len(W), function(w) lpf(X[w, ]), 0)
     keep <- seq_len(ns)[(seq_len(ns) - 1L) %% thin == 0L]
@@ -93,9 +99,10 @@ bayescomp_ensemble <- function(model, method = c("stretch", "de"), walkers = NUL
     }
     list(Q = Q, LP = LP, acc = acc / ns)
   })
-  out <- rc[[1L]]
   # generated quantities draw from a stream derived from the run's seed
-  res <- with_seed(attr(rc, "seed") %% 2147483646L + 1L, lapply(seq_len(W), function(w) {
+  res <- with_seed(attr(rc, "seed") %% 2147483646L + 1L, lapply(seq_len(chains * W), function(cw) {
+    out <- rc[[(cw - 1L) %/% W + 1L]]
+    w <- (cw - 1L) %% W + 1L
     q <- matrix(out$Q[, w, ], ncol = n)
     dg <- matrix(0, nrow(q), 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
     dg[, "lp__"] <- out$LP[, w]
@@ -103,7 +110,8 @@ bayescomp_ensemble <- function(model, method = c("stretch", "de"), walkers = NUL
     list(q = q, gq = chain_write_draws(model, q, FALSE), diag = dg, step_size = NA_real_, inv_metric = NULL,
          n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0))
   }))
-  fit <- make_fit(model, res, list(algorithm = method, walkers = W), "ensemble", seed, proc.time()[["elapsed"]] - t0)
-  fit$acceptance <- out$acc
+  fit <- make_fit(model, res, list(algorithm = method, walkers = W, ensembles = chains), "ensemble", seed,
+                  proc.time()[["elapsed"]] - t0)
+  fit$acceptance <- unlist(lapply(rc, `[[`, "acc"))
   fit
 }

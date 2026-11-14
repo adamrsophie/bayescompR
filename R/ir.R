@@ -107,6 +107,13 @@ bayescomp_generate_quantities <- function(model, fit, seed = NULL) {
     })
     if (!identical(sig(model), sig(fit$model)))
       stop("the model's parameter declarations differ from those of the fit (names, order, shapes or constraints)", call. = FALSE)
+    # bounds may depend on data: the same unconstrained draw must map to the
+    # same parameter values under both models
+    pv <- function(m, u) flatten_draw(write_array(m, u, FALSE, FALSE, print = FALSE)[[1L]])
+    for (u in lapply(fit$unconstrained, function(q) q[1L, ])) {
+      if (!isTRUE(all.equal(pv(model, u), pv(fit$model, u), tolerance = 1e-12)))
+        stop("the model's parameter constraints evaluate differently from those of the fit (bounds that depend on changed data)", call. = FALSE)
+    }
   }
   chains <- length(fit$unconstrained)
   t0 <- proc.time()[["elapsed"]]

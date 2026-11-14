@@ -452,8 +452,9 @@ binary_prec <- c(
   "||" = 1L, "&&" = 2L, "==" = 3L, "!=" = 3L,
   "<" = 4L, "<=" = 4L, ">" = 4L, ">=" = 4L,
   "+" = 5L, "-" = 5L,
-  "*" = 6L, "/" = 6L, "%" = 6L, "%/%" = 6L,
-  "\\" = 7L, ".*" = 8L, "./" = 8L
+  # as in stanc3: .* and ./ share the level of * and /, and \ binds tighter
+  "*" = 6L, "/" = 6L, "%" = 6L, "%/%" = 6L, ".*" = 6L, "./" = 6L,
+  "\\" = 7L
 )
 
 parse_expr <- function(p, no_gt = FALSE) {
@@ -606,6 +607,8 @@ parse_primary <- function(p, no_gt) {
             if (length(args) != 1L) stop_syntax("'|' may only follow the first argument", tk_loc(tk(p)))
             tk_next(p)
             cond_bar <- TRUE
+            # nothing after the bar: std_normal_lcdf(x|)
+            if (tk_is(p, ")")) break
             next
           }
           if (tk_is(p, ",")) {

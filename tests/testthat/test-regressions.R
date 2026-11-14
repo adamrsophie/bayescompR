@@ -221,3 +221,176 @@ test_that("parallel chains print progress and match sequential draws", {
   expect_identical(bayescomp_extract(a, "y"), bayescomp_extract(b, "y"))
   expect_identical(formals(bayescomp_sample)$cores, quote(getOption("mc.cores", 1L)))
 })
+
+test_that("a failing generated quantities block keeps the row's parameters", {
+  m <- bayescomp_model("parameters { real y; } model { y ~ normal(0, 1); }
+                        generated quantities { real z = y; if (y > 0) reject(\"positive\"); }")
+  f <- suppressWarnings(bayescomp_sample(m, chains = 1, iter_warmup = 50, iter_sampling = 50, seed = 2, refresh = 0))
+  y <- bayescomp_extract(f, "y"); z <- bayescomp_extract(f, "z")
+  expect_false(anyNA(y))
+  expect_true(all(is.na(z[y > 0])))
+  expect_equal(z[y <= 0], y[y <= 0])
+})
+
+test_that("ADVI reports convergence status and ensembles run as independent chains", {
+  m <- bayescomp_model("parameters { real y; } model { y ~ normal(1, 2); }")
+  v <- suppressWarnings(bayescomp_variational(m, seed = 1, iter = 2000))
+  expect_true(is.logical(v$vi$converged))
+  expect_type(v$vi$status, "character")
+  e <- bayescomp_ensemble(m, chains = 2, iter_warmup = 100, iter_sampling = 100, seed = 1)
+  expect_equal(e$config$ensembles, 2L)
+  expect_equal(dim(e$draws)[2], 2L * e$config$walkers)
+})
+
+test_that("container arguments of a distribution must agree in size", {
+  m <- bayescomp_model("data { vector[3] y; vector[1] mu; } parameters { real<lower=0> s; } model { y ~ normal(mu, s); }",
+                       data = list(y = c(1, 2, 3), mu = 0))
+  expect_error(bayescomp_log_prob(m, 0), class = "bayescomp_shape_error")
+})
+
+test_that("sd has a finite gradient at a constant vector", {
+  m <- bayescomp_model("parameters { real a; } model { vector[3] v = rep_vector(a, 3); target += sd(v) - 0.5 * a^2; }")
+  expect_true(all(is.finite(bayescomp_grad_log_prob(m, 0.3))))
+})
+
+test_that("functions removed from Stan are rejected", {
+  for (f in c("fabs(1.0)", "multiply_log(1.0, 2.0)", "binomial_coefficient_log(3.0, 1.0)"))
+    expect_error(bayescomp_model(sprintf("transformed data { real x = %s; }", f)), "removed from the Stan language")
+})
+
+test_that("operator precedence, empty bar and operator functions match stanc", {
+  v <- function(e, ty = "real") bayescomp_constrain(bayescomp_model(sprintf("generated quantities { %s r = %s; }", ty, e)), numeric(0))$r
+  # .* binds like *, so a' * a .* a is (a' * a) .* a, a vector
+  expect_equal(v("[1, 2]' * 2 .* [3, 4]'", "vector[2]"), c(6, 16))
+  expect_equal(v("[1, 2] * [3, 4]' ./ 2"), 5.5)
+  expect_equal(v("std_normal_lcdf(0 |)"), log(0.5))
+  expect_equal(v("add(1.0, multiply(2, 3))"), 7)
+  expect_equal(v("minus(3.0)"), -3)
+  expect_equal(v("logical_negation(0)", "int"), 1L)
+  expect_equal(v("modulus(7, 3)", "int"), 1L)
+  expect_equal(v("transpose([1, 2]')", "row_vector[2]"), c(1, 2))
+})
+
+test_that("multidimensional int arrays keep their shape when assigned", {
+  m <- bayescomp_model("functions { array[,] int mk(int n, int t) { array[t, n] int V; for (j in 1:n) for (i in 1:t) V[i, j] = j; return V; } }
+                        transformed data { array[1, 3] int V = mk(3, 1); }
+                        parameters { vector[3] b; } model { b ~ normal(0, 1); }
+                        generated quantities { vector[3] z = b[V[1]]; array[2] int d = dims(V); }")
+  r <- bayescomp_constrain(m, c(1, 2, 3))
+  expect_equal(r$d, c(1L, 3L))
+  expect_equal(r$z, c(1, 2, 3))
+})
+
+test_that("CSR functions match dense algebra, including empty rows", {
+  A <- matrix(c(0, 0, 2, 0, 0, 3, 4, 0, 0, 0, 5, 6), 3)
+  m <- bayescomp_model("data { matrix[3, 4] A; }
+    transformed data { vector[size(csr_extract_w(A))] w = csr_extract_w(A); array[size(w)] int v = csr_extract_v(A); array[4] int u = csr_extract_u(A); }
+    parameters { vector[4] b; vector[size(w)] e; }
+    model { target += -0.5 * dot_self(csr_matrix_times_vector(3, 4, w .* exp(e), v, u, b)) - 0.5 * dot_self(b) - 0.5 * dot_self(e); }
+    generated quantities { matrix[3, 4] D = csr_to_dense_matrix(3, 4, w, v, u); vector[3] y = csr_matrix_times_vector(3, 4, w, v, u, b); }",
+    data = list(A = A))
+  u <- c(0.3, -0.2, 0.5, 1, 0.1, -0.1, 0.2, 0.05, -0.3)
+  r <- bayescomp_constrain(m, u)
+  expect_equal(r$D, A)
+  expect_equal(as.vector(r$y), as.vector(A %*% u[1:4]))
+  fd <- vapply(seq_along(u), function(i) { h <- replace(numeric(length(u)), i, 1e-6); (bayescomp_log_prob(m, u + h) - bayescomp_log_prob(m, u - h)) / 2e-6 }, 0)
+  expect_equal(as.vector(bayescomp_grad_log_prob(m, u)), fd, tolerance = 1e-6)
+})
+
+test_that("ordered_logistic_glm equals ordered_logistic of the linear predictor", {
+  set.seed(1)
+  X <- matrix(rnorm(20), 10)
+  m <- bayescomp_model("data { matrix[10, 2] X; array[10] int y; } parameters { vector[2] b; ordered[2] c; }
+                        model { target += ordered_logistic_glm_lpmf(y | X, b, c); }
+                        generated quantities { real d = ordered_logistic_glm_lpmf(y | X, b, c) - ordered_logistic_lpmf(y | X * b, c); }",
+                       data = list(X = X, y = sample(1:3, 10, TRUE)))
+  expect_equal(bayescomp_constrain(m, c(0.3, -0.2, -0.5, 0.1))$d, 0)
+})
+
+test_that("functions declared without a body can be supplied from R", {
+  code <- "functions { vector ols(matrix X, vector y); }
+           data { matrix[5, 2] X; vector[5] y; } transformed data { vector[2] b0 = ols(X, y); }
+           parameters { real a; } model { a ~ normal(0, 1); } generated quantities { vector[2] b = b0; }"
+  X <- cbind(1, 1:5); y <- c(2, 4, 5, 8, 9)
+  expect_error(bayescomp_model(code, data = list(X = X, y = y)), "declared but never defined", class = "bayescomp_semantic_error")
+  m <- bayescomp_model(code, data = list(X = X, y = y), functions = list(ols = function(X, y) as.vector(qr.coef(qr(X), y))))
+  expect_equal(bayescomp_constrain(m, 0)$b, as.vector(qr.coef(qr(X), y)))
+})
+
+test_that("library functions can be overloaded with new signatures only", {
+  m <- bayescomp_model("functions { real log1p(vector x, real k) { return sum(log1p(x)) * k; } }
+                        generated quantities { real a = log1p([1, 2]', 2); real b = log1p(1.0); }")
+  r <- bayescomp_constrain(m, numeric(0))
+  expect_equal(r$a, 2 * sum(log1p(1:2)))
+  expect_equal(r$b, log(2))
+  expect_error(bayescomp_model("functions { real log1p(real x) { return x; } }"), "already defined in the Stan library")
+})
+
+test_that("digit separators are allowed between digits anywhere in a literal", {
+  r <- bayescomp_constrain(bayescomp_model("generated quantities { real a = 1_000.000_5; real b = 1.5e1_0; int c = 1_000_000; }"), numeric(0))
+  expect_equal(r$a, 1000.0005)
+  expect_equal(r$b, 1.5e10)
+  expect_identical(r$c, 1000000L)
+  expect_error(bayescomp_model("generated quantities { int c = 1_; }"), class = "bayescomp_syntax_error")
+})
+
+test_that("an unassigned unconstrained transformed parameter is not an error, as in stanc3", {
+  m <- bayescomp_model("parameters { real y; } transformed parameters { real w; real<lower=0> z; } model { y ~ normal(0, 1); }")
+  expect_error(bayescomp_log_prob(m, 0), "must be greater than or equal to 0")
+  m2 <- bayescomp_model("parameters { real y; } transformed parameters { real w; } model { y ~ normal(0, 1); }")
+  expect_equal(bayescomp_log_prob(m2, 0), dnorm(0, log = TRUE))
+})
+
+test_that("#include directives are expanded from the include paths", {
+  d <- tempfile("inc"); dir.create(d); sub <- file.path(d, "sub"); dir.create(sub)
+  writeLines("real twice(real x) { return 2 * x; }", file.path(sub, "twice.stanfunctions"))
+  writeLines("functions {\n  #include twice.stanfunctions\n}", file.path(sub, "funs.stan"))
+  writeLines("#include <sub/funs.stan>\nparameters { real y; } model { y ~ normal(0, 1); }\ngenerated quantities { real z = twice(y); }", file.path(d, "main.stan"))
+  m <- bayescomp_model(file = file.path(d, "main.stan"))
+  expect_equal(bayescomp_constrain(m, 1.5)$z, 3)
+  code <- readLines(file.path(d, "main.stan"))
+  expect_error(bayescomp_model(code), "not found", class = "bayescomp_syntax_error")
+  expect_equal(bayescomp_constrain(bayescomp_model(code, include_paths = d), 1)$z, 2)
+  writeLines("#include self.stan", file.path(d, "self.stan"))
+  expect_error(bayescomp_model(file = file.path(d, "self.stan")), "includes itself")
+})
+
+test_that("target() may be read in transformed parameters but not incremented there", {
+  m <- bayescomp_model("parameters { real y; } transformed parameters { real t = target(); } model { y ~ normal(0, 1); }")
+  expect_equal(bayescomp_log_prob(m, 1), dnorm(1, log = TRUE))
+  expect_error(bayescomp_model("parameters { real y; } transformed parameters { real t = 1; target += 1; } model { y ~ normal(0, 1); }"),
+               class = "bayescomp_semantic_error")
+})
+
+test_that("an unsupplied CHAIN_ID is the chain number, as in rstan", {
+  m <- bayescomp_model("data { int<lower=1> CHAIN_ID; } transformed data { real c = CHAIN_ID; }
+                        parameters { real y; } model { y ~ normal(0, 1); } generated quantities { real cid = c; }")
+  f <- bayescomp_sample(m, chains = 3, iter_warmup = 20, iter_sampling = 5, seed = 1, refresh = 0)
+  expect_equal(apply(f$draws[, , "cid"], 2, unique), c(1, 2, 3))
+  expect_identical(m$env$V.CHAIN_ID, 1L)
+  m2 <- bayescomp_model("data { int CHAIN_ID; } parameters { real y; } model { y ~ normal(0, 1); } generated quantities { int c = CHAIN_ID; }",
+                        data = list(CHAIN_ID = 7L))
+  f2 <- bayescomp_sample(m2, chains = 2, iter_warmup = 20, iter_sampling = 5, seed = 1, refresh = 0)
+  expect_true(all(f2$draws[, , "c"] == 7))
+})
+
+test_that("posterior, bayesplot and loo generics accept a fit", {
+  skip_if_not_installed("posterior")
+  m <- bayescomp_model("data { vector[4] y; } parameters { real mu; } model { y ~ normal(mu, 1); }
+                        generated quantities { vector[4] log_lik; for (i in 1:4) log_lik[i] = normal_lpdf(y[i] | mu, 1); }",
+                       data = list(y = c(-1, 0, 0.5, 2)))
+  f <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100, seed = 1, refresh = 0)
+  d <- posterior::as_draws_df(f)
+  expect_equal(posterior::ndraws(d), 200)
+  expect_true(all(c("lp__", "mu", "log_lik[4]") %in% posterior::variables(d)))
+  expect_equal(posterior::variables(posterior::as_draws(f, variable = "mu")), "mu")
+  skip_if_not_installed("bayesplot")
+  np <- bayesplot::nuts_params(f)
+  expect_named(np, c("Chain", "Iteration", "Parameter", "Value"))
+  expect_true("divergent__" %in% levels(np$Parameter))
+  expect_equal(nrow(bayesplot::log_posterior(f)), 200)
+  skip_if_not_installed("loo")
+  l <- loo::loo(f)
+  expect_s3_class(l, "psis_loo")
+  expect_equal(dim(l$pointwise)[1], 4)
+})

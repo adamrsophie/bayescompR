@@ -49,6 +49,14 @@ pat_ok <- function(p, t) {
     ty_assignable(parse_ty_string(p), t))
 }
 
+# a library argument pattern that takes type t without promotion (the family
+# patterns such as "reals" stand for one signature per member type)
+pat_exact <- function(p, t) {
+  if (!pat_ok(p, t)) return(FALSE)
+  if (p %in% c("any", "anyarr", "container", "reals", "ints", "vectors", "string")) return(TRUE)
+  ty_eq(parse_ty_string(p), t)
+}
+
 ret_type <- function(sig, types) {
   r <- sig$ret
   if (is.function(r)) return(r(types))
@@ -250,7 +258,6 @@ truthy <- function(x) {
 # Elementwise unary functions
 
 unary_defs <- list(
-  fabs = function(x) abs(x),
   sqrt = function(x) sqrt(x),
   cbrt = function(x) ad_unary(x, function(v) sign(v) * abs(v)^(1 / 3), function(v, y) 1 / (3 * y^2)),
   square = function(x) ad_square(x),
@@ -292,7 +299,6 @@ unary_defs <- list(
     ad_inv_Phi(x)
   },
   Phi_approx = function(x) ad_inv_logit(0.07056 * x * x * x + 1.5976 * x),
-  log_Phi = function(x) ad_log_Phi(x),
   # quantile from the log probability directly, so it does not underflow
   std_normal_log_qf = function(x) ad_unary(x, function(v) stats::qnorm(v, log.p = TRUE),
                                            function(v, y) exp(v - stats::dnorm(y, log = TRUE))),
@@ -382,7 +388,6 @@ bin2("atan2", function(a, b) ad_binary(a, b, atan2,
 bin2("lbeta", function(a, b) ad_lbeta(a, b))
 bin2("beta", function(a, b) exp(ad_lbeta(a, b)))
 bin2("lchoose", function(a, b) ad_lchoose(a, b))
-bin2("binomial_coefficient_log", function(a, b) ad_lchoose(a, b))
 bin2("log_diff_exp", function(a, b) ad_log_diff_exp(a, b))
 bin2("log_inv_logit_diff", function(a, b) ad_log_diff_exp(ad_log_inv_logit(a), ad_log_inv_logit(b)))
 # x * log(y) with 0 * log(0) = 0
@@ -390,7 +395,6 @@ ad_lmultiply <- function(a, b) ad_binary(a, b, function(x, y) ifelse(x == 0 & y 
                                          function(x, y, r) ifelse(x == 0 & y == 0, 0, log(y)),
                                          function(x, y, r) ifelse(x == 0 & y == 0, 0, x / y))
 bin2("lmultiply", ad_lmultiply)
-bin2("multiply_log", ad_lmultiply)
 bin2("falling_factorial", function(a, b) exp(lgamma(a + 1) - lgamma(a - b + 1)))
 bin2("log_falling_factorial", function(a, b) lgamma(a + 1) - lgamma(a - b + 1))
 bin2("rising_factorial", function(a, b) exp(lgamma(a + b) - lgamma(a)))
@@ -427,7 +431,6 @@ def("modified_bessel_second_kind", c("int", "real"), "real", function(v, z) ad_u
 def("inc_beta", c("real", "real", "real"), "real", function(a, b, x) {
   inc_beta_ad(as_dbl(a), as_dbl(b), as_dbl(x))
 })
-def("log_inc_beta", c("real", "real", "real"), "real", function(a, b, x) log(inc_beta_ad(as_dbl(a), as_dbl(b), as_dbl(x))))
 def("inv_inc_beta", c("real", "real", "real"), "real", function(a, b, p) {
   a <- as_dbl(a); b <- as_dbl(b); p <- as_dbl(p)
   x <- stats::qbeta(val(p), val(a), val(b))

@@ -175,6 +175,15 @@ run_forked <- function(n, cores, f) {
   out
 }
 
+bind_chain_id <- function(model, id) {
+  if (identical(model$env$V.CHAIN_ID, as.integer(id))) return(invisible())
+  d <- model$data
+  d$CHAIN_ID <- as.integer(id)
+  inst <- with_seed(model$compiled$seed, instantiate(model$compiled, d))
+  for (nm in ls(inst$env, all.names = TRUE)) assign(nm, get(nm, envir = inst$env), envir = model$env)
+  invisible()
+}
+
 run_chains <- function(model, chains, seed, cores, f) {
   old_kind <- RNGkind()
   if (is.null(seed)) seed <- sample.int(.Machine$integer.max, 1L)
@@ -192,7 +201,11 @@ run_chains <- function(model, chains, seed, cores, f) {
     s <- parallel::nextRNGStream(s)
     streams[[i]] <- s
   }
+  rebind <- isTRUE(model$compiled$chain_id_auto) && chains > 1L
+  if (rebind) on.exit(bind_chain_id(model, 1L), add = TRUE)
   one <- function(i) {
+    # each chain sees its own CHAIN_ID, so transformed data is rebuilt
+    if (rebind) bind_chain_id(model, i)
     assign(".Random.seed", streams[[i]], envir = globalenv())
     f(i)
   }
@@ -273,7 +286,17 @@ chain_write_draws <- function(model, qs, print) {
                     warning(sprintf("generated quantities failed at draw %d: %s", i, conditionMessage(e)), call. = FALSE)
                     NULL
                   })
-    if (!is.null(r)) out[i, ] <- flatten_draw(c(r[[1L]], r[[2L]], r[[3L]]))
+    if (is.null(r)) {
+      # keep the parameters (and transformed parameters, if they evaluate);
+      # only the failed block is left missing
+      r <- tryCatch(write_array(model, qs[i, ], TRUE, FALSE, print = FALSE),
+                    bayescomp_fatal_error = function(e) stop(e), bayescomp_error = function(e) NULL)
+      if (is.null(r)) r <- write_array(model, qs[i, ], FALSE, FALSE, print = FALSE)
+      v <- flatten_draw(c(r[[1L]], r[[2L]]))
+      out[i, seq_along(v)] <- v
+      next
+    }
+    out[i, ] <- flatten_draw(c(r[[1L]], r[[2L]], r[[3L]]))
   }
   out
 }

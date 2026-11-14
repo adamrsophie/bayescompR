@@ -63,7 +63,7 @@ softabs <- function(H, alpha) {
 #' @export
 bayescomp_riemannian <- function(model, method = c("smmala", "rmhmc"), chains = 4L, iter_warmup = 500L,
                                  iter_sampling = 500L, step_size = 0.5, int_time = 1.5, alpha = 1e6,
-                                 adapt_delta = NULL, fixed_point_steps = 6L, init = 2, seed = NULL,
+                                 adapt_delta = NULL, fixed_point_steps = 20L, init = 2, seed = NULL,
                                  cores = getOption("mc.cores", 1L), refresh = 0L) {
   check_model(model)
   method <- match.arg(method)
@@ -160,8 +160,12 @@ rmhmc_dHdq_fun <- function(q, gq, geom, h = 1e-4) {
 }
 
 # implicit generalized leapfrog (Girolami and Calderhead 2011, equations 16
-# to 18), solved by fixed point iteration
-rmhmc_step <- function(q, gq, eps, L, geom, gradV, fp) {
+# to 18), solved by fixed point iteration. The map is reversible and volume
+# preserving only when the implicit equations hold, so a step whose fixed
+# point iterations have not converged to `tol` within `fp` iterations is
+# rejected (and counted as divergent) instead of entering the Metropolis test.
+rmhmc_step <- function(q, gq, eps, L, geom, gradV, fp, tol = 1e-9) {
+  conv <- function(new, old) max(abs(new - old)) <= tol * max(1, max(abs(new)))
   n <- length(q)
   Hfun <- function(gx, p) gx$V + 0.5 * gx$logdet + 0.5 * sum(p * as.vector(gx$Ginv %*% p))
   p <- as.vector(t(chol(gq$G)) %*% stats::rnorm(n))
@@ -172,14 +176,27 @@ rmhmc_step <- function(q, gq, eps, L, geom, gradV, fp) {
     dH <- rmhmc_dHdq_fun(x, gx, geom)
     if (is.null(dH)) return(fail)
     ph <- p
-    for (k in seq_len(fp)) ph <- p - 0.5 * eps * dH(ph)
+    ok <- FALSE
+    for (k in seq_len(fp)) {
+      pn <- p - 0.5 * eps * dH(ph)
+      if (any(!is.finite(pn))) return(fail)
+      done <- conv(pn, ph)
+      ph <- pn
+      if (done) { ok <- TRUE; break }
+    }
+    if (!ok) return(fail)
     v0 <- as.vector(gx$Ginv %*% ph)
     xn <- x + eps * v0
+    ok <- FALSE
     for (k in seq_len(fp)) {
       gn <- geom(xn)
       if (!is.finite(gn$V)) return(fail)
-      xn <- x + 0.5 * eps * (v0 + as.vector(gn$Ginv %*% ph))
+      xk <- x + 0.5 * eps * (v0 + as.vector(gn$Ginv %*% ph))
+      done <- conv(xk, xn)
+      xn <- xk
+      if (done) { ok <- TRUE; break }
     }
+    if (!ok) return(fail)
     gn <- geom(xn)
     if (!is.finite(gn$V)) return(fail)
     dH2 <- rmhmc_dHdq_fun(xn, gn, geom)
@@ -203,8 +220,10 @@ rmhmc_step <- function(q, gq, eps, L, geom, gradV, fp) {
 #' energy sampling Hamiltonian dynamics on a unit speed velocity with partial
 #' velocity refreshment, preconditioned by a diagonal scale. During warmup
 #' the step size is tuned so the energy error per dimension has variance
-#' `energy_var`, then the scales and the momentum decoherence length `L` are
-#' set from the warmup draws. Without a Metropolis correction the draws have
+#' `energy_var`. At the middle of warmup the diagonal scales are set from
+#' the draws of the second quarter; at the end, the momentum decoherence
+#' length `L` is set to 0.4 times the step size times the mean number of steps
+#' per effective sample of the second half of warmup. Without a Metropolis correction the draws have
 #' a small asymptotic bias controlled by the step size.
 #'
 #' @param model A `bayescomp_model`.
@@ -236,6 +255,9 @@ bayescomp_mclmc <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampli
     L <- sqrt(n)
     est <- est_new(n, FALSE)
     w_sum <- 0; xi_sum <- 0
+    # draws of the last warmup stage, in preconditioned coordinates, for L
+    s3 <- seq.int(floor(nw / 2) + 1L, nw)
+    X3 <- matrix(NA_real_, length(s3), n)
     upd_u <- function(u, g, e) {
       # g: gradient of log p in the preconditioned coordinates
       gn <- sqrt(sum(g^2))
@@ -281,9 +303,17 @@ bayescomp_mclmc <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampli
         if (it == floor(nw / 2) && est$n > 10) {
           v <- est_value(est)
           sig <- sqrt(pmax(v, 1e-12))
-          L <- 0.4 * sqrt(n)
+          L <- sqrt(n)
           eps <- eps / sqrt(mean(sig^2))
           xi_sum <- 0; w_sum <- 0
+        }
+        # third stage (Robnik et al. 2024): L = 0.4 eps times the mean number
+        # of steps per effective sample, from the draws of the second half
+        if (it > floor(nw / 2)) X3[it - floor(nw / 2), ] <- x / sig
+        if (it == nw && nrow(X3) >= 20L) {
+          ess <- apply(X3, 2L, function(v) bayescomp_ess_basic(matrix(v, ncol = 1L)))
+          ess <- ess[is.finite(ess) & ess > 0]
+          if (length(ess)) L <- 0.4 * eps * mean(nrow(X3) / ess)
         }
       } else {
         i <- it - nw

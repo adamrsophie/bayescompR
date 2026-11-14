@@ -10,7 +10,9 @@ bayescomp_model(
   file = NULL,
   seed = NULL,
   backend = "r",
-  allow_fallback = FALSE
+  allow_fallback = FALSE,
+  functions = list(),
+  include_paths = NULL
 )
 }
 \arguments{
@@ -33,7 +35,21 @@ the R implementation for it. In this version only the log density and
 its gradient are ever taken from a native backend, so a native backend
 always needs \code{allow_fallback = TRUE} for sampling. The default \code{FALSE} raises an error
 instead, so implementations are never mixed silently. The model's
-\code{provenance} element records which backend provides each capability.}
+\code{provenance} element records which backend provides each capability.
+
+As in rstan, a data variable \verb{int CHAIN_ID} that is declared but not
+supplied is set to the chain number: 1 for the model itself, and
+1, 2, ... in each chain of the samplers.}
+
+\item{functions}{Named list of R functions implementing functions that
+the program declares without a body (Stan's external C++ functions,
+such as \verb{vector CODOLS(matrix X, vector y);} in rstanarm). Each is called
+with the Stan arguments; arguments that depend on parameters arrive as
+automatic differentiation values, so functions applied to parameters
+must be built from operations that support them.}
+
+\item{include_paths}{Directories searched for \verb{#include} files, as in
+\code{\link[=bayescomp_check]{bayescomp_check()}}.}
 }
 \value{
 An object of class \code{bayescomp_model}.

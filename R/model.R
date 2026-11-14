@@ -7,24 +7,48 @@
 #'
 #' @param code Stan program as a character string (or vector of lines).
 #' @param file Path to a `.stan` file, used when `code` is `NULL`.
+#' @param include_paths Directories searched, in order, for files named in
+#'   `#include` directives. The directory of `file` is searched last.
 #' @return The typed intermediate representation, invisibly. Errors carry the
 #'   classes `bayescomp_syntax_error`, `bayescomp_semantic_error` or
 #'   `bayescomp_unsupported_error`.
 #' @examples
 #' bayescomp_check("parameters { real mu; } model { mu ~ normal(0, 1); }")
 #' @export
-bayescomp_check <- function(code = NULL, file = NULL) {
-  src <- read_stan_source(code, file)
+bayescomp_check <- function(code = NULL, file = NULL, include_paths = NULL) {
+  src <- read_stan_source(code, file, include_paths)
   invisible(stan_check(stan_parse(src)))
 }
 
-read_stan_source <- function(code, file) {
+read_stan_source <- function(code, file, include_paths = NULL) {
   if (is.null(code)) {
     if (is.null(file)) stop("supply either 'code' or 'file'", call. = FALSE)
     code <- readLines(file, warn = FALSE)
+    include_paths <- c(include_paths, dirname(file))
   }
   if (!is.character(code)) stop("'code' must be a character string", call. = FALSE)
-  paste(code, collapse = "\n")
+  expand_includes(unlist(strsplit(paste(code, collapse = "\n"), "\n", fixed = TRUE)), include_paths, character())
+}
+
+# replace each #include line by the named file, searched in include_paths
+expand_includes <- function(lines, paths, seen) {
+  re <- "^[[:space:]]*#include[[:space:]]*[<\"]?([^>\"[:space:]]+)[>\"]?[[:space:]]*$"
+  hit <- grep(re, lines)
+  if (!length(hit)) return(paste(lines, collapse = "\n"))
+  out <- vector("list", length(lines))
+  out[] <- as.list(lines)
+  for (i in hit) {
+    name <- sub(re, "\\1", lines[i])
+    cand <- file.path(paths, name)
+    f <- cand[file.exists(cand)][1L]
+    if (is.na(f)) stop_syntax(sprintf("#include file '%s' not found in the include paths (%s)", name,
+                                      if (length(paths)) paste(paths, collapse = ", ") else "none given; use 'include_paths'"),
+                              list(line = i, col = 1L))
+    f <- normalizePath(f)
+    if (f %in% seen) stop_syntax(sprintf("#include file '%s' includes itself", name), list(line = i, col = 1L))
+    out[[i]] <- expand_includes(readLines(f, warn = FALSE), c(paths, dirname(f)), c(seen, f))
+  }
+  paste(unlist(out), collapse = "\n")
 }
 
 #' Compile a Stan program and bind data
@@ -34,9 +58,17 @@ read_stan_source <- function(code, file) {
 #'   block. Arrays use R arrays with the array dimensions first, so
 #'   `array[N] vector[K] y` is an `N` by `K` matrix.
 #' @param file Path to a `.stan` file, used when `code` is `NULL`.
+#' @param include_paths Directories searched for `#include` files, as in
+#'   [bayescomp_check()].
 #' @param seed Seed for random number generation in `transformed data`.
 #' @param backend Execution backend, see [bayescomp_backends()]. Native
 #'   backends compute the log density and its gradient.
+#' @param functions Named list of R functions implementing functions that
+#'   the program declares without a body (Stan's external C++ functions,
+#'   such as `vector CODOLS(matrix X, vector y);` in rstanarm). Each is called
+#'   with the Stan arguments; arguments that depend on parameters arrive as
+#'   automatic differentiation values, so functions applied to parameters
+#'   must be built from operations that support them.
 #' @param allow_fallback When the backend lacks a capability the model needs
 #'   (constraining transforms, generated quantities or random numbers), use
 #'   the R implementation for it. In this version only the log density and
@@ -44,6 +76,10 @@ read_stan_source <- function(code, file) {
 #'   always needs `allow_fallback = TRUE` for sampling. The default `FALSE` raises an error
 #'   instead, so implementations are never mixed silently. The model's
 #'   `provenance` element records which backend provides each capability.
+#'
+#'   As in rstan, a data variable `int CHAIN_ID` that is declared but not
+#'   supplied is set to the chain number: 1 for the model itself, and
+#'   1, 2, ... in each chain of the samplers.
 #' @return An object of class `bayescomp_model`.
 #' @examples
 #' m <- bayescomp_model("
@@ -55,13 +91,19 @@ read_stan_source <- function(code, file) {
 #' bayescomp_log_prob(m, c(0, 0))
 #' @export
 bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL, backend = "r",
-                            allow_fallback = FALSE) {
-  src <- read_stan_source(code, file)
-  ir <- stan_check(stan_parse(src))
+                            allow_fallback = FALSE, functions = list(), include_paths = NULL) {
+  src <- read_stan_source(code, file, include_paths)
+  if (!is.list(functions) || (length(functions) && (is.null(names(functions)) || !all(vapply(functions, is.function, TRUE)))))
+    stop("'functions' must be a named list of R functions", call. = FALSE)
+  ir <- stan_check(stan_parse(src), external = names(functions))
   if (is.null(data)) data <- list()
   if (!is.list(data)) stop("'data' must be a named list", call. = FALSE)
   be <- backend_get(backend)
   m <- compile_r(ir)
+  m$external_impl <- functions
+  m$chain_id_auto <- "CHAIN_ID" %in% vapply(top_decls(ir, "data"), `[[`, "", "name") && is.null(data$CHAIN_ID)
+  if (m$chain_id_auto) data$CHAIN_ID <- 1L
+  m$seed <- seed
   inst <- with_seed(seed, instantiate(m, data))
   caps <- c("log_density", "gradient", "constrain", "generated_quantities", "rng")
   # this version takes only the log density and its gradient from a native
@@ -215,6 +257,11 @@ instantiate <- function(m, data) {
   ns <- environment(rt_decl)
   fenv <- new.env(parent = ns)
   for (f in m$funs) assign(f$name, make_function(f$formals, f$body, fenv), envir = fenv)
+  for (x in m$ir$externals) local({
+    impl <- m$external_impl[[x$name]]
+    # the generated code passes the evaluation context last
+    assign(x$mangled, function(...) { a <- list(...); do.call(impl, a[-length(a)]) }, envir = fenv)
+  })
   env <- new.env(parent = fenv)
   decls <- list()
   env$.decls <- decls

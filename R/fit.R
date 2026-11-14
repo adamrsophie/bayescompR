@@ -114,7 +114,13 @@ summary.bayescomp_fit <- function(object, variables = NULL, probs = c(0.05, 0.95
     q <- if (length(fin)) stats::quantile(fin, probs, names = FALSE) else rep(NA_real_, length(probs))
     r <- c(mean = mean(xv), median = stats::median(xv), sd = stats::sd(xv), mad = stats::mad(xv), q)
     if (mcmc) {
-      r <- c(r, rhat = bayescomp_rhat(x), ess_bulk = bayescomp_ess_bulk(x), ess_tail = bayescomp_ess_tail(x))
+      # walkers of an ensemble are dependent: R-hat compares the walker means
+      # of the independent ensembles instead
+      xr <- if (identical(object$method, "ensemble") && !is.null(object$config$ensembles)) {
+        W <- object$config$walkers
+        vapply(seq_len(object$config$ensembles), function(e) rowMeans(x[, (e - 1L) * W + seq_len(W), drop = FALSE]), numeric(nrow(x)))
+      } else x
+      r <- c(r, rhat = bayescomp_rhat(matrix(xr, nrow(x))), ess_bulk = bayescomp_ess_bulk(x), ess_tail = bayescomp_ess_tail(x))
     }
     r
   })

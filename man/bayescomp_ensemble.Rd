@@ -14,8 +14,10 @@ bayescomp_ensemble(
   a = 2,
   gamma = NULL,
   noise = 1e-04,
+  chains = 1L,
   init = 2,
-  seed = NULL
+  seed = NULL,
+  cores = getOption("mc.cores", 1L)
 )
 }
 \arguments{
@@ -38,11 +40,17 @@ tenth iteration uses 1 to jump between modes.}
 \item{noise}{Standard deviation of the small Gaussian added to \code{"de"}
 proposals.}
 
-\item{init, seed}{As in \code{\link[=bayescomp_sample]{bayescomp_sample()}}.}
+\item{chains}{Number of independent ensembles.}
+
+\item{init, seed, cores}{As in \code{\link[=bayescomp_sample]{bayescomp_sample()}}.}
 }
 \value{
-A \code{bayescomp_fit} with one chain per walker and element
-\code{acceptance} (mean acceptance per walker).
+A \code{bayescomp_fit} with one chain per walker (the walkers of
+ensemble 1 first) and element \code{acceptance} (mean acceptance per walker).
+Its summary reports R-hat computed from the per iteration walker means of
+the ensembles (split R-hat when \code{chains = 1}) and effective sample sizes
+computed over all walkers, as in emcee; run several ensembles for a
+reliable convergence check.
 }
 \description{
 Ensemble Markov chain Monte Carlo

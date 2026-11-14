@@ -33,8 +33,10 @@ Unadjusted microcanonical Langevin dynamics (Robnik et al. 2023, 2024):
 energy sampling Hamiltonian dynamics on a unit speed velocity with partial
 velocity refreshment, preconditioned by a diagonal scale. During warmup
 the step size is tuned so the energy error per dimension has variance
-\code{energy_var}, then the scales and the momentum decoherence length \code{L} are
-set from the warmup draws. Without a Metropolis correction the draws have
+\code{energy_var}. At the middle of warmup the diagonal scales are set from
+the draws of the second quarter; at the end, the momentum decoherence
+length \code{L} is set to 0.4 times the step size times the mean number of steps
+per effective sample of the second half of warmup. Without a Metropolis correction the draws have
 a small asymptotic bias controlled by the step size.
 }
 \references{

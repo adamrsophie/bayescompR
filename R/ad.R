@@ -567,7 +567,12 @@ ad_lchoose <- function(n, k) {
 # function) and documented as such in the function support matrix.
 num_partial <- function(f, x, ...) {
   h <- 1e-6 * pmax(abs(x), 1)
-  (f(x + h, ...) - f(x - h, ...)) / (2 * h)
+  # a positive value within one step of zero (a shape near 0) is stepped on
+  # the log scale, so the lower point stays in the domain
+  small <- x > 0 & x <= h
+  lo <- ifelse(small, x * exp(-1e-6), x - h)
+  hi <- ifelse(small, x * exp(1e-6), x + h)
+  (f(hi, ...) - f(lo, ...)) / (hi - lo)
 }
 
 # sum of a list of scalars as a single node

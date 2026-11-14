@@ -38,9 +38,12 @@ def("sd", "container", "real", function(x) {
   n <- nelem(x)
   if (n < 2L) return(if (n == 1L) 0 else stop_domain("sd: argument has size zero"))
   x <- flat(as_dbl(x))
-  m <- ad_sum(x) / n
-  d <- x - m
-  sqrt(ad_sum(d * d) / (n - 1))
+  vx <- val(x)
+  d <- vx - mean(vx)
+  sdv <- sqrt(sum(d * d) / (n - 1))
+  if (!is_ad(x)) return(sdv)
+  # partial (x - mean) / (sd (n - 1)), taken as zero at a constant vector
+  ad_node(sdv, list(x), function(g) list(if (sdv > 0) g * d / (sdv * (n - 1)) else numeric(n)))
 })
 def("log_sum_exp", "container", "real", function(x) ad_log_sum_exp(flat(as_dbl(x))))
 def("max", "int[]", "int", function(x) {

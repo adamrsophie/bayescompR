@@ -97,11 +97,13 @@ stan_lex <- function(src) {
     if (is_digit(ch) || (ch == "." && is_digit(peek(1L)))) {
       start <- i
       is_real <- FALSE
-      while (i <= n && (is_digit(chars[i]) || chars[i] == "_")) advance()
+      # Stan allows _ as a digit separator, between two digits only
+      digit_or_sep <- function() is_digit(chars[i]) || (chars[i] == "_" && i > start && is_digit(chars[i - 1L]) && is_digit(peek(1L)))
+      while (i <= n && digit_or_sep()) advance()
       if (i <= n && chars[i] == "." && !(peek(1L) %in% c("*", "/", "^"))) {
         is_real <- TRUE
         advance()
-        while (i <= n && is_digit(chars[i])) advance()
+        while (i <= n && digit_or_sep()) advance()
       }
       if (i <= n && chars[i] %in% c("e", "E")) {
         j <- 1L
@@ -109,7 +111,7 @@ stan_lex <- function(src) {
         if (is_digit(peek(j))) {
           is_real <- TRUE
           advance(j)
-          while (i <= n && is_digit(chars[i])) advance()
+          while (i <= n && digit_or_sep()) advance()
         } else {
           stop_syntax("malformed exponent in numeric literal", list(line = l0, col = c0))
         }

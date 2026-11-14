@@ -22,7 +22,9 @@
 #' @param init,seed As in [bayescomp_sample()].
 #' @param refresh Report progress every `refresh` ELBO evaluations (0 quiet).
 #' @return A `bayescomp_fit` with method `"variational"`, extra columns
-#'   `log_p__` and `log_g__`, and element `elbo` (the ELBO trace).
+#'   `log_p__` and `log_g__`, and element `vi`: the ELBO trace (`elbo`), the
+#'   step size `eta`, `iterations`, `converged` (whether the relative ELBO
+#'   change fell below `tol_rel_obj`) and a `status` message.
 #' @export
 bayescomp_variational <- function(model, algorithm = c("meanfield", "fullrank"), iter = 10000L,
                                   grad_samples = 1L, elbo_samples = 100L, eta = NULL, adapt_iter = 50L,
@@ -98,12 +100,13 @@ bayescomp_variational <- function(model, algorithm = c("meanfield", "fullrank"),
           if (!is.na(elbo_prev)) {
             rel <- abs((e - elbo_prev) / e)
             cb <- utils::tail(c(cb, rel), cb_size)
-            if (mean(cb) < tol_rel_obj || stats::median(cb) < tol_rel_obj) return(list(vp = vp, ok = TRUE, trace = tr, iter = k))
+            if (mean(cb) < tol_rel_obj || stats::median(cb) < tol_rel_obj)
+              return(list(vp = vp, ok = TRUE, converged = TRUE, trace = tr, iter = k))
           }
           elbo_prev <- e
         }
       }
-      list(vp = vp, ok = TRUE, trace = tr, iter = iters)
+      list(vp = vp, ok = TRUE, converged = FALSE, trace = tr, iter = iters)
     }
     if (is.null(eta)) {
       best <- -Inf
@@ -116,13 +119,17 @@ bayescomp_variational <- function(model, algorithm = c("meanfield", "fullrank"),
     }
     r <- sgd(vp0, eta, iter, check = TRUE)
     if (!r$ok) stop("ADVI diverged; try a smaller 'eta'", call. = FALSE)
+    if (!r$converged)
+      warning(sprintf("ADVI reached the maximum of %d iterations without meeting tol_rel_obj; the approximation may be poor", iter), call. = FALSE)
     vp <- r$vp
     z <- draw_z(output_samples)
     qs <- transform(vp, z)
     log_g <- -0.5 * rowSums(z^2) - 0.5 * n * log(2 * pi) - (entropy(vp) - 0.5 * n * (1 + log(2 * pi)))
     log_p <- apply(qs, 1L, function(q) lpg(q)$value)
     gq <- chain_write_draws(model, qs, FALSE)
-    trace <<- list(elbo = r$trace, eta = eta, iterations = r$iter, mean = vp$mu,
+    trace <<- list(elbo = r$trace, eta = eta, iterations = r$iter, converged = r$converged,
+                   status = if (r$converged) "converged: relative ELBO change below tol_rel_obj" else "stopped: maximum iterations reached",
+                   mean = vp$mu,
                    sd = if (full) sqrt(rowSums(vp$L^2)) else exp(vp$omega), L = if (full) vp$L else NULL)
     dg <- matrix(0, output_samples, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
     list(q = qs, gq = cbind(log_p__ = log_p, log_g__ = log_g, gq), diag = dg, step_size = eta,
@@ -275,7 +282,9 @@ gpd_quantile <- function(p, k, sigma) sigma * expm1(-k * log1p(-p)) / k
 #' @param history_size L-BFGS history size.
 #' @param max_lbfgs_iters Maximum L-BFGS iterations per path.
 #' @param num_elbo_draws Draws per ELBO estimate.
-#' @param psis_resample Resample with Pareto smoothed importance weights.
+#' @param psis_resample Resample `num_draws` draws with Pareto smoothed
+#'   importance weights. With `FALSE`, all `num_paths * num_draws` draws of
+#'   the paths are returned, as in Stan.
 #' @param tol_rel_obj,tol_grad L-BFGS convergence tolerances.
 #' @param init,seed As in [bayescomp_sample()].
 #' @param cores Paths to run in parallel; defaults to `getOption("mc.cores", 1L)`.
@@ -305,9 +314,8 @@ bayescomp_pathfinder <- function(model, num_paths = 4L, num_draws = 1000L, histo
       k <<- ps$k
       w <- exp(ps$lw - max(ps$lw))
       sel <- sample.int(nrow(q), num_draws, replace = TRUE, prob = w)
-    } else {
-      sel <- sel[seq_len(min(num_draws, length(sel)))]
     }
+    # without resampling every path's draws are returned, as in Stan
     qs <- q[sel, , drop = FALSE]
     gq <- chain_write_draws(model, qs, FALSE)
     dg <- matrix(0, length(sel), 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))

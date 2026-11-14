@@ -121,6 +121,18 @@ cg_binop <- function(e) {
     stop("internal error: operator ", e$op))
 }
 
+# containers passed to the vectorized ("reals"/"ints") arguments of a library
+# distribution must have equal sizes: a vector[1] is a container, not a
+# scalar, so it may not broadcast against a vector[3]
+is_container_ty <- function(t) t$nd > 0L || t$base %in% c("vector", "row_vector", "matrix")
+cg_size_guard <- function(fname, sg, types, call) {
+  if (is.null(sg$dist) || length(sg$args) != length(types)) return(call)
+  mask <- vapply(seq_along(types), function(i) sg$args[[i]] %in% c("reals", "ints") && is_container_ty(types[[i]]), TRUE)
+  if (sum(mask) < 2L) return(call)
+  args <- as.list(call)[-1L]
+  cl_list(rt_dist_call, c(list(fname, call[[1L]], mask), unname(args)))
+}
+
 cg_call <- function(e) {
   if (identical(e$builtin, "target")) return(cl(rt_target_get, CTX))
   sg <- e$sig
@@ -136,12 +148,14 @@ cg_call <- function(e) {
     t <- e$args[[1L]]$type
     return(cl(dims_typed, args[[1L]], t$base, t$nd))
   }
+  types <- lapply(e$args, `[[`, "type")
   if (grepl("_(lupdf|lupmf)$", e$name)) {
-    full <- lib_impl(sub("_lup", "_lp", e$name), lapply(e$args, `[[`, "type"))
+    full <- lib_impl(sub("_lup", "_lp", e$name), types)
     return(cl(as.name("if"), cl(as.name("isTRUE"), cl(as.name("$"), CTX, as.name("propto"))),
-              cl_list(sg$impl, unname(args)), cl_list(full, unname(args))))
+              cg_size_guard(e$name, sg, types, cl_list(sg$impl, unname(args))),
+              cg_size_guard(e$name, sg, types, cl_list(full, unname(args)))))
   }
-  cl_list(sg$impl, unname(args))
+  cg_size_guard(e$name, sg, types, cl_list(sg$impl, unname(args)))
 }
 
 # ---- statements ----------------------------------------------------------------------
@@ -250,7 +264,8 @@ cg_stmt <- function(st, ctx) {
         types <- c(list(st$lhs$type), lapply(st$args, `[[`, "type"))
         full <- lib_impl(sub("_lup", "_lp", st$fname), types)
         cl(as.name("if"), cl(as.name("isTRUE"), cl(as.name("$"), CTX, as.name("propto"))),
-           cl_list(sg$impl, c(list(lhs), unname(args))), cl_list(full, c(list(lhs), unname(args))))
+           cg_size_guard(st$fname, sg, types, cl_list(sg$impl, c(list(lhs), unname(args)))),
+           cg_size_guard(st$fname, sg, types, cl_list(full, c(list(lhs), unname(args)))))
       }
       out <- list(cl(rt_target_add, CTX, call))
       if (!is.null(st$trunc)) {

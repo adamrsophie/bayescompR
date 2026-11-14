@@ -434,7 +434,6 @@ k_m52 <- function(d2, s, l) {
   s * s * (1 + r + r * r / 3) * exp(-r)
 }
 gp_kernel("gp_exp_quad_cov", k_sqexp)
-gp_kernel("cov_exp_quad", k_sqexp)
 gp_kernel("gp_exponential_cov", k_exp)
 gp_kernel("gp_matern32_cov", k_m32)
 gp_kernel("gp_matern52_cov", k_m52)
@@ -450,3 +449,64 @@ def("gp_dot_prod_cov", c("real[]", "real"), "matrix", function(x, sigma) {
   X <- ad_reshape(x, c(n, 1L))
   as_dbl(sigma) * as_dbl(sigma) + ad_matmul(X, ad_transpose(X))
 })
+
+# ---- compressed sparse row (CSR) matrices -----------------------------------------
+# Stan stores the nonzeros in row major order: w the values, v their 1 based
+# column indices, u the 1 based start of each row in w (length rows + 1).
+csr_nonzero <- function(a) {
+  va <- val(a)
+  m <- nrow(va)
+  # row major positions of the nonzeros, as column major indices into a
+  idx <- which(t(va) != 0)
+  cols <- (idx - 1L) %% ncol(va) + 1L
+  rows <- (idx - 1L) %/% ncol(va) + 1L
+  list(idx = (cols - 1L) * m + rows, v = as.integer(cols), u = as.integer(c(1L, cumsum(tabulate(rows, m)) + 1L)))
+}
+def("csr_extract_w", "matrix", "vector", function(a) {
+  nz <- csr_nonzero(a)
+  if (!length(nz$idx)) return(numeric(0))
+  ad_gather(flat(as_dbl(a)), nz$idx)
+})
+def("csr_extract_v", "matrix", "int[]", function(a) csr_nonzero(a)$v)
+def("csr_extract_u", "matrix", "int[]", function(a) csr_nonzero(a)$u)
+csr_check <- function(f, m, n, w, v, u) {
+  if (m < 0L || n < 0L) stop_domain(sprintf("%s: dimensions must be nonnegative", f))
+  if (length(u) != m + 1L) stop_shape(sprintf("%s: u must have size m + 1 = %d, got %d", f, m + 1L, length(u)))
+  if (length(v) != nelem(w)) stop_shape(sprintf("%s: w and v must have the same size", f))
+  if (u[1L] != 1L || any(diff(u) < 0L) || u[m + 1L] - 1L != length(v))
+    stop_domain(sprintf("%s: u is not a valid row start array for %d nonzeros", f, length(v)))
+  if (length(v) && (any(v < 1L) || any(v > n))) stop_domain(sprintf("%s: column indices must be in 1 to %d", f, n))
+  rep.int(seq_len(m), diff(u))
+}
+def("csr_to_dense_matrix", c("int", "int", "vector", "int[]", "int[]"), "matrix", function(m, n, w, v, u) {
+  rows <- csr_check("csr_to_dense_matrix", m, n, w, v, u)
+  out <- matrix(0, m, n)
+  if (!length(rows)) return(out)
+  pos <- (v - 1L) * m + rows
+  if (anyDuplicated(pos)) stop_domain("csr_to_dense_matrix: duplicate entries")
+  w <- flat(as_dbl(w))
+  vw <- val(w)
+  out[pos] <- vw
+  if (!is_ad(w)) return(out)
+  ad_node(out, list(w), function(g) list(g[pos]))
+})
+def("csr_matrix_times_vector", c("int", "int", "vector", "int[]", "int[]", "vector"), "vector", function(m, n, w, v, u, b) {
+  f <- "csr_matrix_times_vector"
+  rows <- csr_check(f, m, n, w, v, u)
+  if (nelem(b) != n) stop_shape(sprintf("%s: b must have size n = %d, got %d", f, n, nelem(b)))
+  w <- flat(as_dbl(w)); b <- flat(as_dbl(b))
+  vw <- val(w); vb <- val(b)
+  y <- if (length(rows)) tabulate_sum(rows, vw * vb[v], m) else numeric(m)
+  if (!any_ad(w, b)) return(y)
+  ad_node(y, list(w, b), function(g) {
+    gr <- g[rows]
+    list(if (is_ad(w)) gr * vb[v],
+         if (is_ad(b)) if (length(v)) tabulate_sum(v, gr * vw, n) else numeric(n))
+  })
+})
+tabulate_sum <- function(idx, x, n) {
+  out <- numeric(n)
+  s <- rowsum(x, idx)
+  out[as.integer(rownames(s))] <- s[, 1L]
+  out
+}

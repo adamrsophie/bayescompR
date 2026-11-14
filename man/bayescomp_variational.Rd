@@ -47,7 +47,9 @@ bayescomp_variational(
 }
 \value{
 A \code{bayescomp_fit} with method \code{"variational"}, extra columns
-\code{log_p__} and \code{log_g__}, and element \code{elbo} (the ELBO trace).
+\code{log_p__} and \code{log_g__}, and element \code{vi}: the ELBO trace (\code{elbo}), the
+step size \code{eta}, \code{iterations}, \code{converged} (whether the relative ELBO
+change fell below \code{tol_rel_obj}) and a \code{status} message.
 }
 \description{
 Fits a normal approximation on the unconstrained space by stochastic

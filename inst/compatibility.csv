@@ -1,11 +1,11 @@
 area,feature,status,tests,notes
 target,Stan language and reference manual,implemented,,Stan 2.40.0 is the compatibility target
 language,program blocks (functions to generated quantities),implemented,test-parser.R;test-semantic.R;test-model.R,
-language,lexer and parser with line and column errors,implemented,test-parser.R,lower/upper/offset/multiplier as identifiers and digit separators in reals not yet handled
+language,lexer and parser with line and column errors,implemented,test-parser.R;test-regressions.R,digit separators between digits as in stanc 2.40; #include directives resolved through include_paths
 language,operator precedence,implemented,test-parser.R,
 language,scalar vector row_vector matrix and arrays,implemented,test-model.R;test-regressions.R,
 language,constrained types and transforms,implemented,test-transforms.R,all constrained types of Stan 2.40
-language,user defined functions and overloads,implemented,test-semantic.R,fewest promotions resolution
+language,user defined functions and overloads,implemented,test-semantic.R;test-regressions.R,fewest promotions resolution; library functions may be overloaded with new signatures; functions declared without a body can be supplied as R functions (functions argument)
 language,_lp _rng _lpdf _lpmf _jacobian suffix rules,implemented,test-semantic.R,
 language,data only argument qualifiers,implemented,test-semantic.R,user and library functions
 language,control flow (for foreach while if break continue),implemented,test-model.R,
@@ -21,7 +21,7 @@ language,transform functions (*_constrain *_unconstrain *_jacobian),not_implemen
 library,elementwise math functions,partial,test-ad.R,gradients checked by finite differences; the ^ operator takes scalars only and some vectorized signatures are missing
 library,container and array functions,partial,test-model.R,unary minus on arrays and some overloads are missing
 library,linear algebra,partial,test-ad.R,singular values have gradients but svd_U and svd_V do not; no general eigendecomposition; no FFT
-library,sparse CSR functions,not_implemented,,
+library,sparse CSR functions,partial,test-regressions.R,csr_extract_w/v/u; csr_to_dense_matrix and csr_matrix_times_vector with gradients; csr_extract (tuple) is missing
 library,HMM functions,not_implemented,,
 library,distributions lpdf and lpmf,partial,test-distributions.R,Wiener; Gaussian DLM; multi GP and beta negative binomial missing
 library,distributions cdf lcdf lccdf,partial,test-distributions.R;test-regressions.R,some missing such as bernoulli_lccdf and the skew normal family

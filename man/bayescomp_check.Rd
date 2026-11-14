@@ -4,12 +4,15 @@
 \alias{bayescomp_check}
 \title{Check a Stan program}
 \usage{
-bayescomp_check(code = NULL, file = NULL)
+bayescomp_check(code = NULL, file = NULL, include_paths = NULL)
 }
 \arguments{
 \item{code}{Stan program as a character string (or vector of lines).}
 
 \item{file}{Path to a \code{.stan} file, used when \code{code} is \code{NULL}.}
+
+\item{include_paths}{Directories searched, in order, for files named in
+\verb{#include} directives. The directory of \code{file} is searched last.}
 }
 \value{
 The typed intermediate representation, invisibly. Errors carry the

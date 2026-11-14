@@ -46,7 +46,9 @@ Imports:
     stats,
     utils
 Suggests:
+    bayesplot,
     knitr,
+    loo,
     posterior,
     rmarkdown,
     testthat (>= 3.0.0)
@@ -76,6 +78,7 @@ Collate:
     'diagnostics.R'
     'sample.R'
     'fit.R'
+    'interop.R'
     'optimize.R'
     'mcmc.R'
     'vi.R'

@@ -108,7 +108,7 @@ rt_assign <- function(old, rhs, name) {
   if (!identical(as.integer(do), as.integer(dr)))
     stop_shape(sprintf("assignment to '%s': size mismatch, the variable has size %s but the value has size %s",
                        name, paste(do, collapse = " x "), paste(dr, collapse = " x ")))
-  if (is.integer(vo) && !is_ad(old)) return(as.integer(vr))
+  if (is.integer(vo) && !is_ad(old)) { storage.mode(vr) <- "integer"; return(vr) }
   as_dbl(rhs)
 }
 
@@ -182,6 +182,15 @@ new_ctx <- function(jacobian = TRUE, print = TRUE, propto = FALSE) {
   ctx
 }
 
+# a library distribution call whose container arguments (mask) must agree in size
+rt_dist_call <- function(fname, f, mask, ...) {
+  a <- list(...)
+  ls <- vapply(a[mask], function(x) length(val(x)), 1L)
+  if (any(ls != ls[1L]))
+    stop_shape(sprintf("%s: container arguments have different sizes (%s)", fname, paste(ls, collapse = ", ")))
+  f(...)
+}
+
 rt_target_add <- function(ctx, v) {
   if (is.null(ctx)) stop_semantic("target can only be incremented in a log density context")
   vv <- val(v)
@@ -248,11 +257,9 @@ rt_param <- function(u, decl, args, ctx) {
 
 # validate a top level variable at the end of its block
 rt_check <- function(x, decl, args, block) {
+  # as in stanc3, an unassigned (NaN) transformed parameter is not an error;
+  # only the declared constraints are checked
   v <- val(x)
-  if (block == "transformed parameters" && any(is.nan(v))) {
-    i <- which(is.nan(v))[1L]
-    stop_domain(sprintf("%s variable '%s' is nan at element %d", block, decl$name, i))
-  }
   m <- check_variable(v, decl, lapply(args, val))
   if (!is.null(m)) stop_domain(sprintf("%s variable '%s' %s", block, decl$name, m))
   invisible(NULL)

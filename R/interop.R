@@ -1,0 +1,82 @@
+# Methods for the generics of the Stan ecosystem (posterior, bayesplot, loo),
+# registered when those packages are loaded, so tools written for rstan or
+# cmdstanr fits accept a bayescomp_fit.
+
+#' Methods for posterior, bayesplot and loo
+#'
+#' A `bayescomp_fit` works with the generics that rstan and cmdstanr fits
+#' support:
+#' * `posterior::as_draws()`, `as_draws_array()`, `as_draws_df()` and
+#'   `as_draws_matrix()` return the draws (warmup excluded) of all variables,
+#'   or of `variable`;
+#' * `bayesplot::nuts_params()` returns the sampler diagnostics in the long
+#'   format of `bayesplot::mcmc_nuts_divergence()` and related plots, and
+#'   `bayesplot::log_posterior()` the `lp__` draws;
+#' * `loo::loo()` computes PSIS-LOO from the pointwise log likelihood stored
+#'   in the generated quantity `variable` (default `"log_lik"`), with
+#'   relative efficiencies from the chains.
+#' @param x,object A `bayescomp_fit`.
+#' @param variable Variable names; for `loo()` the name of the pointwise log
+#'   likelihood.
+#' @param r_eff For `loo()`, `TRUE` to compute relative efficiencies from
+#'   the chains, or a vector of them.
+#' @param ... Passed on (to [loo::loo.array()] for `loo()`).
+#' @return Objects of the classes the generics document.
+#' @name bayescomp_interop
+NULL
+
+fit_draws <- function(x, variable = NULL) bayescomp_draws(x, variable, format = "array")
+
+#' @rdname bayescomp_interop
+#' @exportS3Method posterior::as_draws
+as_draws.bayescomp_fit <- function(x, variable = NULL, ...) posterior::as_draws_array(fit_draws(x, variable))
+
+#' @rdname bayescomp_interop
+#' @exportS3Method posterior::as_draws_array
+as_draws_array.bayescomp_fit <- function(x, variable = NULL, ...) posterior::as_draws_array(fit_draws(x, variable))
+
+#' @rdname bayescomp_interop
+#' @exportS3Method posterior::as_draws_df
+as_draws_df.bayescomp_fit <- function(x, variable = NULL, ...) posterior::as_draws_df(posterior::as_draws_array(fit_draws(x, variable)))
+
+#' @rdname bayescomp_interop
+#' @exportS3Method posterior::as_draws_matrix
+as_draws_matrix.bayescomp_fit <- function(x, variable = NULL, ...) posterior::as_draws_matrix(posterior::as_draws_array(fit_draws(x, variable)))
+
+post_warmup <- function(a, x) {
+  w <- x$n_warmup_saved %||% 0L
+  if (w > 0L) a[-seq_len(w), , , drop = FALSE] else a
+}
+
+long_format <- function(a) {
+  it <- dim(a)[1L]; ch <- dim(a)[2L]; nm <- dimnames(a)[[3L]]
+  data.frame(Chain = rep(rep(seq_len(ch), each = it), length(nm)),
+             Iteration = rep(seq_len(it), ch * length(nm)),
+             Parameter = factor(rep(nm, each = it * ch), levels = nm),
+             Value = as.vector(a))
+}
+
+#' @rdname bayescomp_interop
+#' @exportS3Method bayesplot::nuts_params
+nuts_params.bayescomp_fit <- function(object, ...) {
+  a <- post_warmup(object$sampler_diagnostics, object)
+  keep <- intersect(c("accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__"), dimnames(a)[[3L]])
+  long_format(a[, , keep, drop = FALSE])
+}
+
+#' @rdname bayescomp_interop
+#' @exportS3Method bayesplot::log_posterior
+log_posterior.bayescomp_fit <- function(object, ...) {
+  d <- long_format(fit_draws(object, "lp__"))
+  d[c("Chain", "Iteration", "Value")]
+}
+
+#' @rdname bayescomp_interop
+#' @exportS3Method loo::loo
+loo.bayescomp_fit <- function(x, variable = "log_lik", r_eff = TRUE, ...) {
+  a <- unclass(fit_draws(x, variable))
+  if (!dim(a)[3L]) stop(sprintf("the fit has no variable '%s'", variable), call. = FALSE)
+  if (isTRUE(r_eff)) r_eff <- loo::relative_eff(exp(a))
+  else if (isFALSE(r_eff)) r_eff <- NULL
+  loo::loo(a, r_eff = r_eff, ...)
+}

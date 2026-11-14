@@ -35,17 +35,24 @@ sem_declare <- function(s, name, info, loc) {
 
 origin_data <- c("data", "transformed data")
 
-stan_check <- function(prog) {
+stan_check <- function(prog, external = character()) {
   s <- sem_new()
+  ext <- list()
   b <- prog$blocks
   # functions: register signatures first (allows recursion and forward use)
   if (!is.null(b$functions)) {
     for (fd in b$functions$body) sem_register_fun(s, fd)
     for (fd in b$functions$body) if (!is.null(fd$body)) sem_fundef(s, fd)
-    for (nm in names(s$ufuns)) for (sg in s$ufuns[[nm]]) if (!isTRUE(sg$defined))
-      stop_semantic(sprintf("function '%s' is declared but never defined", nm), sg$loc)
+    for (nm in names(s$ufuns)) for (sg in s$ufuns[[nm]]) if (!isTRUE(sg$defined)) {
+      # a declaration without a body may be implemented outside Stan (as
+      # with stanc's --allow-undefined), here by an R function
+      if (!nm %in% external)
+        stop_semantic(sprintf("function '%s' is declared but never defined; supply an R implementation with 'functions'", nm), sg$loc)
+      ext[[length(ext) + 1L]] <- list(name = nm, mangled = sg$mangled)
+    }
   }
   out <- prog
+  out$externals <- ext
   if (!is.null(b$functions)) out$blocks$functions <- b$functions
   for (bn in setdiff(stan_block_names, "functions")) {
     if (is.null(b[[bn]])) next
@@ -71,10 +78,9 @@ sem_register_fun <- function(s, fd) {
   argt <- lapply(fd$args, function(a) utype(a$type))
   rt <- utype(fd$rtype)
   nm <- fd$name
-  if (!is.null(.lib[[nm]])) {
-    # Stan allows overloading library functions only with new signatures; keep it simple
-    stop_semantic(sprintf("function '%s' is already defined in the Stan library", nm), fd$loc)
-  }
+  # a library function may be overloaded, but only with a new signature
+  for (lg in .lib[[nm]]) if (length(lg$args) == length(argt) && all(mapply(pat_exact, lg$args, argt)))
+    stop_semantic(sprintf("function '%s' with these argument types is already defined in the Stan library", nm), fd$loc)
   if (grepl("_(lpdf|lpmf)$", nm)) {
     if (length(argt) == 0L) stop_semantic(sprintf("probability function '%s' needs at least one argument", nm), fd$loc)
     if (!ty_eq(rt, T_real)) stop_semantic(sprintf("probability function '%s' must return real", nm), fd$loc)
@@ -646,8 +652,24 @@ describe_sigs <- function(s, name) {
   }, "")
 }
 
+# Stan's functional names of the operators (add(a, b) is a + b, ...)
+op_functions <- c(add = "+", subtract = "-", multiply = "*", divide = "/", elt_multiply = ".*",
+                  elt_divide = "./", modulus = "%", logical_and = "&&", logical_or = "||",
+                  logical_eq = "==", logical_neq = "!=", logical_lt = "<", logical_lte = "<=",
+                  logical_gt = ">", logical_gte = ">=")
+op_unary_functions <- c(minus = "-", plus = "+", logical_negation = "!")
+
 sem_call <- function(s, e) {
   nm <- e$name
+  if (is.null(s$ufuns[[nm]]) && !isTRUE(e$cond_bar)) {
+    na <- length(e$args)
+    if (na == 2L && nm %in% names(op_functions))
+      return(sem_expr(s, list(kind = "binop", op = op_functions[[nm]], a = e$args[[1L]], b = e$args[[2L]], loc = e$loc)))
+    if (na == 1L && nm %in% names(op_unary_functions))
+      return(sem_expr(s, list(kind = "unop", op = op_unary_functions[[nm]], a = e$args[[1L]], loc = e$loc)))
+    if (na == 1L && nm == "transpose")
+      return(sem_expr(s, list(kind = "transpose", a = e$args[[1L]], loc = e$loc)))
+  }
   # higher order functions (ODE solvers, reduce_sum, ...) take a function name
   # as an argument; report them before that argument fails to resolve
   if (nm %in% unsupported_functions && is.null(s$ufuns[[nm]]) && is.null(.lib[[nm]]))
@@ -656,16 +678,18 @@ sem_call <- function(s, e) {
   types <- lapply(args, `[[`, "type")
   if (nm == "target") {
     if (length(args)) stop_semantic("target() takes no arguments", e$loc)
-    if (!in_lp_context(s)) stop_semantic("target() is only allowed in the model block or in _lp functions", e$loc)
+    # reading target is also allowed in transformed parameters (stanc3),
+    # incrementing it is not
+    if (!in_lp_context(s) && !identical(s$block, "transformed parameters"))
+      stop_semantic("target() is only allowed in the model block, transformed parameters or _lp functions", e$loc)
     e$type <- T_real
     e$data_only <- FALSE
     e$args <- args
     e$builtin <- "target"
     return(e)
   }
-  if (nm %in% c("get_lp", "increment_log_prob", "integrate_ode", "integrate_ode_rk45", "integrate_ode_bdf", "integrate_ode_adams", "if_else", "multiply_log", "binomial_coefficient_log", "cov_exp_quad")) {
-    if (nm %in% c("get_lp", "increment_log_prob", "integrate_ode", "integrate_ode_rk45", "integrate_ode_bdf", "integrate_ode_adams", "if_else"))
-      stop_semantic(sprintf("'%s' was removed from the Stan language", nm), e$loc)
+  if (nm %in% c("get_lp", "increment_log_prob", "integrate_ode", "integrate_ode_rk45", "integrate_ode_bdf", "integrate_ode_adams", "if_else", "multiply_log", "binomial_coefficient_log", "cov_exp_quad", "fabs")) {
+    stop_semantic(sprintf("'%s' was removed from the Stan language", nm), e$loc)
   }
   if (e$cond_bar && !grepl("_(lpdf|lupdf|lpmf|lupmf|lcdf|lccdf|cdf)$", nm))
     stop_semantic(sprintf("'|' is only allowed in calls to probability functions, not in '%s'", nm), e$loc)
@@ -766,10 +790,10 @@ unsupported_functions <- c(
   "hmm_hidden_state_prob", "laplace_marginal", "laplace_marginal_tol", "laplace_latent_rng",
   "laplace_latent_tol_rng", "laplace_latent_solve", "laplace_latent_solve_tol",
   "complex_schur_decompose", "fft", "inv_fft", "fft2", "inv_fft2", "eigendecompose",
-  "eigendecompose_sym", "svd", "csr_extract", "csr_extract_w", "csr_extract_v", "csr_extract_u",
-  "csr_to_dense_matrix", "csr_matrix_times_vector", "get_real", "get_imag", "to_complex",
+  "eigendecompose_sym", "svd", "csr_extract",
+  "get_real", "get_imag", "to_complex",
   "wiener_lpdf", "wiener_lcdf_defective", "wiener_lccdf_defective",
-  "symmetrize_from_lower_tri", "ordered_logistic_glm_lpmf", "ordered_logistic_glm_lupmf",
+  "symmetrize_from_lower_tri",
   "matrix_normal_prec_lpdf", "matrix_normal_prec_lupdf", "lkj_cov_lpdf", "lkj_cov_lupdf", "norm",
   "neg_binomial_cdf", "neg_binomial_lcdf", "neg_binomial_lccdf",
   "skew_normal_cdf", "skew_normal_lcdf", "skew_normal_lccdf",

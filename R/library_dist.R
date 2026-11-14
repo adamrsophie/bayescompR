@@ -1196,6 +1196,17 @@ for (xt in c("matrix", "row_vector")) {
   def("poisson_log_glm_lupmf", c("ints", xt, "reals", "vector"), "real", function(y, x, a, b) lp_poisson_log(y, glm_linpred("poisson_log_glm_lpmf", x, a, b), TRUE), density = TRUE, dist = "poisson_log_glm")
 }
 
+# ordered logistic regression: ordered_logistic(y | x * beta, cuts), no intercept
+for (xt in c("matrix", "row_vector")) local({
+  for (suf in c("_lpmf", "_lupmf")) {
+    def(paste0("ordered_logistic_glm", suf), c("ints", xt, "vector", "vector"), "real", function(y, x, b, cuts) {
+      eta <- glm_linpred("ordered_logistic_glm_lpmf", x, 0, b)
+      if (length(y) == 1L && length(val(eta)) > 1L) y <- rep.int(y, length(val(eta)))
+      lp_ordered_logistic(y, eta, cuts, FALSE)
+    }, density = TRUE, dist = "ordered_logistic_glm")
+  }
+})
+
 # Poisson binomial (Stan 2.40): number of successes among independent
 # Bernoulli trials with probabilities theta, by the log space recursion.
 pb_logprobs <- function(theta) {
@@ -1417,7 +1428,6 @@ for (pair in list(c("multi_normal", "lp_multi_normal"), c("multi_normal_cholesky
 }
 def("multi_normal_rng", c("vectors", "matrix"), mv_rng_ret, function(mu, S) mvn_rng(mu, t(chol(val(S)))), rng = TRUE)
 def("multi_normal_cholesky_rng", c("vectors", "matrix"), mv_rng_ret, function(mu, L) mvn_rng(mu, val(L)), rng = TRUE)
-def("multi_normal_prec_rng", c("vectors", "matrix"), mv_rng_ret, function(mu, O) mvn_rng(mu, t(chol(solve(val(O))))), rng = TRUE)
 
 mvt_core <- function(f, y, nu, mu, L, propto) {
   ys <- vec_rows(y)
@@ -1593,4 +1603,7 @@ def("inv_wishart_cholesky_rng", c("real", "matrix"), "matrix", function(nu, LS) 
 
 # ---- other random number generators --------------------------------------------------
 
-def("uniform_simplex_rng", "int", "vector", function(K) { g <- stats::rexp(K); g / sum(g) }, rng = TRUE)
+
+# names that defdist() registers but Stan 2.40 does not define
+for (nm in c("beta_proportion_cdf", "loglogistic_lcdf", "binomial_logit_rng"))
+  if (exists(nm, envir = .lib, inherits = FALSE)) rm(list = nm, envir = .lib)
