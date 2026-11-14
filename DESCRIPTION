@@ -64,6 +64,8 @@ Collate:
     'sample.R'
     'fit.R'
     'optimize.R'
+    'mcmc.R'
     'vi.R'
+    'smc.R'
     'ir.R'
 Config/roxygen2/version: 8.1.1

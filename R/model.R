@@ -35,7 +35,13 @@ read_stan_source <- function(code, file) {
 #'   `array[N] vector[K] y` is an `N` by `K` matrix.
 #' @param file Path to a `.stan` file, used when `code` is `NULL`.
 #' @param seed Seed for random number generation in `transformed data`.
-#' @param backend Execution backend, see [bayescomp_backends()].
+#' @param backend Execution backend, see [bayescomp_backends()]. Native
+#'   backends compute the log density and its gradient.
+#' @param allow_fallback When the backend lacks a capability the model needs
+#'   (constraining transforms, generated quantities or random numbers), use
+#'   the R implementation for it. The default `FALSE` raises an error
+#'   instead, so implementations are never mixed silently. The model's
+#'   `provenance` element records which backend provides each capability.
 #' @return An object of class `bayescomp_model`.
 #' @examples
 #' m <- bayescomp_model("
@@ -46,7 +52,8 @@ read_stan_source <- function(code, file) {
 #' m
 #' bayescomp_log_prob(m, c(0, 0))
 #' @export
-bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL, backend = "r") {
+bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL, backend = "r",
+                            allow_fallback = FALSE) {
   src <- read_stan_source(code, file)
   ir <- stan_check(stan_parse(src))
   if (is.null(data)) data <- list()
@@ -54,10 +61,67 @@ bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL
   be <- backend_get(backend)
   m <- compile_r(ir)
   inst <- with_seed(seed, instantiate(m, data))
-  structure(list(code = src, ir = ir, compiled = m, env = inst$env, decls = inst$decls,
-                 params = inst$params, dim = inst$dim, data = data, backend = be$name,
-                 provenance = list(log_density = be$name, gradient = be$name, rng = "r")),
-            class = "bayescomp_model")
+  caps <- c("log_density", "gradient", "constrain", "generated_quantities", "rng")
+  prov <- stats::setNames(as.list(ifelse(caps %in% be$capabilities, be$name, "r")), caps)
+  out <- structure(list(code = src, ir = ir, compiled = m, env = inst$env, decls = inst$decls,
+                        params = inst$params, dim = inst$dim, data = data, backend = be$name,
+                        provenance = prov, native = NULL),
+                   class = "bayescomp_model")
+  if (be$name == "r") return(out)
+  core <- setdiff(c("log_density", "gradient"), be$capabilities)
+  if (length(core))
+    stop(sprintf("backend '%s' does not provide %s", be$name, paste(core, collapse = " and ")), call. = FALSE)
+  other <- setdiff(caps, be$capabilities)
+  if (length(other) && !isTRUE(allow_fallback))
+    stop(sprintf("backend '%s' does not provide %s; set allow_fallback = TRUE to use the R implementation for %s",
+                 be$name, paste(other, collapse = ", "), if (length(other) > 1L) "them" else "it"), call. = FALSE)
+  native <- be$compile(bayescomp_ir(out), out)
+  if (!is.list(native) || !is.function(native$log_density_gradient))
+    stop(sprintf("backend '%s' did not return a log_density_gradient function", be$name), call. = FALSE)
+  out$native <- native
+  out
+}
+
+# log density and gradient on the unconstrained scale from the model's
+# backend: list(value, grad). Errors propagate with their classes.
+model_lpg <- function(model, jacobian, propto, print = FALSE) {
+  nat <- model$native
+  if (!is.null(nat)) return(function(u) nat$log_density_gradient(u, jacobian, propto))
+  f <- model_fun(model, "log_prob")
+  function(u) {
+    ctx <- new_ctx(jacobian = jacobian, print = print, propto = propto)
+    ad_value_grad(function(x) f(x, ctx), u)
+  }
+}
+
+#' Check a native backend against the R implementation
+#'
+#' Evaluates the log density and gradient of a model compiled with a native
+#' backend and of the same model in R at random unconstrained points.
+#'
+#' @param model A `bayescomp_model` with a native backend.
+#' @param n Number of points.
+#' @param radius Points are uniform on `(-radius, radius)`.
+#' @param seed Random seed.
+#' @return A data frame with the largest absolute and relative differences
+#'   of the log density and the gradient at each point.
+#' @export
+bayescomp_validate_backend <- function(model, n = 20L, radius = 2, seed = 1L) {
+  check_model(model)
+  if (is.null(model$native)) stop("the model uses the R backend; nothing to compare", call. = FALSE)
+  ref <- model
+  ref$native <- NULL
+  set.seed(seed)
+  rows <- lapply(seq_len(n), function(i) {
+    u <- stats::runif(model$dim, -radius, radius)
+    a <- model_lpg(model, TRUE, FALSE)(u)
+    b <- model_lpg(ref, TRUE, FALSE)(u)
+    data.frame(point = i, lp_abs = abs(a$value - b$value),
+               lp_rel = abs(a$value - b$value) / max(1, abs(b$value)),
+               grad_abs = max(abs(a$grad - b$grad), 0),
+               grad_rel = max(abs(a$grad - b$grad) / pmax(1, abs(b$grad)), 0))
+  })
+  do.call(rbind, rows)
 }
 
 with_seed <- function(seed, expr) {
@@ -255,9 +319,7 @@ model_fun <- function(model, which) {
 
 # value and gradient of the log density at unconstrained values
 lp_grad <- function(model, upars, jacobian = TRUE, propto = TRUE, print = TRUE) {
-  f <- model_fun(model, "log_prob")
-  ctx <- new_ctx(jacobian = jacobian, print = print, propto = propto)
-  ad_value_grad(function(u) f(u, ctx), upars)
+  model_lpg(model, jacobian, propto, print)(upars)
 }
 
 #' Log density of a model

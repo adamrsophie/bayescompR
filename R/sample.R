@@ -1,11 +1,21 @@
 # Sampling service: initialization, per chain random number streams,
 # parallel chains and assembly of the fit object.
 
-#' Draw posterior samples with Hamiltonian Monte Carlo
+#' Draw posterior samples with Markov chain Monte Carlo
 #'
-#' Runs the No-U-Turn sampler (default) or static HMC with Stan's warmup
-#' adaptation: dual averaging of the step size and windowed estimation of a
-#' diagonal or dense inverse metric.
+#' Runs the No-U-Turn sampler (default), static HMC, the Metropolis adjusted
+#' Langevin algorithm, random walk Metropolis or slice sampling. All of them
+#' use Stan's warmup schedule: dual averaging of the step size toward
+#' `adapt_delta` and windowed estimation of a diagonal or dense inverse
+#' metric, which for Metropolis and MALA is the proposal covariance and for
+#' slice sampling sets the bracket directions and widths. Adaptation stops at
+#' the end of warmup, so the sampling phase uses a fixed Markov kernel.
+#'
+#' NUTS is the recommended default for differentiable models. MALA is a
+#' cheaper gradient based kernel that can mix poorly for heavy tails.
+#' Metropolis and slice sampling need no gradients: they are useful as
+#' reference implementations, for checking results, and for models whose
+#' log density is not smooth.
 #'
 #' @param model A `bayescomp_model`.
 #' @param chains Number of chains.
@@ -15,12 +25,21 @@
 #'   restored on exit.
 #' @param init Initial values: a radius `r` (uniform on `(-r, r)` in the
 #'   unconstrained space, default 2), `0`, a named list of constrained values,
-#'   a list of such lists (one per chain), or a function returning a list.
-#' @param algorithm `"nuts"` or `"hmc"` (static integration time).
+#'   a list of such lists (one per chain), a function returning a list, or a
+#'   `bayescomp_fit` (for example from [bayescomp_pathfinder()]) whose draws
+#'   are used as starting points.
+#' @param algorithm `"nuts"`, `"hmc"` (static integration time), `"mala"`,
+#'   `"metropolis"` or `"slice"`.
 #' @param metric `"diag_e"` or `"dense_e"`.
 #' @param inv_metric Optional initial inverse metric (vector or matrix).
-#' @param step_size Initial step size.
-#' @param adapt_delta Target acceptance statistic.
+#' @param step_size Initial step size: leapfrog step for HMC, proposal scale
+#'   for Metropolis and MALA, bracket width in metric units for slice
+#'   sampling. `NULL` selects a default for the algorithm.
+#' @param adapt_delta Target acceptance statistic. `NULL` selects 0.8 for
+#'   NUTS and HMC, 0.574 for MALA, and 0.234 (block) or 0.44 (componentwise)
+#'   for Metropolis. Unused for slice sampling.
+#' @param block For Metropolis: propose all coordinates jointly (`TRUE`) or
+#'   update one coordinate at a time.
 #' @param max_treedepth Maximum tree depth for NUTS.
 #' @param int_time Integration time for static HMC.
 #' @param adapt_engaged Adapt during warmup.
@@ -42,9 +61,9 @@
 #' }
 #' @export
 bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampling = 1000L,
-                             seed = NULL, init = 2, algorithm = c("nuts", "hmc"),
+                             seed = NULL, init = 2, algorithm = c("nuts", "hmc", "mala", "metropolis", "slice"),
                              metric = c("diag_e", "dense_e"), inv_metric = NULL,
-                             step_size = 1, adapt_delta = 0.8, max_treedepth = 10L,
+                             step_size = NULL, adapt_delta = NULL, block = TRUE, max_treedepth = 10L,
                              int_time = 2 * pi, adapt_engaged = TRUE, adapt_gamma = 0.05,
                              adapt_kappa = 0.75, adapt_t0 = 10, adapt_init_buffer = 75L,
                              adapt_term_buffer = 50L, adapt_window = 25L, thin = 1L,
@@ -56,15 +75,20 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   iter_warmup <- as_count(iter_warmup, "iter_warmup")
   iter_sampling <- as_count(iter_sampling, "iter_sampling")
   thin <- as_count(thin, "thin", min = 1L)
-  if (!(adapt_delta > 0 && adapt_delta < 1)) stop("'adapt_delta' must be in (0, 1)", call. = FALSE)
-  if (!(step_size > 0)) stop("'step_size' must be positive", call. = FALSE)
   n <- model$dim
+  if (is.null(adapt_delta)) adapt_delta <- default_adapt_delta(algorithm, block)
+  if (algorithm != "slice" && !(adapt_delta > 0 && adapt_delta < 1)) stop("'adapt_delta' must be in (0, 1)", call. = FALSE)
+  if (is.null(step_size)) {
+    step_size <- switch(algorithm, nuts = 1, hmc = 1, slice = 2, mala = 1 / max(1, n)^(1 / 6),
+                        metropolis = if (block) 2.38 / sqrt(max(1, n)) else 2.4)
+  }
+  if (!(is.numeric(step_size) && length(step_size) == 1L && step_size > 0)) stop("'step_size' must be positive", call. = FALSE)
   if (!is.null(inv_metric)) {
     ok <- if (metric == "diag_e") is.numeric(inv_metric) && length(inv_metric) == n && all(inv_metric > 0)
           else is.matrix(inv_metric) && all(dim(inv_metric) == n) && is_pos_def(inv_metric)
     if (!ok) stop("'inv_metric' does not match the metric type and model dimension", call. = FALSE)
   }
-  cfg <- list(algorithm = algorithm, metric = metric, inv_metric = inv_metric, step_size = step_size,
+  cfg <- list(algorithm = algorithm, block = block, metric = metric, inv_metric = inv_metric, step_size = step_size,
               adapt_delta = adapt_delta, max_treedepth = as_count(max_treedepth, "max_treedepth", 1L),
               int_time = int_time, adapt_engaged = adapt_engaged, adapt_metric = TRUE,
               adapt_gamma = adapt_gamma, adapt_kappa = adapt_kappa, adapt_t0 = adapt_t0,
@@ -136,6 +160,18 @@ run_chains <- function(model, chains, seed, cores, f) {
 find_init <- function(model, init, chain_id) {
   n <- model$dim
   if (n == 0L) return(numeric(0))
+  if (inherits(init, "bayescomp_fit")) {
+    # e.g. a Pathfinder or ADVI fit: start from one of its draws
+    u <- do.call(rbind, init$unconstrained)
+    if (ncol(u) != n) stop("the initialization fit has a different number of parameters", call. = FALSE)
+    pot <- hmc_potential(model)
+    for (attempt in seq_len(100L)) {
+      q <- u[sample.int(nrow(u), 1L), ]
+      r <- pot(q)
+      if (is.finite(r$V) && all(is.finite(r$g))) return(q)
+    }
+    stop(sprintf("chain %d: no draw of the initialization fit has a finite log density", chain_id), call. = FALSE)
+  }
   user <- init
   if (is.function(user)) user <- user()
   if (is.list(user) && length(user) && is.list(user[[1L]]) && is.null(names(user))) user <- user[[chain_id]]

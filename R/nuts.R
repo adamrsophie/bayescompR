@@ -10,12 +10,9 @@
 # divergent.
 
 hmc_potential <- function(model, print = FALSE) {
-  f <- model_fun(model, "log_prob")
+  lpg <- model_lpg(model, jacobian = TRUE, propto = TRUE, print = print)
   function(q) {
-    r <- tryCatch({
-      ctx <- new_ctx(jacobian = TRUE, print = print, propto = TRUE)
-      ad_value_grad(function(u) f(u, ctx), q)
-    }, bayescomp_fatal_error = function(e) stop(e),
+    r <- tryCatch(lpg(q), bayescomp_fatal_error = function(e) stop(e),
        bayescomp_domain_error = function(e) NULL,
        bayescomp_reject_error = function(e) NULL)
     if (is.null(r) || !is.finite(r$value) || any(!is.finite(r$grad)))
@@ -277,14 +274,24 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   st$max_depth <- cfg$max_treedepth
   st$max_deltaH <- 1000
   st$int_time <- cfg$int_time
-  trans <- if (cfg$algorithm == "nuts") nuts_transition else hmc_transition
+  lp_full <- lp_value_fun(model, print = cfg$print)
+  lp_off <- lp_full(q0) + pot(q0)$V
+  if (!is.finite(lp_off)) lp_off <- 0
+  st$lp <- function(q) lp_full(q) - lp_off
+  st$lp_cache <- lp_cache_fun(st)
+  st$block <- isTRUE(cfg$block)
+  st$max_steps <- 32L
+  trans <- switch(cfg$algorithm, nuts = nuts_transition, hmc = hmc_transition, mala = mala_transition,
+                  metropolis = metropolis_transition, slice = slice_transition)
+  hamiltonian <- cfg$algorithm %in% c("nuts", "hmc")
   nw <- cfg$iter_warmup
   ns <- cfg$iter_sampling
   adapt <- cfg$adapt_engaged && nw > 0L
+  tune_step <- adapt && cfg$algorithm != "slice"
   da <- dual_avg_new(cfg$adapt_delta, cfg$adapt_gamma, cfg$adapt_kappa, cfg$adapt_t0, mu = log(10 * cfg$step_size))
   w <- windows_new(nw, cfg$adapt_init_buffer, cfg$adapt_term_buffer, cfg$adapt_window)
   est <- est_new(n, dense)
-  if (adapt) st$eps <- init_stepsize(st, q0)
+  if (adapt && hamiltonian) st$eps <- init_stepsize(st, q0)
   keep_w <- if (cfg$save_warmup) seq_len(nw) else integer(0)
   n_keep <- length(keep_w) + ns
   thin_idx <- c(keep_w[(seq_along(keep_w) - 1L) %% cfg$thin == 0L],
@@ -300,13 +307,13 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   for (it in seq_len(total)) {
     if (it == nw + 1L) {
       t_warm <- proc.time()[["elapsed"]] - t_start
-      if (adapt) st$eps <- exp(da$x_bar)
+      if (tune_step) st$eps <- exp(da$x_bar)
     }
     eps_used <- st$eps
     s <- trans(st, q)
     q <- s$q
     if (it <= nw && adapt) {
-      st$eps <- dual_avg_learn(da, s$accept_stat)
+      if (tune_step) st$eps <- dual_avg_learn(da, s$accept_stat)
       if (cfg$adapt_metric) {
         if (win_in_window(w)) est_add(est, q)
         if (win_end_window(w)) {
@@ -314,9 +321,11 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
           st$metric <- make_metric(cfg$metric, est_value(est))
           est <- est_new(n, dense)
           w$counter <- w$counter + 1L
-          st$eps <- init_stepsize(st, q)
-          da$mu <- log(10 * st$eps)
-          dual_avg_restart(da)
+          if (hamiltonian) st$eps <- init_stepsize(st, q)
+          if (tune_step) {
+            da$mu <- log(10 * st$eps)
+            dual_avg_restart(da)
+          }
         } else {
           w$counter <- w$counter + 1L
         }

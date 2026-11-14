@@ -9,7 +9,8 @@ bayescomp_model(
   data = list(),
   file = NULL,
   seed = NULL,
-  backend = "r"
+  backend = "r",
+  allow_fallback = FALSE
 )
 }
 \arguments{
@@ -23,7 +24,14 @@ block. Arrays use R arrays with the array dimensions first, so
 
 \item{seed}{Seed for random number generation in \verb{transformed data}.}
 
-\item{backend}{Execution backend, see \code{\link[=bayescomp_backends]{bayescomp_backends()}}.}
+\item{backend}{Execution backend, see \code{\link[=bayescomp_backends]{bayescomp_backends()}}. Native
+backends compute the log density and its gradient.}
+
+\item{allow_fallback}{When the backend lacks a capability the model needs
+(constraining transforms, generated quantities or random numbers), use
+the R implementation for it. The default \code{FALSE} raises an error
+instead, so implementations are never mixed silently. The model's
+\code{provenance} element records which backend provides each capability.}
 }
 \value{
 An object of class \code{bayescomp_model}.

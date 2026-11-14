@@ -172,9 +172,9 @@ bayescomp_diagnose <- function(fit, quiet = FALSE) {
   sd <- fit$sampler_diagnostics[kept(fit), , , drop = FALSE]
   div <- sum(sd[, , "divergent__"], na.rm = TRUE)
   mtd <- fit$config$max_treedepth %||% 10L
-  hit <- if (fit$config$algorithm == "nuts") sum(sd[, , "treedepth__"] >= mtd, na.rm = TRUE) else 0L
+  hit <- if (identical(fit$config$algorithm, "nuts")) sum(sd[, , "treedepth__"] >= mtd, na.rm = TRUE) else 0L
   ebfmi <- apply(matrix(sd[, , "energy__"], dim(sd)[1L]), 2L, function(e) {
-    if (length(e) < 2L) return(NA_real_)
+    if (length(e) < 2L || anyNA(e)) return(NA_real_)
     sum(diff(e)^2) / length(e) / stats::var(e)
   })
   r <- list(num_divergent = as.integer(div), num_max_treedepth = as.integer(hit), ebfmi = ebfmi)

@@ -2,7 +2,7 @@
 % Please edit documentation in R/sample.R
 \name{bayescomp_sample}
 \alias{bayescomp_sample}
-\title{Draw posterior samples with Hamiltonian Monte Carlo}
+\title{Draw posterior samples with Markov chain Monte Carlo}
 \usage{
 bayescomp_sample(
   model,
@@ -11,11 +11,12 @@ bayescomp_sample(
   iter_sampling = 1000L,
   seed = NULL,
   init = 2,
-  algorithm = c("nuts", "hmc"),
+  algorithm = c("nuts", "hmc", "mala", "metropolis", "slice"),
   metric = c("diag_e", "dense_e"),
   inv_metric = NULL,
-  step_size = 1,
-  adapt_delta = 0.8,
+  step_size = NULL,
+  adapt_delta = NULL,
+  block = TRUE,
   max_treedepth = 10L,
   int_time = 2 * pi,
   adapt_engaged = TRUE,
@@ -45,17 +46,27 @@ restored on exit.}
 
 \item{init}{Initial values: a radius \code{r} (uniform on \verb{(-r, r)} in the
 unconstrained space, default 2), \code{0}, a named list of constrained values,
-a list of such lists (one per chain), or a function returning a list.}
+a list of such lists (one per chain), a function returning a list, or a
+\code{bayescomp_fit} (for example from \code{\link[=bayescomp_pathfinder]{bayescomp_pathfinder()}}) whose draws
+are used as starting points.}
 
-\item{algorithm}{\code{"nuts"} or \code{"hmc"} (static integration time).}
+\item{algorithm}{\code{"nuts"}, \code{"hmc"} (static integration time), \code{"mala"},
+\code{"metropolis"} or \code{"slice"}.}
 
 \item{metric}{\code{"diag_e"} or \code{"dense_e"}.}
 
 \item{inv_metric}{Optional initial inverse metric (vector or matrix).}
 
-\item{step_size}{Initial step size.}
+\item{step_size}{Initial step size: leapfrog step for HMC, proposal scale
+for Metropolis and MALA, bracket width in metric units for slice
+sampling. \code{NULL} selects a default for the algorithm.}
 
-\item{adapt_delta}{Target acceptance statistic.}
+\item{adapt_delta}{Target acceptance statistic. \code{NULL} selects 0.8 for
+NUTS and HMC, 0.574 for MALA, and 0.234 (block) or 0.44 (componentwise)
+for Metropolis. Unused for slice sampling.}
+
+\item{block}{For Metropolis: propose all coordinates jointly (\code{TRUE}) or
+update one coordinate at a time.}
 
 \item{max_treedepth}{Maximum tree depth for NUTS.}
 
@@ -82,9 +93,20 @@ available on Windows).}
 A \code{bayescomp_fit} object.
 }
 \description{
-Runs the No-U-Turn sampler (default) or static HMC with Stan's warmup
-adaptation: dual averaging of the step size and windowed estimation of a
-diagonal or dense inverse metric.
+Runs the No-U-Turn sampler (default), static HMC, the Metropolis adjusted
+Langevin algorithm, random walk Metropolis or slice sampling. All of them
+use Stan's warmup schedule: dual averaging of the step size toward
+\code{adapt_delta} and windowed estimation of a diagonal or dense inverse
+metric, which for Metropolis and MALA is the proposal covariance and for
+slice sampling sets the bracket directions and widths. Adaptation stops at
+the end of warmup, so the sampling phase uses a fixed Markov kernel.
+}
+\details{
+NUTS is the recommended default for differentiable models. MALA is a
+cheaper gradient based kernel that can mix poorly for heavy tails.
+Metropolis and slice sampling need no gradients: they are useful as
+reference implementations, for checking results, and for models whose
+log density is not smooth.
 }
 \examples{
 \donttest{

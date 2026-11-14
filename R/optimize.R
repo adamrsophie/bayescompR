@@ -2,12 +2,9 @@
 # approximation around the mode.
 
 safe_lp <- function(model, jacobian, propto = TRUE) {
-  f <- model_fun(model, "log_prob")
+  lpg <- model_lpg(model, jacobian, propto)
   function(u) {
-    r <- tryCatch({
-      ctx <- new_ctx(jacobian = jacobian, print = FALSE, propto = propto)
-      ad_value_grad(function(x) f(x, ctx), u)
-    }, bayescomp_fatal_error = function(e) stop(e),
+    r <- tryCatch(lpg(u), bayescomp_fatal_error = function(e) stop(e),
        bayescomp_domain_error = function(e) NULL,
        bayescomp_reject_error = function(e) NULL)
     if (is.null(r) || !is.finite(r$value)) return(list(value = -Inf, grad = rep(NA_real_, length(u))))

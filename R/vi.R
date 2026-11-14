@@ -207,7 +207,7 @@ pathfinder_path <- function(lpg, u0, history, max_iter, num_elbo_draws, num_draw
   th <- sweep(z %*% t(best$L), 2L, best$mu, "+")
   lq <- -0.5 * rowSums(z^2) - 0.5 * n * log(2 * pi) - sum(log(diag(best$L)))
   lp <- apply(th, 1L, function(q) lpg(q)$value)
-  list(q = th, log_p = lp, log_q = lq, elbo = best$elbo)
+  list(q = th, log_p = lp, log_q = lq, elbo = best$elbo, mu = best$mu, L = best$L)
 }
 
 lbfgs_two_loop <- function(g, alpha, S, Y) {
@@ -317,4 +317,10 @@ bayescomp_pathfinder <- function(model, num_paths = 4L, num_draws = 1000L, histo
   fit$elbo <- vapply(paths, `[[`, 0, "elbo")
   if (is.finite(k) && k > 0.7) warning(sprintf("Pareto k = %.2f: the importance weights are unreliable", k), call. = FALSE)
   fit
+}
+
+# the best normal approximation along one Pathfinder path
+pathfinder_best_normal <- function(lpg, u0, history, max_iter, num_elbo_draws, tol_rel_obj, tol_grad) {
+  r <- pathfinder_path(lpg, u0, history, max_iter, num_elbo_draws, 1L, tol_rel_obj, tol_grad)
+  list(mu = r$mu, L = r$L)
 }
