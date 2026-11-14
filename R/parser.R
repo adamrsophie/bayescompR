@@ -622,6 +622,8 @@ parse_primary <- function(p, no_gt) {
       items <- list(e)
       while (tk_is(p, ",")) {
         tk_next(p)
+        # (e,) is a tuple of one element
+        if (length(items) == 1L && tk_is(p, ")")) break
         items[[length(items) + 1L]] <- parse_expr(p)
       }
       expect(p, ")")

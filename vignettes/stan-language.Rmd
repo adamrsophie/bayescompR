@@ -211,7 +211,6 @@ Stan.
 
 The following Stan features raise `bayescomp_unsupported_error`:
 
-* the embedded Laplace approximation functions;
 * the `wiener` distribution.
 
 ```{r, error = TRUE}
@@ -238,6 +237,20 @@ m <- bayescomp_model("
 functions { vector decay(real t, vector y, real k) { return -k * y; } }
 transformed data { print(ode_rk45(decay, [1]', 0, {1, 2}, 0.5)); }")
 ```
+
+## Embedded Laplace approximation
+
+`laplace_marginal`, `laplace_marginal_tol`, `laplace_latent_rng`,
+`laplace_latent_tol_rng`, `laplace_latent_solve` and the built in forms
+for Poisson, Bernoulli and negative binomial likelihoods
+(`laplace_marginal_poisson_log_lpmf` and the others, also usable with `~`)
+integrate out a latent Gaussian vector. The gradient with respect to the
+likelihood and covariance arguments uses the analytic formulas of
+Rasmussen and Williams (2006, section 5.5.1); the second and third
+derivatives of the likelihood come from central differences of its
+automatic gradient, so gradients agree with CmdStan to about six digits.
+The control options take six values or the tuple from
+`generate_laplace_options()`.
 
 ## Tuples
 

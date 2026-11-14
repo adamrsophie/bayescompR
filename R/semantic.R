@@ -294,6 +294,10 @@ sem_stmt <- function(s, st, top = FALSE) {
     },
     tilde = {
       if (!in_lp_context(s)) stop_semantic("sampling statements (~) are only allowed in the model block or in _lp functions", st$loc)
+      if (paste0(st$dist, "_lpmf") %in% laplace_names && is.null(st$trunc))
+        return(sem_stmt(s, list(kind = "target_add", loc = st$loc,
+                                value = list(kind = "call", name = paste0(st$dist, "_lpmf"), args = c(list(st$lhs), st$args),
+                                             cond_bar = TRUE, loc = st$loc))))
       lhs <- sem_expr(s, st$lhs)
       args <- lapply(st$args, function(a) sem_expr(s, a))
       types <- c(list(lhs$type), lapply(args, `[[`, "type"))
@@ -787,6 +791,7 @@ sem_call <- function(s, e) {
   if (nm %in% unsupported_functions && is.null(s$ufuns[[nm]]) && is.null(.lib[[nm]]))
     stop_unsupported(sprintf("function '%s' is not implemented in this version of bayescompR", nm), e$loc)
   if (nm %in% names(hof_specs) && is.null(s$ufuns[[nm]])) return(sem_hof(s, e))
+  if (nm %in% laplace_names && is.null(s$ufuns[[nm]])) return(sem_laplace(s, e))
   args <- lapply(e$args, function(a) sem_expr(s, a))
   types <- lapply(args, `[[`, "type")
   if (nm == "target") {
@@ -896,8 +901,6 @@ data_only_functions <- c("linspaced_array", "linspaced_int_array", "linspaced_ve
 unsupported_functions <- c(
   "integrate_1d_gauss_kronrod", "integrate_1d_gauss_kronrod_tol",
   "integrate_1d_double_exponential", "integrate_1d_double_exponential_tol",
-  "laplace_marginal", "laplace_marginal_tol", "laplace_latent_rng",
-  "laplace_latent_tol_rng", "laplace_latent_solve", "laplace_latent_solve_tol",
   "wiener_lpdf", "wiener_lcdf_defective", "wiener_lccdf_defective",
   NULL)
 unsupported_distributions <- c("wiener", "gaussian_dlm_obs", "multi_gp", "multi_gp_cholesky",

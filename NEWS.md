@@ -8,6 +8,9 @@ First release.
   differentiation tape with fused density kernels.
 * All constrained types of Stan 2.40 with Stan's transforms and Jacobians.
 * Math, container, linear algebra and distribution library.
+* Embedded Laplace approximation (`laplace_marginal` and related
+  functions, including the built in Poisson, Bernoulli and negative
+  binomial forms).
 * ODE, DAE and algebraic solvers, `integrate_1d`, `map_rect` and
   `reduce_sum`, differentiated with respect to all their parameters.
 * Tuples in every block, including constrained tuple parameters, with
