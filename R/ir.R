@@ -97,13 +97,19 @@ to_json <- function(x) {
 #' or the data of a model with the same parameters.
 #'
 #' @param model A `bayescomp_model` with the same parameters as the fit.
-#' @param fit A `bayescomp_fit`.
+#' @param fit A `bayescomp_fit`, the names of Stan CSV files (as CmdStan's
+#'   `fitted_params`), or draws of the constrained parameters: a posterior
+#'   draws object, a 3-D array (iterations, chains, variables) or a matrix or
+#'   data frame with one row per draw. Columns are named as in
+#'   [bayescomp_param_names()] or in CmdStan's style (`theta.1`); other
+#'   columns are ignored.
 #' @param seed Random seed.
 #' @return A `bayescomp_fit` whose draws hold the new quantities.
 #' @export
 bayescomp_generate_quantities <- function(model, fit, seed = NULL) {
   check_model(model)
-  if (!inherits(fit, "bayescomp_fit")) stop("'fit' must be a bayescomp_fit", call. = FALSE)
+  if (is.character(fit)) fit <- bayescomp_read_csv(fit, model = model)
+  if (!inherits(fit, "bayescomp_fit")) fit <- fit_from_draws(model, fit)
   if (model$dim != ncol(fit$unconstrained[[1L]]))
     stop("the model and the fit have different numbers of unconstrained parameters", call. = FALSE)
   # the unconstrained draws only mean the same thing under the same ordered
@@ -135,4 +141,30 @@ bayescomp_generate_quantities <- function(model, fit, seed = NULL) {
   })
   out <- make_fit(model, res, fit$config, "generate_quantities", seed, proc.time()[["elapsed"]] - t0)
   out
+}
+
+# a fit from draws of the constrained parameters
+fit_from_draws <- function(model, x) {
+  if (inherits(x, "draws")) {
+    if (!requireNamespace("posterior", quietly = TRUE)) stop("the posterior package is required for draws objects", call. = FALSE)
+    x <- unclass(posterior::as_draws_array(x))
+  }
+  if (is.data.frame(x)) x <- as.matrix(x[, vapply(x, is.numeric, TRUE), drop = FALSE])
+  if (is.matrix(x)) x <- array(x, c(nrow(x), 1L, ncol(x)), dimnames = list(NULL, NULL, colnames(x)))
+  if (!is.array(x) || length(dim(x)) != 3L || is.null(dimnames(x)[[3L]]))
+    stop("'fit' must be a bayescomp_fit, Stan CSV files or named draws of the parameters", call. = FALSE)
+  vn <- dimnames(x)[[3L]]
+  vn <- ifelse(grepl("[.]", vn) & !grepl("\\[", vn), from_cmdstan_names(vn), vn)
+  pn <- bayescomp_param_names(model, FALSE, FALSE)
+  miss <- setdiff(pn, vn)
+  if (length(miss)) stop(sprintf("the draws have no values for %s", paste(utils::head(miss, 5L), collapse = ", ")), call. = FALSE)
+  idx <- match(pn, vn)
+  n <- dim(x)[1L]
+  un <- lapply(seq_len(dim(x)[2L]), function(c) {
+    P <- matrix(x[, c, idx, drop = FALSE], n)
+    matrix(vapply(seq_len(n), function(i) bayescomp_unconstrain(model, unflatten_params(model, P[i, ])), numeric(model$dim)),
+           n, model$dim, byrow = TRUE)
+  })
+  structure(list(draws = NULL, unconstrained = un, model = model, n_warmup_saved = 0L, config = list(), method = "draws"),
+            class = "bayescomp_fit")
 }

@@ -21,6 +21,7 @@ stan_parse <- function(src) {
   p$toks <- toks
   p$pos <- 1L
   prog <- parse_program(p)
+  prog$comments <- attr(toks, "comments")
   prog
 }
 
@@ -337,8 +338,9 @@ parse_statement <- function(p, block) {
   if (t$type == "op" && t$value == "{" && !brace_then_tilde(p)) {
     tk_next(p)
     body <- parse_stmts_until_close(p, block)
+    end <- tk_loc(tk(p))
     expect(p, "}")
-    return(list(kind = "block_stmt", body = body, loc = loc))
+    return(list(kind = "block_stmt", body = body, loc = loc, end = end))
   }
   if (t$type == "ident") {
     if (starts_decl(p)) return(parse_decl(p, block))
@@ -626,15 +628,15 @@ parse_primary <- function(p, no_gt) {
     v <- suppressWarnings(as.numeric(t$value))
     if (is.na(v) || v > .Machine$integer.max)
       stop_syntax(sprintf("integer literal %s is too large; Stan integers are 32 bit", t$value), loc)
-    return(list(kind = "int", value = as.integer(v), loc = loc))
+    return(list(kind = "int", value = as.integer(v), text = t$value, loc = loc))
   }
   if (t$type == "real") {
     tk_next(p)
-    return(list(kind = "real", value = as.numeric(t$value), loc = loc))
+    return(list(kind = "real", value = as.numeric(t$value), text = t$value, loc = loc))
   }
   if (t$type == "imag") {
     tk_next(p)
-    return(list(kind = "imag", value = as.numeric(sub("i$", "", t$value)), loc = loc))
+    return(list(kind = "imag", value = as.numeric(sub("i$", "", t$value)), text = sub("i$", "", t$value), loc = loc))
   }
   if (t$type == "string") stop_syntax("string literals are only allowed in print, reject and fatal_error", loc)
   if (t$type == "op" && t$value == "(") {

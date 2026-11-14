@@ -9,15 +9,22 @@
 #' @param file Path to a `.stan` file, used when `code` is `NULL`.
 #' @param include_paths Directories searched, in order, for files named in
 #'   `#include` directives. The directory of `file` is searched last.
+#' @param pedantic Print the warnings of [bayescomp_pedantic()] (stanc's
+#'   `--warn-pedantic`).
+#' @param warn_uninitialized Print warnings about variables used before they
+#'   are assigned (stanc's `--warn-uninitialized`).
 #' @return The typed intermediate representation, invisibly. Errors carry the
 #'   classes `bayescomp_syntax_error`, `bayescomp_semantic_error` or
 #'   `bayescomp_unsupported_error`.
 #' @examples
 #' bayescomp_check("parameters { real mu; } model { mu ~ normal(0, 1); }")
 #' @export
-bayescomp_check <- function(code = NULL, file = NULL, include_paths = NULL) {
+bayescomp_check <- function(code = NULL, file = NULL, include_paths = NULL, pedantic = FALSE, warn_uninitialized = FALSE) {
   src <- read_stan_source(code, file, include_paths)
-  invisible(stan_check(stan_parse(src)))
+  ir <- stan_check(stan_parse(src))
+  if (isTRUE(pedantic)) print(ped_result(c(ped_checks(ir), ped_uninit(ir))))
+  else if (isTRUE(warn_uninitialized)) print(ped_result(ped_uninit(ir)))
+  invisible(ir)
 }
 
 read_stan_source <- function(code, file, include_paths = NULL) {
@@ -37,6 +44,7 @@ expand_includes <- function(lines, paths, seen) {
   if (!length(hit)) return(paste(lines, collapse = "\n"))
   out <- vector("list", length(lines))
   out[] <- as.list(lines)
+  inc <- character()
   for (i in hit) {
     name <- sub(re, "\\1", lines[i])
     cand <- file.path(paths, name)
@@ -46,9 +54,11 @@ expand_includes <- function(lines, paths, seen) {
                               list(line = i, col = 1L))
     f <- normalizePath(f)
     if (f %in% seen) stop_syntax(sprintf("#include file '%s' includes itself", name), list(line = i, col = 1L))
-    out[[i]] <- expand_includes(readLines(f, warn = FALSE), c(paths, dirname(f)), c(seen, f))
+    sub_src <- expand_includes(readLines(f, warn = FALSE), c(paths, dirname(f)), c(seen, f))
+    inc <- c(inc, f, attr(sub_src, "included"))
+    out[[i]] <- as.vector(sub_src)
   }
-  paste(unlist(out), collapse = "\n")
+  structure(paste(unlist(out), collapse = "\n"), included = unique(inc))
 }
 
 #' Compile a Stan program and bind data
@@ -231,6 +241,10 @@ compile_r <- function(ir) {
   # transformed data: statements, then validation of the declared variables
   td <- c(cg_block(block_body(ir, "transformed data"), ctxl("transformed data")), list(quote(.stmt$loc <- NULL)))
   td_checks <- check_calls(top_decls(ir, "transformed data"), "transformed data")
+  h <- hoist_ir(ir)
+  hoist <- lapply(h$hoisted, function(x) list(name = x$name, code = cg_expr(x$expr)))
+  ir_orig <- ir
+  ir <- h$ir
   pars <- top_decls(ir, "parameters")
   par_code <- lapply(pars, function(d) {
     cl(as.name("<-"), vsym(d$name), cl(rt_param, quote(.u), cl(as.name("[["), quote(.decls), d$name),
@@ -266,7 +280,7 @@ compile_r <- function(ir) {
             cl(as.name("lapply"), cg_cons_args(d$type), as.name("val"))))))
   })
   unc_body <- blk(c(list(quote(.parts <- vector("list", 0L))), unc_code, list(quote(unlist(.parts)))))
-  list(ir = ir, funs = funs, tdata = td, tdata_checks = td_checks, log_prob = log_prob_body, write = write_body,
+  list(ir = ir_orig, hoist = hoist, funs = funs, tdata = td, tdata_checks = td_checks, log_prob = log_prob_body, write = write_body,
        unconstrain = unc_body, pars = pars, tps = tps, gqs = gqs,
        data_decls = top_decls(ir, "data"), td_decls = top_decls(ir, "transformed data"))
 }
@@ -286,7 +300,7 @@ decl_info <- function(d, env) {
   info
 }
 
-instantiate <- function(m, data) {
+instantiate <- function(m, data, generate = FALSE) {
   ns <- environment(rt_decl)
   fenv <- new.env(parent = ns)
   for (f in m$funs) assign(f$name, make_function(f$formals, f$body, fenv), envir = fenv)
@@ -300,16 +314,21 @@ instantiate <- function(m, data) {
   env$.decls <- decls
   env$.ctx <- new_ctx(jacobian = FALSE)
   # data
+  gen <- list()
   for (d in m$data_decls) {
     info <- decl_info(d, env)
     decls[[d$name]] <- info
-    v <- read_data_value(data, info)
+    if (generate) {
+      args <- eval(cg_cons_args(d$type), env)
+      v <- gen[[d$name]] <- generate_value(info, args, d$name)
+    } else v <- read_data_value(data, info)
     assign(paste0("V.", d$name), v, envir = env)
     env$.decls <- decls
     args <- eval(cg_cons_args(d$type), env)
     msg <- check_variable(v, info, args)
     if (!is.null(msg)) stop_data(sprintf("variable '%s' %s", d$name, msg))
   }
+  if (generate) return(gen)
   extra <- setdiff(names(data), vapply(m$data_decls, `[[`, "", "name"))
   # transformed data
   # sizes of transformed data variables may depend on earlier transformed
@@ -318,6 +337,13 @@ instantiate <- function(m, data) {
   for (d in m$td_decls) decls[[d$name]] <- decl_info(d, env)
   env$.decls <- decls
   if (length(m$tdata_checks)) eval(blk(m$tdata_checks), env)
+  # data only subexpressions: computed now; one that fails (say an index
+  # out of range in a branch that never runs) is left to fail where used
+  for (hx in m$hoist) local({
+    v <- tryCatch(eval(hx$code, env), error = function(e) e)
+    if (inherits(v, "error")) eval(call("delayedAssign", hx$name, hx$code, env, env))
+    else assign(hx$name, v, envir = env)
+  })
   # parameters, transformed parameters, generated quantities
   off <- 0L
   for (d in m$pars) {
@@ -544,4 +570,192 @@ print.bayescomp_model <- function(x, ...) {
   cat("  backend:", x$backend, "\n")
   if (length(x$env$.ignored_data)) cat("  unused data:", paste(x$env$.ignored_data, collapse = ", "), "\n")
   invisible(x)
+}
+
+#' Call user defined Stan functions from R
+#'
+#' Returns the functions of a program's `functions` block as R functions, as
+#' stanc's `--standalone-functions` and CmdStanR's `expose_functions()` do.
+#' Arguments are R values in the shapes the package uses for data (numbers,
+#' vectors, matrices, and lists or matrices for arrays). Overloaded functions
+#' pick the overload by the number and types of the arguments. `_rng`
+#' functions use R's random number generator, so [set.seed()] makes them
+#' reproducible. Functions ending in `_lp` need a log density accumulator and
+#' are not exposed.
+#'
+#' @param x A `bayescomp_model`, Stan code, or a `.stan` file name.
+#' @param ... Passed to [bayescomp_model()] when `x` is code or a file.
+#' @return A named list of R functions.
+#' @examples
+#' f <- bayescomp_expose_functions("functions { real twice(real x) { return 2 * x; } }")
+#' f$twice(21)
+#' @export
+bayescomp_expose_functions <- function(x, ...) {
+  m <- if (inherits(x, "bayescomp_model")) x
+       else if (is.character(x) && length(x) == 1L && grepl("\\.stan$", x) && file.exists(x)) bayescomp_model(file = x, ...)
+       else bayescomp_model(code = x, ...)
+  fds <- Filter(function(fd) !is.null(fd$body) && !isTRUE(fd$sig$lp), m$ir$blocks$functions$body %||% list())
+  fenv <- parent.env(m$env)
+  ctx <- m$env$.ctx
+  by_name <- split(fds, vapply(fds, function(fd) fd$name, ""))
+  lapply(by_name, function(ov) {
+    impls <- lapply(ov, function(fd) get(fd$sig$mangled, envir = fenv))
+    types <- lapply(ov, function(fd) lapply(fd$args, `[[`, "type"))
+    nm <- ov[[1L]]$name
+    function(...) {
+      a <- list(...)
+      for (k in seq_along(ov)) {
+        if (length(types[[k]]) == length(a) && all(mapply(r_value_fits, types[[k]], a)))
+          return(do.call(impls[[k]], c(a, list(ctx))))
+      }
+      stop(sprintf("no signature of '%s' takes these arguments", nm), call. = FALSE)
+    }
+  })
+}
+
+# does an R value fit a Stan argument type (for overload selection)
+r_value_fits <- function(type, v) {
+  nd <- type$nd %||% 0L
+  if (nd > 0L) return(is.list(v) || is.numeric(v) || is.complex(v))
+  switch(type$base,
+    int = is.numeric(v) && length(v) == 1L && is.null(dim(v)) && v == round(v),
+    real = is.numeric(v) && length(v) == 1L && is.null(dim(v)),
+    complex = (is.numeric(v) || is.complex(v)) && length(v) == 1L,
+    vector = , row_vector = , complex_vector = , complex_row_vector = (is.numeric(v) || is.complex(v)) && is.null(dim(v)),
+    matrix = , complex_matrix = is.matrix(v),
+    TRUE)
+}
+
+#' Model information
+#'
+#' The information stanc's `--info` option prints: the type (`int`, `real`,
+#' `complex` or a list for tuples) and number of dimensions of every data
+#' variable, parameter, transformed parameter and generated quantity, the
+#' library functions and distributions the program uses, and the included
+#' files.
+#'
+#' @param x A `bayescomp_model`, Stan code, or a `.stan` file name.
+#' @param include_paths Directories searched for `#include` files.
+#' @return A named list with `inputs`, `parameters`,
+#'   `transformed parameters`, `generated quantities`, `functions`,
+#'   `distributions` and `included_files`.
+#' @examples
+#' str(bayescomp_info("data { int N; vector[N] y; } parameters { real mu; }
+#'                     model { y ~ normal(mu, 1); }"))
+#' @export
+bayescomp_info <- function(x, include_paths = NULL) {
+  if (inherits(x, "bayescomp_model")) { ir <- x$ir; src <- x$code }
+  else {
+    file <- if (is.character(x) && length(x) == 1L && grepl("\\.stan$", x) && file.exists(x)) x
+    src <- read_stan_source(if (is.null(file)) x, file, include_paths)
+    ir <- stan_check(stan_parse(src))
+  }
+  vars <- function(block) {
+    ds <- top_decls(ir, block)
+    stats::setNames(lapply(ds, function(d) info_type(d$type)), vapply(ds, `[[`, "", "name"))
+  }
+  funs <- character(); dists <- character()
+  walk <- function(n) {
+    if (!is.list(n)) return()
+    if (identical(n$kind, "tilde") && is.character(n$fname) && !isTRUE(n$sig$user)) dists <<- c(dists, n$fname)
+    if (identical(n$kind, "call") && is.list(n$sig) && !isTRUE(n$sig$user)) {
+      f <- n$resolved %||% n$name
+      if (grepl("_(lpdf|lupdf|lpmf|lupmf|cdf|lcdf|lccdf)$", f)) dists <<- c(dists, f) else funs <<- c(funs, f)
+    }
+    for (e in n) if (is.list(e) && !is.function(e)) walk(e)
+  }
+  walk(ir$blocks)
+  list(inputs = vars("data"), parameters = vars("parameters"),
+       `transformed parameters` = vars("transformed parameters"),
+       `generated quantities` = vars("generated quantities"),
+       functions = sort(unique(funs)), distributions = sort(unique(dists)),
+       included_files = as.character(attr(src, "included") %||% character()))
+}
+
+info_type <- function(t) {
+  if (identical(t$base, "tuple"))
+    return(list(type = lapply(t$elems, info_type), dimensions = length(t$adims)))
+  inner <- if (grepl("vector|simplex|ordered|positive_ordered|sum_to_zero_vector|unit_vector", t$base)) 1L
+           else if (grepl("matrix|cov|corr|cholesky|stochastic", t$base)) 2L else 0L
+  base <- if (t$base == "int") "int" else if (startsWith(t$base, "complex")) "complex" else "real"
+  list(type = base, dimensions = length(t$adims) + inner)
+}
+
+#' Stan version implemented
+#'
+#' The version of the Stan language and library that bayescompR follows
+#' (stanc's `--version`).
+#'
+#' @return A character string such as `"2.40.0"`.
+#' @examples
+#' bayescomp_stan_version()
+#' @export
+bayescomp_stan_version <- function() stan_signatures_version
+
+#' Random data and initial values
+#'
+#' `bayescomp_generate_data()` draws a random value for every variable of the
+#' data block, in declaration order so that sizes can depend on earlier
+#' integers, as stanc's `--debug-generate-data` does: integers are drawn
+#' within their bounds (1 to 6 when unbounded), other values are drawn
+#' uniformly on (-2, 2) on the unconstrained scale and transformed to their
+#' declared constraints. `bayescomp_generate_inits()` draws initial values of
+#' the parameters the same way (`--debug-generate-inits`).
+#'
+#' @param x A `bayescomp_model`, Stan code, or a `.stan` file name; for
+#'   `bayescomp_generate_inits()`, a `bayescomp_model`.
+#' @param seed Random seed.
+#' @param file If given, the values are also written to this JSON file.
+#' @return A named list, invisibly when `file` is given.
+#' @examples
+#' code <- "data { int<lower=1> N; vector[N] y; } parameters { real mu; }
+#'          model { y ~ normal(mu, 1); }"
+#' d <- bayescomp_generate_data(code, seed = 1)
+#' m <- bayescomp_model(code, data = d)
+#' bayescomp_generate_inits(m, seed = 1)
+#' @export
+bayescomp_generate_data <- function(x, seed = NULL, file = NULL) {
+  ir <- if (inherits(x, "bayescomp_model")) x$ir else {
+    f <- if (is.character(x) && length(x) == 1L && grepl("\\.stan$", x) && file.exists(x)) x
+    stan_check(stan_parse(read_stan_source(if (is.null(f)) x, f)))
+  }
+  m <- compile_r(ir)
+  out <- with_seed(seed, instantiate(m, list(), generate = TRUE))
+  if (is.null(file)) return(out)
+  bayescomp_write_data(out, file)
+  invisible(out)
+}
+
+#' @rdname bayescomp_generate_data
+#' @export
+bayescomp_generate_inits <- function(x, seed = NULL, file = NULL) {
+  check_model(x)
+  out <- with_seed(seed, bayescomp_constrain(x, stats::runif(x$dim, -2, 2), include_tparams = FALSE, include_gqs = FALSE))
+  if (is.null(file)) return(out)
+  bayescomp_write_data(out, file)
+  invisible(out)
+}
+
+generate_value <- function(info, args, name) {
+  if (identical(info$kind, "tuple")) stop_data(sprintf("cannot generate tuple data '%s'", name))
+  n_elem <- prod(c(info$adims, info$eshape, 1L))
+  if (identical(info$base, "int")) {
+    lo <- if (!is.null(args$lower)) val(args$lower) else 1
+    hi <- if (!is.null(args$upper)) val(args$upper) else lo + 5
+    if (!is.null(args$upper) && is.null(args$lower)) lo <- hi - 5
+    lo <- rep_len(lo, n_elem); hi <- rep_len(hi, n_elem)
+    v <- as.integer(lo + floor(stats::runif(n_elem) * (hi - lo + 1)))
+    return(if (length(info$adims) > 1L) array(v, info$adims) else if (!length(info$adims)) v[1L] else v)
+  }
+  r <- constrain_variable(stats::runif(info$free_size, -2, 2), info, args)$x
+  r <- val(r)
+  if (!startsWith(info$base %||% "", "complex")) return(r)
+  # complex values are stored with a trailing [re, im] dimension
+  d <- dim(r)
+  if (is.null(d)) return(complex(real = r[1L], imaginary = r[2L]))
+  k <- length(d)
+  h <- prod(d[-k])
+  z <- complex(real = r[seq_len(h)], imaginary = r[h + seq_len(h)])
+  if (k > 2L) dim(z) <- d[-k]
+  z
 }

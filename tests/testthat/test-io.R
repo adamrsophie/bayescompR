@@ -75,3 +75,9 @@ test_that("the gradient test agrees with finite differences", {
   expect_equal(g$value[1L], log(1.5))
   expect_equal(attr(g, "log_prob"), bayescomp_log_prob(m, g$value))
 })
+
+test_that("print formats numbers as CmdStan does", {
+  # reference output from CmdStan 2.40
+  expect_output(bayescomp_model("transformed data { print(1, \" \", 1.5, \" \", 123456789.123, \" \", 1.0/3, \" \", 100000.0, \" \", 1234567.0, \" \", [1, 2.5], \" \", {1.5, 2.5}, \" \", to_complex(1.5, -2), \" \", not_a_number(), \" \", negative_infinity()); }"),
+                "1 1.5 1.23457e+08 0.333333 100000 1.23457e+06 [1,2.5] [1.5,2.5] (1.5,-2) nan -inf", fixed = TRUE)
+})

@@ -17,7 +17,8 @@ bayescomp_optimize(
   tol_rel_grad = 1e+07,
   tol_param = 1e-08,
   history_size = 5L,
-  init_alpha = 0.001
+  init_alpha = 0.001,
+  save_iterations = FALSE
 )
 }
 \arguments{
@@ -45,6 +46,9 @@ rule met stops the iterations.}
 \item{history_size}{Number of updates L-BFGS keeps.}
 
 \item{init_alpha}{Initial step size of the first line search.}
+
+\item{save_iterations}{Return every iterate as a draw (the initial point
+first, the optimum last), as CmdStan's \code{save_iterations}.}
 }
 \value{
 A \code{bayescomp_fit} with one draw holding the optimum, and elements

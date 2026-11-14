@@ -111,3 +111,50 @@ test_that("stansummary and diagnose reports follow CmdStan", {
   expect_true("Rank-normalized split effective sample size satisfactory for all parameters." %in% rep)
   expect_equal(d$ebfmi_all, {e <- as.vector(f$sampler_diagnostics[, , "energy__"]); mean(diff(e)^2) / stats::var(e)}, tolerance = 1e-6)
 })
+
+test_that("generated quantities run on draws from files, matrices and posterior objects", {
+  m <- bayescomp_model("parameters { real<lower=0> s; vector[2] b; } model { s ~ exponential(1); b ~ normal(0, s); }
+                        generated quantities { real t = s + sum(b); }")
+  f <- bayescomp_sample(m, chains = 2, iter_warmup = 30, iter_sampling = 5, seed = 1, refresh = 0)
+  ref <- bayescomp_draws(bayescomp_generate_quantities(m, f, seed = 1), "t")
+  mat <- bayescomp_draws(f, format = "matrix")
+  g <- bayescomp_generate_quantities(m, mat, seed = 1)
+  expect_equal(as.vector(bayescomp_draws(g, "t")), as.vector(mat[, "s"] + mat[, "b[1]"] + mat[, "b[2]"]))
+  csv <- bayescomp_write_csv(f, tempfile(), sig_figs = 18)
+  expect_equal(bayescomp_draws(bayescomp_generate_quantities(m, csv, seed = 1), "t"), ref)
+  dotted <- mat[, c("s", "b[1]", "b[2]")]
+  colnames(dotted) <- c("s", "b.1", "b.2")
+  expect_equal(as.vector(bayescomp_draws(bayescomp_generate_quantities(m, dotted), "t")), as.vector(bayescomp_draws(g, "t")))
+  skip_if_not_installed("posterior")
+  pd <- posterior::as_draws_array(bayescomp_draws(f))
+  expect_equal(bayescomp_draws(bayescomp_generate_quantities(m, pd, seed = 1), "t"), ref)
+  expect_error(bayescomp_generate_quantities(m, mat[, "s", drop = FALSE]), "no values for b")
+})
+
+test_that("optimization can save its iterations", {
+  m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(3, 1); }")
+  for (alg in c("lbfgs", "bfgs", "newton")) {
+    o <- bayescomp_optimize(m, algorithm = alg, seed = 1, save_iterations = TRUE)
+    k <- dim(o$draws)[1L]
+    expect_gt(k, 1L)
+    expect_equal(unname(o$par[["mu"]]), 3, tolerance = 1e-5)
+    expect_equal(unname(o$draws[k, 1L, "mu"]), unname(o$par[["mu"]]))
+  }
+  x <- readLines(bayescomp_write_csv(o, tempfile()))
+  rows <- x[!startsWith(x, "#")][-1L]
+  expect_identical(length(rows), k)
+  expect_true(all(sub(",.*", "", sub("^[^,]*,", "", rows[-k])) == "0"))
+  expect_equal(bayescomp_laplace(m, mode = o, draws = 2, seed = 1)$draws[, 1L, "lp__"], c(0, 0))
+})
+
+test_that("the run configuration is saved as JSON", {
+  m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+  f <- bayescomp_sample(m, chains = 1, iter_warmup = 10, iter_sampling = 5, seed = 3, refresh = 0)
+  d <- tempfile()
+  bayescomp_write_csv(f, d, save_config = TRUE)
+  j <- jsonlite::read_json(file.path(d, "output_config.json"))
+  expect_identical(j$method$value, "sample")
+  expect_identical(j$method$sample$num_chains, 1L)
+  expect_identical(j$stan_minor_version, "40")
+  expect_identical(j$random$seed, 3L)
+})

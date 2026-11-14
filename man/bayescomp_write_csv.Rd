@@ -10,7 +10,8 @@ bayescomp_write_csv(
   dir = ".",
   basename = "output",
   sig_figs = 8L,
-  save_metric = FALSE
+  save_metric = FALSE,
+  save_config = FALSE
 )
 
 bayescomp_read_csv(files, model = NULL)
@@ -33,6 +34,9 @@ CmdStan's \code{save_metric}); such a file can be given to
 \code{diagnostic_file}). Programs with \code{profile} blocks also get
 \verb{<file>_profile.csv} (CmdStan's \code{profile_file}) from element \code{profile}
 of the fit.}
+
+\item{save_config}{Also write the run configuration as
+\verb{<basename>_config.json} (CmdStan's \code{save_cmdstan_config}).}
 
 \item{files}{Paths of CSV files, one per chain.}
 

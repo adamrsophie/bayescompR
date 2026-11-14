@@ -25,6 +25,8 @@
 #'   `diagnostic_file`). Programs with `profile` blocks also get
 #'   `<file>_profile.csv` (CmdStan's `profile_file`) from element `profile`
 #'   of the fit.
+#' @param save_config Also write the run configuration as
+#'   `<basename>_config.json` (CmdStan's `save_cmdstan_config`).
 #' @param sig_figs Significant digits of the values (CmdStan's default is
 #'   8; 17 or more round trips exactly).
 #' @param files Paths of CSV files, one per chain.
@@ -39,7 +41,8 @@
 #' fit2 <- bayescomp_read_csv(f, model = m)
 #' all.equal(bayescomp_draws(fit), bayescomp_draws(fit2), tolerance = 1e-7)
 #' @export
-bayescomp_write_csv <- function(fit, dir = ".", basename = "output", sig_figs = 8L, save_metric = FALSE) {
+bayescomp_write_csv <- function(fit, dir = ".", basename = "output", sig_figs = 8L, save_metric = FALSE,
+                                save_config = FALSE) {
   if (!inherits(fit, "bayescomp_fit")) stop("'fit' must be a bayescomp_fit", call. = FALSE)
   sig_figs <- as_count(sig_figs, "sig_figs", 1L)
   if (sig_figs > 18L) stop("'sig_figs' must be at most 18", call. = FALSE)
@@ -77,7 +80,25 @@ bayescomp_write_csv <- function(fit, dir = ".", basename = "output", sig_figs = 
                  paste0(stem[c], "_diagnostic.csv"))
     }
   }
+  if (isTRUE(save_config)) write_config_json(fit, file.path(dir, paste0(basename, "_config.json")), files, sig_figs)
   invisible(files)
+}
+
+# the run configuration in the layout of CmdStan's save_cmdstan_config
+write_config_json <- function(fit, path, files, sig_figs) {
+  v <- as.integer(strsplit(stan_signatures_version, ".", fixed = TRUE)[[1L]])
+  cfg <- Filter(function(x) is.atomic(x) && length(x) <= 1L && !is.null(x), fit$config %||% list())
+  method <- fit$method %||% "sample"
+  m <- list(value = method)
+  m[[method]] <- c(cfg, list(num_chains = dim(fit$draws)[2L]))
+  out <- list(stan_major_version = as.character(v[1L]), stan_minor_version = as.character(v[2L]),
+              stan_patch_version = as.character(v[3L]), model_name = fit$model$name %||% "bayescompR_model",
+              start_datetime = format(Sys.time(), "%Y-%m-%d %H:%M:%S UTC", tz = "UTC"),
+              method = m, id = 1L, random = list(seed = fit$seed %||% -1L),
+              output = list(file = files[1L], sig_figs = as.integer(sig_figs), save_cmdstan_config = TRUE),
+              num_threads = 1L, stanc_version = paste0("bayescompR ", utils::packageVersion("bayescompR")))
+  jsonlite::write_json(out, path, auto_unbox = TRUE, pretty = TRUE, digits = NA, null = "null")
+  invisible(path)
 }
 
 csv_num <- function(x, sig_figs) {
@@ -200,7 +221,7 @@ csv_lines <- function(fit, chain, sig_figs) {
       if (is.null(dim(sd))) sd <- matrix(sd, nrow = n, dimnames = list(NULL, dimnames(fit$sampler_diagnostics)[[3L]]))
       cbind(lp__ = d[, "lp__"], sd)
     },
-    optimize = cbind(lp__ = d[, "lp__"], converged__ = rep(optim_return_code(fit$message %||% ""), n)),
+    optimize = cbind(lp__ = d[, "lp__"], converged__ = c(rep(0L, n - 1L), optim_return_code(fit$message %||% ""))),
     variational = cbind(lp__ = 0, log_p__ = d[, "log_p__"], log_g__ = d[, "log_g__"]),
     pathfinder = cbind(lp_approx__ = d[, "log_q__"], lp__ = d[, "log_p__"], path__ = fit$path %||% rep(1, n)),
     laplace = cbind(log_p__ = d[, "log_p__"], log_q__ = d[, "log_g__"]),
@@ -298,8 +319,8 @@ bayescomp_read_csv <- function(files, model = NULL) {
     })
   }
   if (method == "optimize") {
-    fit$par <- draws[1L, 1L, -1L]
-    fit$value <- draws[1L, 1L, 1L]
+    fit$par <- draws[niter, 1L, -1L]
+    fit$value <- draws[niter, 1L, 1L]
   }
   fit
 }

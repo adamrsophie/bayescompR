@@ -4,7 +4,13 @@
 \alias{bayescomp_check}
 \title{Check a Stan program}
 \usage{
-bayescomp_check(code = NULL, file = NULL, include_paths = NULL)
+bayescomp_check(
+  code = NULL,
+  file = NULL,
+  include_paths = NULL,
+  pedantic = FALSE,
+  warn_uninitialized = FALSE
+)
 }
 \arguments{
 \item{code}{Stan program as a character string (or vector of lines).}
@@ -13,6 +19,12 @@ bayescomp_check(code = NULL, file = NULL, include_paths = NULL)
 
 \item{include_paths}{Directories searched, in order, for files named in
 \verb{#include} directives. The directory of \code{file} is searched last.}
+
+\item{pedantic}{Print the warnings of \code{\link[=bayescomp_pedantic]{bayescomp_pedantic()}} (stanc's
+\code{--warn-pedantic}).}
+
+\item{warn_uninitialized}{Print warnings about variables used before they
+are assigned (stanc's \code{--warn-uninitialized}).}
 }
 \value{
 The typed intermediate representation, invisibly. Errors carry the

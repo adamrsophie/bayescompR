@@ -276,7 +276,8 @@ format_scalar <- function(v) {
   if (is.nan(v)) return("nan")
   if (v == 0 && 1 / v < 0) return("-0")
   if (is.infinite(v)) return(if (v > 0) "inf" else "-inf")
-  format(v, digits = 6)
+  # C++ stream output: six significant digits (%g)
+  trimws(formatC(v, digits = 6L, format = "g"))
 }
 
 rt_print <- function(ctx, items) {

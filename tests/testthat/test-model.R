@@ -93,3 +93,64 @@ test_that("the IR serializes to JSON", {
   expect_match(j, "\"ir_version\":\"1.0.0\"")
   expect_match(j, "std_normal")
 })
+
+test_that("user functions are exposed to R", {
+  f <- bayescomp_expose_functions("functions {
+    real f(real x) { return 2 * x; }
+    real f(vector v) { return sum(v); }
+    int fib(int n) { if (n < 2) return n; return fib(n - 1) + fib(n - 2); }
+    matrix m2(matrix M) { return M * M; }
+    real d_rng(real mu) { return normal_rng(mu, 1); }
+    real my_lpdf(real y, real mu) { return normal_lpdf(y | mu, 1); }
+  }")
+  expect_identical(f$f(3), 6)
+  expect_identical(f$f(c(1, 2, 3)), 6)
+  expect_identical(f$fib(10L), 55L)
+  expect_equal(f$m2(diag(2) * 2), diag(2) * 4)
+  expect_equal(f$my_lpdf(0, 0), stats::dnorm(0, log = TRUE))
+  set.seed(1); a <- f$d_rng(0); set.seed(1); expect_identical(f$d_rng(0), a)
+  expect_error(f$f(diag(2)), "no signature of 'f'")
+})
+
+test_that("model information matches stanc --info", {
+  i <- bayescomp_info("functions { real my_lpdf(real y, real m) { return normal_lpdf(y | m, 1); } }
+    data { int N; vector[N] y; tuple(real, array[2] int) tp; complex_vector[2] cz; }
+    parameters { real mu; real<lower=0> s; simplex[3] th; cholesky_factor_corr[3] L; }
+    model { y ~ normal(mu, s); mu ~ my(0); target += exponential_lpdf(s | 1) + log_sum_exp(mu, 1); }
+    generated quantities { real p = normal_cdf(mu | 0, 1); array[N] int c; }")
+  expect_identical(i$inputs$y, list(type = "real", dimensions = 1L))
+  expect_identical(i$inputs$tp$type[[2L]], list(type = "int", dimensions = 1L))
+  expect_identical(i$inputs$cz$type, "complex")
+  expect_identical(i$parameters$L$dimensions, 2L)
+  expect_identical(i$`generated quantities`$c, list(type = "int", dimensions = 1L))
+  expect_identical(i$functions, "log_sum_exp")
+  expect_identical(i$distributions, c("exponential_lpdf", "normal_cdf", "normal_lpdf", "normal_lupdf"))
+  d <- tempfile(); dir.create(d)
+  writeLines("real twice(real x) { return 2 * x; }", file.path(d, "tw.stan"))
+  j <- bayescomp_info("functions {\n#include tw.stan\n}", include_paths = d)
+  expect_identical(basename(j$included_files), "tw.stan")
+})
+
+test_that("the Stan version is reported", {
+  expect_match(bayescomp_stan_version(), "^2\\.[0-9]+\\.[0-9]+$")
+})
+
+test_that("random data and inits follow the declarations", {
+  code <- "data { int<lower=1, upper=4> N; vector[N] y; array[N] int<lower=0, upper=1> k; simplex[3] th;
+                  cov_matrix[2] S; complex_vector[2] cz; array[2] vector<lower=0>[3] w; }
+           parameters { real mu; real<lower=0> sigma; simplex[3] p; } model { y ~ normal(mu, sigma); }"
+  d <- bayescomp_generate_data(code, seed = 1)
+  expect_true(d$N >= 1L && d$N <= 4L)
+  expect_length(d$y, d$N)
+  expect_true(all(d$k %in% 0:1))
+  expect_equal(sum(d$th), 1)
+  expect_true(all(eigen(d$S)$values > 0))
+  expect_true(is.complex(d$cz) && length(d$cz) == 2L)
+  expect_true(all(d$w > 0))
+  expect_identical(bayescomp_generate_data(code, seed = 1), d)
+  m <- bayescomp_model(code, data = d)
+  i <- bayescomp_generate_inits(m, seed = 3, file = f <- tempfile(fileext = ".json"))
+  expect_gt(i$sigma, 0)
+  expect_equal(unlist(bayescomp_read_data(f)$p), as.vector(i$p))
+  expect_true(is.finite(bayescomp_log_prob(m, i)))
+})

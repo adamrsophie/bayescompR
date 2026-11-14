@@ -89,6 +89,8 @@ Collate:
     'sample.R'
     'fit.R'
     'csv.R'
+    'pedantic.R'
+    'format.R'
     'interop.R'
     'optimize.R'
     'mcmc.R'

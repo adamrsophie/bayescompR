@@ -34,6 +34,7 @@ stan_lex <- function(src) {
   n <- length(chars)
   toks <- vector("list", 256L)
   nt <- 0L
+  comments <- list()
   i <- 1L
   line <- 1L
   col <- 1L
@@ -70,10 +71,13 @@ stan_lex <- function(src) {
     c0 <- col
     # comments
     if (ch == "/" && peek(1L) == "/") {
+      start <- i
       while (i <= n && chars[i] != "\n") advance()
+      comments[[length(comments) + 1L]] <- list(line = l0, col = c0, text = paste(chars[start:(i - 1L)], collapse = ""))
       next
     }
     if (ch == "/" && peek(1L) == "*") {
+      start <- i
       advance(2L)
       closed <- FALSE
       while (i <= n) {
@@ -85,6 +89,7 @@ stan_lex <- function(src) {
         advance()
       }
       if (!closed) stop_syntax("unterminated block comment", list(line = l0, col = c0))
+      comments[[length(comments) + 1L]] <- list(line = l0, col = c0, text = paste(chars[start:(i - 1L)], collapse = ""))
       next
     }
     if (ch == "#") {
@@ -184,5 +189,5 @@ stan_lex <- function(src) {
     stop_syntax(sprintf("unexpected character '%s'", ch), list(line = l0, col = c0))
   }
   add("eof", "", line, col)
-  toks[seq_len(nt)]
+  structure(toks[seq_len(nt)], comments = comments)
 }

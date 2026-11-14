@@ -422,3 +422,57 @@ make_function <- function(formals, body, env) {
   f <- as.function(c(formals, list(body)), envir = env)
   f
 }
+
+# ---- hoisting of data only subexpressions ----------------------------------------
+# Expressions in the transformed parameters, model and generated quantities
+# blocks that depend only on data are computed once when the data are bound
+# (as stanc's optimizer moves them to transformed data) and read from a
+# symbol `.H<k>` in each evaluation.
+
+hoist_kinds <- c("call", "binop", "unop", "cond", "transpose", "index")
+
+hoistable <- function(e) {
+  if (!isTRUE(e$data_only) || !(e$kind %in% hoist_kinds)) return(FALSE)
+  ok <- TRUE
+  walk <- function(n) {
+    if (!ok || !is.list(n)) return()
+    k <- n$kind %||% ""
+    if (k == "var" && !((n$origin %||% "") %in% c("data", "transformed data"))) { ok <<- FALSE; return() }
+    if (k == "call") {
+      s <- n$sig
+      if (isTRUE(s$user) || isTRUE(s$rng) || grepl("_rng$|_lp$", n$name) || n$name %in% names(hof_specs) ||
+          n$name %in% c("target", "get_lp")) { ok <<- FALSE; return() }
+    }
+    keys <- if (is.null(names(n))) seq_along(n) else setdiff(names(n), c("sig", "type", "loc"))
+    for (nm in keys) if (is.list(n[[nm]])) walk(n[[nm]])
+  }
+  walk(e)
+  ok
+}
+
+hoist_ir <- function(ir) {
+  hoisted <- list()
+  expr <- function(e) {
+    if (hoistable(e)) {
+      nm <- sprintf(".H%d", length(hoisted) + 1L)
+      hoisted[[length(hoisted) + 1L]] <<- list(name = nm, expr = e)
+      return(list(kind = "code", code = as.name(nm), type = e$type, data_only = TRUE, loc = e$loc))
+    }
+    node(e)
+  }
+  node <- function(n) {
+    if (!is.list(n)) return(n)
+    k <- n$kind %||% ""
+    skip <- c("sig", "type", "vtype", "loc", "cons", if (k %in% c("assign", "unpack")) "lhs")
+    keys <- if (is.null(names(n))) seq_along(n) else setdiff(names(n), skip)
+    for (nm in keys) {
+      v <- n[[nm]]
+      if (!is.list(v) || is.function(v)) next
+      n[[nm]] <- if (!is.null(v$kind) && !is.null(v$data_only)) expr(v) else node(v)
+    }
+    n
+  }
+  for (b in c("transformed parameters", "model", "generated quantities"))
+    if (!is.null(ir$blocks[[b]])) ir$blocks[[b]]$body <- node(ir$blocks[[b]]$body)
+  list(ir = ir, hoisted = hoisted)
+}

@@ -9,7 +9,12 @@ bayescomp_generate_quantities(model, fit, seed = NULL)
 \arguments{
 \item{model}{A \code{bayescomp_model} with the same parameters as the fit.}
 
-\item{fit}{A \code{bayescomp_fit}.}
+\item{fit}{A \code{bayescomp_fit}, the names of Stan CSV files (as CmdStan's
+\code{fitted_params}), or draws of the constrained parameters: a posterior
+draws object, a 3-D array (iterations, chains, variables) or a matrix or
+data frame with one row per draw. Columns are named as in
+\code{\link[=bayescomp_param_names]{bayescomp_param_names()}} or in CmdStan's style (\code{theta.1}); other
+columns are ignored.}
 
 \item{seed}{Random seed.}
 }

@@ -236,7 +236,12 @@ bind_chain_id <- function(model, id) {
   d <- model$data
   d$CHAIN_ID <- as.integer(id)
   inst <- with_seed(model$compiled$seed, instantiate(model$compiled, d))
-  for (nm in ls(inst$env, all.names = TRUE)) assign(nm, get(nm, envir = inst$env), envir = model$env)
+  for (nm in ls(inst$env, all.names = TRUE)) {
+    v <- tryCatch(get(nm, envir = inst$env), error = function(e) e)
+    # a hoisted expression that fails stays a promise that fails where used
+    if (inherits(v, "error")) eval(call("delayedAssign", nm, call("get", nm, envir = inst$env), model$env, model$env))
+    else assign(nm, v, envir = model$env)
+  }
   invisible()
 }
 

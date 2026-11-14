@@ -50,6 +50,8 @@ num_hessian <- function(lpg, u, h = 1e-5) {
 #'   rule met stops the iterations.
 #' @param history_size Number of updates L-BFGS keeps.
 #' @param init_alpha Initial step size of the first line search.
+#' @param save_iterations Return every iterate as a draw (the initial point
+#'   first, the optimum last), as CmdStan's `save_iterations`.
 #' @return A `bayescomp_fit` with one draw holding the optimum, and elements
 #'   `par` (named constrained values), `value` (the objective), `code` (0
 #'   converged, 1 iteration limit, 2 line search failure), `message` and
@@ -62,7 +64,7 @@ num_hessian <- function(lpg, u, h = 1e-5) {
 bayescomp_optimize <- function(model, algorithm = c("lbfgs", "bfgs", "newton"), jacobian = FALSE,
                                init = 2, seed = NULL, iter = 2000L, tol_obj = 1e-12, tol_rel_obj = 1e4,
                                tol_grad = 1e-8, tol_rel_grad = 1e7, tol_param = 1e-8, history_size = 5L,
-                               init_alpha = 1e-3) {
+                               init_alpha = 1e-3, save_iterations = FALSE) {
   check_model(model)
   algorithm <- match.arg(algorithm)
   t0 <- proc.time()[["elapsed"]]
@@ -71,15 +73,20 @@ bayescomp_optimize <- function(model, algorithm = c("lbfgs", "bfgs", "newton"), 
     lpg <- safe_lp(model, jacobian)
     r <- optimize_u(lpg, u0, algorithm, list(iter = as_count(iter, "iter", 1L), tol_obj = tol_obj, tol_rel_obj = tol_rel_obj,
                                              tol_grad = tol_grad, tol_rel_grad = tol_rel_grad, tol_param = tol_param,
-                                             history_size = as_count(history_size, "history_size", 1L), init_alpha = init_alpha))
-    r$gq <- chain_write_draws(model, matrix(r$u, 1L), TRUE)
+                                             history_size = as_count(history_size, "history_size", 1L), init_alpha = init_alpha,
+                                             save_iterations = isTRUE(save_iterations)))
+    # with save_iterations every iterate is a draw, the optimum last
+    r$qs <- if (!is.null(r$path)) r$path[, -1L, drop = FALSE] else matrix(r$u, 1L)
+    r$lps <- if (!is.null(r$path)) r$path[, 1L] else r$value
+    r$gq <- chain_write_draws(model, r$qs, TRUE)
     r
   })[[1L]]
-  out <- list(list(q = matrix(res$u, 1L), gq = res$gq,
-                   diag = matrix(c(res$value, rep(0, 6L)), 1L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__"))),
+  k <- nrow(res$qs)
+  out <- list(list(q = res$qs, gq = res$gq,
+                   diag = cbind(lp__ = res$lps, matrix(0, k, 6L, dimnames = list(NULL, c("accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))),
                    step_size = NA_real_, inv_metric = NULL, n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0)))
   fit <- make_fit(model, out, list(algorithm = algorithm, jacobian = jacobian), "optimize", seed, proc.time()[["elapsed"]] - t0)
-  fit$par <- fit$draws[1L, 1L, -1L]
+  fit$par <- fit$draws[k, 1L, -1L]
   fit$value <- res$value
   fit$code <- res$code
   fit$message <- res$message %||% ""
@@ -96,7 +103,7 @@ optimize_u <- function(lpg, u0, algorithm, ctl = optim_defaults) {
   ctl <- utils::modifyList(optim_defaults, ctl)
   n <- length(u0)
   if (n == 0L) return(list(u = u0, value = lpg(u0)$value, code = 0L, iterations = 0L, message = "no parameters"))
-  if (algorithm == "newton") return(newton_opt(lpg, u0, ctl$iter))
+  if (algorithm == "newton") return(newton_opt(lpg, u0, ctl$iter, isTRUE(ctl$save_iterations)))
   qn_opt(lpg, u0, dense = algorithm == "bfgs", ctl)
 }
 
@@ -126,6 +133,7 @@ qn_opt <- function(lpg, x, dense, ctl) {
   }
   p <- dir(cur$g)
   msg <- "maximum number of iterations reached"; code <- 1L
+  path <- if (isTRUE(ctl$save_iterations)) list(c(-cur$f, x))
   for (k in seq_len(ctl$iter)) {
     if (sum(p * cur$g) >= 0) { S <- list(); Y <- list(); if (dense) H <- diag(n); p <- -cur$g }
     a0 <- if (k == 1L) ctl$init_alpha else 1
@@ -148,6 +156,7 @@ qn_opt <- function(lpg, x, dense, ctl) {
     }
     df <- abs(nxt$f - cur$f)
     x <- xn; prev <- cur; cur <- nxt
+    if (!is.null(path)) path[[length(path) + 1L]] <- c(-cur$f, x)
     p <- dir(cur$g)
     if (df < ctl$tol_obj) { msg <- "absolute change in objective below tol_obj"; code <- 0L; break }
     if (df / max(abs(cur$f), abs(prev$f), 1) < ctl$tol_rel_obj * eps) { msg <- "relative change in objective below tol_rel_obj"; code <- 0L; break }
@@ -155,7 +164,7 @@ qn_opt <- function(lpg, x, dense, ctl) {
     if (-sum(cur$g * p) / max(abs(cur$f), 1) < ctl$tol_rel_grad * eps) { msg <- "relative gradient magnitude below tol_rel_grad"; code <- 0L; break }
     if (sqrt(sum(s^2)) < ctl$tol_param) { msg <- "change in parameters below tol_param"; code <- 0L; break }
   }
-  list(u = x, value = -cur$f, code = code, iterations = k, message = msg)
+  list(u = x, value = -cur$f, code = code, iterations = k, message = msg, path = if (!is.null(path)) do.call(rbind, path))
 }
 
 # strong Wolfe line search (Nocedal and Wright, algorithms 3.5 and 3.6) for
@@ -196,8 +205,10 @@ wolfe_search <- function(fg, x, cur, p, a1, c1 = 1e-4, c2 = 0.9) {
   NULL
 }
 
-newton_opt <- function(lpg, u, iter) {
+newton_opt <- function(lpg, u, iter, save_iterations = FALSE) {
   r <- lpg(u)
+  path <- if (save_iterations) list(c(r$value, u))
+  done_path <- function(res) { if (!is.null(path)) res$path <- do.call(rbind, path); res }
   for (k in seq_len(iter)) {
     H <- num_hessian(lpg, u)
     e <- eigen(H, symmetric = TRUE)
@@ -211,13 +222,15 @@ newton_opt <- function(lpg, u, iter) {
       if (is.finite(rn$value) && rn$value >= r$value) break
       a <- a / 2
       # no ascent possible: converged only if the gradient vanishes
-      if (a < 1e-10) return(list(u = u, value = r$value, code = if (max(abs(r$grad)) < 1e-6) 0L else 2L, iterations = k))
+      if (a < 1e-10) return(done_path(list(u = u, value = r$value, code = if (max(abs(r$grad)) < 1e-6) 0L else 2L, iterations = k,
+                                           message = if (max(abs(r$grad)) < 1e-6) "gradient norm below tol_grad" else "line search failed to make progress")))
     }
     done <- abs(rn$value - r$value) < 1e-10 * (1 + abs(r$value))
     u <- un; r <- rn
-    if (done) return(list(u = u, value = r$value, code = 0L, iterations = k))
+    if (!is.null(path)) path[[length(path) + 1L]] <- c(r$value, u)
+    if (done) return(done_path(list(u = u, value = r$value, code = 0L, iterations = k, message = "relative change in objective below tol_rel_obj")))
   }
-  list(u = u, value = r$value, code = 1L, iterations = iter)
+  done_path(list(u = u, value = r$value, code = 1L, iterations = iter, message = "maximum number of iterations reached"))
 }
 
 #' Laplace approximation
@@ -251,7 +264,8 @@ bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L
       if (op$code != 0L) warning(sprintf("the optimizer did not converge (code %d); the Laplace approximation may be centered away from the mode", op$code), call. = FALSE)
       op$u
     } else if (inherits(mode, "bayescomp_fit")) {
-      as.vector(mode$unconstrained[[1L]][1L, ])
+      u1 <- mode$unconstrained[[1L]]
+      as.vector(u1[nrow(u1), ])
     } else {
       bayescomp_unconstrain(model, mode)
     }

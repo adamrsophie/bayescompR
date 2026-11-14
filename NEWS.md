@@ -31,6 +31,24 @@ First release.
   `calculate_lp`, `save_single_paths`, `init_alpha` and the L-BFGS
   tolerances) and records the path of each draw; Laplace takes its mode from
   a file and has `calculate_lp`.
+* stanc's compiler options have R equivalents: `bayescomp_format()`
+  (`--auto-format`, `--print-canonical`, `--canonicalize`,
+  `--max-line-length`; comments and `#include` lines are kept),
+  `bayescomp_info()` (`--info`), `bayescomp_pedantic()` and
+  `bayescomp_check(pedantic = TRUE)` (`--warn-pedantic`, with stanc's
+  messages), `bayescomp_uninitialized()` (`--warn-uninitialized`),
+  `bayescomp_expose_functions()` (`--standalone-functions`),
+  `bayescomp_generate_data()` and `bayescomp_generate_inits()`
+  (`--debug-generate-data`, `--debug-generate-inits`) and
+  `bayescomp_stan_version()`.
+* Subexpressions that depend only on data are computed once when the data
+  are bound instead of in every evaluation of the log density.
+* `print()` writes numbers as CmdStan does (six significant digits), and
+  `bayescomp_write_csv(save_config = TRUE)` writes CmdStan's configuration
+  JSON.
+* `bayescomp_optimize(save_iterations = TRUE)` keeps every iterate.
+  `bayescomp_generate_quantities()` also takes CSV files, posterior draws
+  objects, arrays and matrices of constrained draws.
 * `profile()` blocks are timed (element `profile` of a fit, written as
   CmdStan's profile file). `bayescomp_stansummary()` reproduces CmdStan's
   `stansummary` (percentiles, significant figures, autocorrelations, CSV
