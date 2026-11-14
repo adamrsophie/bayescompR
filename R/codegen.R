@@ -76,7 +76,7 @@ cg_expr <- function(e) {
       items <- lapply(e$items, cg_expr)
       cl(rt_rowvec, cl_list(as.name("list"), items), e$type$base == "matrix")
     },
-    call = cg_call(e),
+    call = if (!is.null(e$hof)) cg_hof(e) else cg_call(e),
     stop("internal error: cannot generate code for expression ", e$kind))
 }
 

@@ -206,9 +206,10 @@ test_that("elementwise ^, unary minus on arrays and unsupported higher order cal
   r <- bayescomp_constrain(m, 1:5)
   expect_equal(r$k, c(-1L, -2L))
   expect_equal(as.vector(t(r$q)), -(1:4))
-  expect_error(bayescomp_model("functions { real ps(array[] real s, int a, int b) { return sum(s); } }
-                                data { array[2] real y; } parameters { real x; } model { target += reduce_sum(ps, y, 1); }"),
-               class = "bayescomp_unsupported_error")
+  m2 <- bayescomp_model("functions { real ps(array[] real s, int a, int b, real x) { return x * sum(s); } }
+                         data { array[2] real y; } parameters { real x; } model { target += reduce_sum(ps, y, 1, x); }",
+                         data = list(y = c(1, 2)))
+  expect_equal(as.numeric(bayescomp_grad_log_prob(m2, 0.5)), 3)
 })
 
 test_that("parallel chains print progress and match sequential draws", {

@@ -211,13 +211,32 @@ Stan.
 
 The following Stan features raise `bayescomp_unsupported_error`:
 
-* ODE, DAE and algebraic solvers, 1D integrators;
-* `map_rect`, `reduce_sum` and `reduce_sum_static`;
 * the embedded Laplace approximation functions;
 * the `wiener` distribution.
 
 ```{r, error = TRUE}
-bayescomp_check("parameters { real y; } model { target += integrate_1d(f, 0, 1, {1.0}, {1.0}, {0}); }")
+bayescomp_check("parameters { real<lower=0> y; } model { 0.5 ~ wiener(1, y, 0.5, 0.2); }")
+```
+
+## Solvers and integrators
+
+The ODE solvers (`ode_rk45`, `ode_ckrk`, `ode_adams`, `ode_bdf`, their
+`_tol` forms and `ode_adjoint_tol_ctl`), the DAE solvers (`dae`,
+`dae_tol`), the algebraic solvers (`solve_newton`, `solve_powell`, their
+`_tol` forms and the older `algebra_solver` and `algebra_solver_newton`),
+`integrate_1d`, `map_rect`, `reduce_sum` and `reduce_sum_static` are
+available. Their results are differentiated with respect to every
+parameter they depend on: by forward sensitivities for ODEs and DAEs and
+by the implicit function theorem for algebraic equations. The non stiff
+ODE solvers use the Dormand and Prince method, `ode_bdf` a Rosenbrock
+method (RODAS3) and the DAE solvers a three stage Radau IIA method, so
+results agree with CmdStan to within the requested tolerances, not to the
+last digit. `map_rect` and `reduce_sum` evaluate in a single process.
+
+```{r}
+m <- bayescomp_model("
+functions { vector decay(real t, vector y, real k) { return -k * y; } }
+transformed data { print(ode_rk45(decay, [1]', 0, {1, 2}, 0.5)); }")
 ```
 
 ## Tuples

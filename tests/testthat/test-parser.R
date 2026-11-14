@@ -41,7 +41,7 @@ test_that("syntax errors carry the right class and location", {
 })
 
 test_that("unsupported features raise bayescomp_unsupported_error", {
-  expect_error(bayescomp_check("parameters { real y; } model { target += integrate_1d(f, 0, 1, {1.0}, {1.0}, {0}); }"),
+  expect_error(bayescomp_check("parameters { real<lower=0> y; } model { 0.5 ~ wiener(1, y, 0.5, 0.2); }"),
                class = "bayescomp_unsupported_error")
   # stanc rejects complex parameters
   expect_error(bayescomp_check("parameters { complex z; }"), class = "bayescomp_semantic_error")

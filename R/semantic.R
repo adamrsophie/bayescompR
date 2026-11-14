@@ -786,6 +786,7 @@ sem_call <- function(s, e) {
   # as an argument; report them before that argument fails to resolve
   if (nm %in% unsupported_functions && is.null(s$ufuns[[nm]]) && is.null(.lib[[nm]]))
     stop_unsupported(sprintf("function '%s' is not implemented in this version of bayescompR", nm), e$loc)
+  if (nm %in% names(hof_specs) && is.null(s$ufuns[[nm]])) return(sem_hof(s, e))
   args <- lapply(e$args, function(a) sem_expr(s, a))
   types <- lapply(args, `[[`, "type")
   if (nm == "target") {
@@ -893,12 +894,9 @@ data_only_functions <- c("linspaced_array", "linspaced_int_array", "linspaced_ve
                          "uniform_simplex", "quantile", "to_int")
 
 unsupported_functions <- c(
-  "ode_rk45", "ode_rk45_tol", "ode_bdf", "ode_bdf_tol", "ode_adams", "ode_adams_tol",
-  "ode_ckrk", "ode_ckrk_tol", "ode_adjoint_tol_ctl", "dae", "dae_tol", "algebra_solver",
-  "algebra_solver_newton", "solve_newton", "solve_newton_tol", "solve_powell", "solve_powell_tol",
-  "integrate_1d", "integrate_1d_gauss_kronrod", "integrate_1d_gauss_kronrod_tol",
+  "integrate_1d_gauss_kronrod", "integrate_1d_gauss_kronrod_tol",
   "integrate_1d_double_exponential", "integrate_1d_double_exponential_tol",
-  "map_rect", "reduce_sum", "reduce_sum_static", "laplace_marginal", "laplace_marginal_tol", "laplace_latent_rng",
+  "laplace_marginal", "laplace_marginal_tol", "laplace_latent_rng",
   "laplace_latent_tol_rng", "laplace_latent_solve", "laplace_latent_solve_tol",
   "wiener_lpdf", "wiener_lcdf_defective", "wiener_lccdf_defective",
   NULL)

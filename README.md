@@ -72,9 +72,8 @@ bayescomp_diagnose(fit)
 | Diagnostics | rank normalized split R-hat, bulk, tail and quantile ESS, MCSE, divergences, tree depth, E-BFMI; trace, density, rank and ESS plots |
 | Backends | typed versioned IR (`bayescomp_ir()`), backend registry with explicit fallback and `bayescomp_validate_backend()`; native backends bayescompRCranelift and bayescompRLLVM in [bayescomp-native-rs](https://github.com/adamrsophie/bayescomp-native-rs) |
 
-Features of Stan that are not implemented yet (ODE and DAE solvers,
-algebraic solvers, 1D integrators, `map_rect` and `reduce_sum` parallelism,
-the embedded Laplace functions and the `wiener` distribution) give a clear
+Features of Stan that are not implemented yet (the embedded Laplace
+functions and the `wiener` distribution) give a clear
 `bayescomp_unsupported_error` when the program is checked. See `vignette("stan-language")` for the full list.
 
 ## Speed

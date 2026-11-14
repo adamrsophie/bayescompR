@@ -8,6 +8,8 @@ First release.
   differentiation tape with fused density kernels.
 * All constrained types of Stan 2.40 with Stan's transforms and Jacobians.
 * Math, container, linear algebra and distribution library.
+* ODE, DAE and algebraic solvers, `integrate_1d`, `map_rect` and
+  `reduce_sum`, differentiated with respect to all their parameters.
 * Tuples in every block, including constrained tuple parameters, with
   projection, unpacking and the library functions that return tuples.
 * Complex numbers: complex scalars, vectors, row vectors and matrices with

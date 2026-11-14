@@ -72,6 +72,8 @@ Collate:
     'library_transforms.R'
     'library_complex.R'
     'tuples.R'
+    'hof.R'
+    'hof_runtime.R'
     'semantic.R'
     'runtime.R'
     'codegen.R'
