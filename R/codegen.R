@@ -15,6 +15,7 @@ CTX <- quote(.ctx)
 
 promote_to <- function(code, from, to) {
   if (!is.null(to) && !is.null(from) && to$base == "real" && from$base == "int") return(cl(as_dbl, code))
+  if (!is.null(to) && !is.null(from) && (is_tuple_ty(to) || is_tuple_ty(from))) return(if (ty_eq(from, to)) code else cl(rt_promote, code, from, to))
   if (!is.null(to) && !is.null(from) && is_cx_ty(to) && !is_cx_ty(from)) return(cl(cx_promote, code, is_scalar_ty(from)))
   code
 }
@@ -33,6 +34,9 @@ cg_expr <- function(e) {
     int = e$value,
     real = e$value,
     imag = c(0, e$value),
+    code = e$code,
+    tuple_expr = cl(rt_tuple, cl_list(as.name("list"), lapply(e$items, cg_expr))),
+    proj = cl(rt_proj, cg_expr(e$x), e$k),
     var = vsym(e$name),
     paren = cg_expr(e$a),
     unop = {
@@ -60,6 +64,7 @@ cg_expr <- function(e) {
     index = cg_index(e),
     array_expr = {
       items <- lapply(e$items, function(it) promote_to(cg_expr(it), it$type, e$elem_type))
+      if (is_tuple_ty(e$elem_type)) return(cl(rt_tuple_array, cl_list(as.name("list"), items)))
       cl(rt_array, cl_list(as.name("list"), items), e$elem_type$base == "int",
          e$elem_type$base %in% c("int", "real") && (e$elem_type$nd %||% 0L) == 0L)
     },
@@ -219,12 +224,43 @@ cg_decl_shape <- function(t) {
 }
 
 cg_cons_args <- function(t) {
+  if (identical(t$base, "tuple")) return(cl_list(as.name("list"), lapply(t$elems, cg_cons_args)))
   cl_list(as.name("list"), lapply(t$cons, cg_expr))
+}
+
+# counter for the temporaries of unpacking assignments
+.unpack_n <- new.env(parent = emptyenv())
+.unpack_n$n <- 0L
+
+# assignment to a variable, possibly indexed or projected (a[i].2[j] = v):
+# read the inner containers, assign into them, write the variable back
+cg_lvalue_set <- function(lhs, rcode) {
+  base <- lhs
+  while (base$kind %in% c("index", "proj")) base <- base$x
+  name <- base$name
+  if (lhs$kind == "var") return(list(cl(as.name("<-"), vsym(name), cl(rt_assign, vsym(name), rcode, name))))
+  chain <- list()
+  cur <- lhs
+  while (cur$kind %in% c("index", "proj")) {
+    chain <- c(list(cur), chain)
+    cur <- cur$x
+  }
+  tmp <- rcode
+  for (lvl in rev(seq_along(chain))) {
+    node <- chain[[lvl]]
+    container <- if (lvl == 1L) vsym(name) else cg_expr(chain[[lvl - 1L]])
+    tmp <- if (node$kind == "proj") cl(rt_set_proj, container, node$k, tmp, name) else {
+      p <- cg_index_parts(node)
+      cl(rt_assign_index, container, p$kinds, p$vals, tmp, name)
+    }
+  }
+  list(cl(as.name("<-"), vsym(name), tmp))
 }
 
 cg_print_items <- function(items) {
   cl_list(as.name("list"), lapply(items, function(it)
     if (it$kind == "string") it$value
+    else if (is_tuple_ty(it$type)) cl(fmt_typed, cg_expr(it), it$type)
     else if (is_cx_ty(it$type)) cl(cx_fmt, cg_expr(it), it$type$nd)
     else if (!is_scalar_ty(it$type)) cl(fmt_container, cg_expr(it))
     else cg_expr(it)))
@@ -233,7 +269,16 @@ cg_print_items <- function(items) {
 cg_stmt <- function(st, ctx) {
   switch(st$kind,
     empty = list(),
-    decl = {
+    decl = if (identical(st$type$base, "tuple")) {
+      desc <- if (st$top && ctx$block %in% c("transformed parameters", "generated quantities"))
+        cl(as.name("[["), quote(.decls), st$name) else cg_decl_shape_tuple(st$type)
+      out <- list(cl(as.name("<-"), vsym(st$name), cl(rt_decl_desc, desc)))
+      if (!is.null(st$init)) {
+        rhs <- promote_to(cg_expr(st$init), st$init$type, st$vtype)
+        out <- c(out, list(cl(as.name("<-"), vsym(st$name), cl(rt_assign, vsym(st$name), rhs, st$name))))
+      }
+      out
+    } else {
       t <- st$type
       sh <- cg_decl_shape(t)
       base <- decl_base_type(t$base)
@@ -266,32 +311,21 @@ cg_stmt <- function(st, ctx) {
         rtype <- rhs$type
       }
       rcode <- promote_to(rcode, rtype, lhs$type)
-      base <- lhs
-      while (base$kind == "index") base <- base$x
-      name <- base$name
-      if (lhs$kind == "var") {
-        return(list(cl(as.name("<-"), vsym(name), cl(rt_assign, vsym(name), rcode, name))))
+      cg_lvalue_set(lhs, rcode)
+    },
+    unpack = {
+      .unpack_n$n <- .unpack_n$n + 1L
+      tmp <- as.name(paste0(".unpack", .unpack_n$n))
+      out <- list(cl(as.name("<-"), tmp, cg_expr(st$rhs)))
+      set_items <- function(lhs, src, rtype) {
+        unlist(lapply(seq_along(lhs$items), function(k) {
+          it <- lhs$items[[k]]
+          code <- cl(rt_proj, src, k)
+          if (it$kind == "tuple_expr") return(set_items(it, code, rtype$elems[[k]]))
+          cg_lvalue_set(it, promote_to(code, rtype$elems[[k]], it$type))
+        }), recursive = FALSE)
       }
-      # nested indexing a[i][j] = v is rewritten as a[i, j] when possible
-      chain <- list()
-      cur <- lhs
-      while (cur$kind == "index") {
-        chain <- c(list(cur), chain)
-        cur <- cur$x
-      }
-      if (length(chain) == 1L) {
-        p <- cg_index_parts(lhs)
-        return(list(cl(as.name("<-"), vsym(name), cl(rt_assign_index, vsym(name), p$kinds, p$vals, rcode, name))))
-      }
-      # general nested case: read the inner container, assign into it, write it back
-      tmp <- rcode
-      for (lvl in rev(seq_along(chain))) {
-        node <- chain[[lvl]]
-        container <- if (lvl == 1L) vsym(name) else cg_expr(chain[[lvl - 1L]])
-        p <- cg_index_parts(node)
-        tmp <- cl(rt_assign_index, container, p$kinds, p$vals, tmp, name)
-      }
-      list(cl(as.name("<-"), vsym(name), tmp))
+      c(out, set_items(st$lhs, tmp, st$rhs$type))
     },
     tilde = {
       lhs <- cg_expr(st$lhs)

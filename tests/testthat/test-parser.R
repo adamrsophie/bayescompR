@@ -41,8 +41,11 @@ test_that("syntax errors carry the right class and location", {
 })
 
 test_that("unsupported features raise bayescomp_unsupported_error", {
-  expect_error(bayescomp_check("parameters { complex z; }"), class = "bayescomp_unsupported_error")
-  expect_error(bayescomp_check("data { tuple(real, int) x; }"), class = "bayescomp_unsupported_error")
+  expect_error(bayescomp_check("parameters { real y; } model { target += integrate_1d(f, 0, 1, {1.0}, {1.0}, {0}); }"),
+               class = "bayescomp_unsupported_error")
+  # stanc rejects complex parameters
+  expect_error(bayescomp_check("parameters { complex z; }"), class = "bayescomp_semantic_error")
+  expect_silent(bayescomp_check("data { tuple(real, int) x; }"))
 })
 
 test_that("comments, scientific literals and truncation parse", {

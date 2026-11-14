@@ -93,6 +93,20 @@ stan_lex <- function(src) {
         stop_unsupported("#include directives are not supported; paste the included file into the program", list(line = l0, col = c0))
       stop_syntax("'#' comments were removed in Stan 2.33; use '//' instead", list(line = l0, col = c0))
     }
+    # tuple projection: x.1, f(x).2, t.2.1
+    if (ch == "." && is_digit(peek(1L)) && nt > 0L) {
+      pt <- toks[[nt]]
+      proj_ok <- pt$type == "ident" || (pt$type == "op" && pt$value %in% c(")", "]")) ||
+        (pt$type == "int" && nt > 1L && identical(toks[[nt - 1L]]$value, ".") && toks[[nt - 1L]]$type == "op")
+      if (proj_ok) {
+        advance()
+        add("op", ".", l0, c0)
+        start <- i
+        while (i <= n && is_digit(chars[i])) advance()
+        add("int", paste(chars[start:(i - 1L)], collapse = ""), l0, c0 + 1L)
+        next
+      }
+    }
     # numbers
     if (is_digit(ch) || (ch == "." && is_digit(peek(1L)))) {
       start <- i

@@ -72,7 +72,7 @@ stan_check <- function(prog, external = character()) {
 
 # ---- functions ---------------------------------------------------------------------
 
-utype <- function(ut) ty(ut$base, ut$nd)
+utype <- function(ut) if (identical(ut$base, "tuple")) ty_tuple(lapply(ut$elems, utype), ut$nd) else ty(ut$base, ut$nd)
 
 sem_register_fun <- function(s, fd) {
   argt <- lapply(fd$args, function(a) utype(a$type))
@@ -165,22 +165,30 @@ sem_decl <- function(s, d, top) {
   if (bn %in% c("transformed parameters") && top && t$base == "int") stop_semantic("transformed parameters cannot be integers", d$loc)
   if (t$base == "int" && (!is.null(t$cons$offset) || !is.null(t$cons$multiplier)))
     stop_semantic("integer variables cannot have offset or multiplier", d$loc)
-  # sizes must be integer expressions; at top level they must be data only
-  t$adims <- lapply(t$adims, function(e) sem_size_expr(s, e, top && !is_local))
-  t$sizes <- lapply(t$sizes, function(e) sem_size_expr(s, e, top && !is_local))
-  for (cn in names(t$cons)) {
-    ce <- sem_expr(s, t$cons[[cn]])
-    db <- decl_base_type(t$base)
-    shape_ok <- is_scalar_ty(ce$type) || (ce$type$base == db && ce$type$nd %in% c(0L, length(t$adims)))
-    if (!shape_ok) stop_semantic(sprintf("bound '%s' has type %s, which does not match the declared type", cn, ty_str(ce$type)), ce$loc)
-    if (t$base == "int" && ce$type$base != "int") stop_semantic(sprintf("bound '%s' of an integer variable must be an integer", cn), ce$loc)
-    if (bn == "parameters" || bn == "transformed parameters" || bn == "generated quantities" || bn == "data" || bn == "transformed data") {
-      # bounds of data may only depend on data
-      if (bn %in% origin_data && !ce$data_only) stop_semantic(sprintf("bound '%s' must only depend on data", cn), ce$loc)
+  if (identical(t$base, "tuple")) {
+    if (is_local && tuple_constrained(t))
+      stop_semantic(sprintf("local variable '%s' cannot have a constrained type", d$name), d$loc)
+    r <- sem_decl_type(s, t, top && !is_local, bn, d$loc)
+    vt <- r$vt
+    d$type <- r$t
+    init <- NULL
+    if (!is.null(d$init)) {
+      init <- sem_expr(s, d$init)
+      if (!ty_assignable(vt, init$type))
+        stop_semantic(sprintf("cannot assign a value of type %s to variable '%s' of type %s", ty_str(init$type), d$name, ty_str(vt)), init$loc)
     }
-    t$cons[[cn]] <- ce
+    origin <- if (is_local) "local" else bn
+    sem_declare(s, d$name, list(type = vt, origin = origin, readonly = bn %in% c("data", "parameters"),
+                                data_only = bn %in% origin_data || (is_local && bn %in% origin_data),
+                                block = bn, decl_block = bn), d$loc)
+    d$vtype <- vt
+    d$init <- init
+    d$top <- top && !is_local
+    return(d)
   }
-  vt <- ty(decl_base_type(t$base), length(t$adims))
+  r <- sem_decl_type(s, t, top && !is_local, bn, d$loc)
+  t <- r$t
+  vt <- r$vt
   init <- NULL
   if (!is.null(d$init)) {
     init <- sem_expr(s, d$init)
@@ -196,6 +204,42 @@ sem_decl <- function(s, d, top) {
   d$init <- init
   d$top <- top && !is_local
   d
+}
+
+tuple_constrained <- function(t) {
+  if (!identical(t$base, "tuple")) return(length(t$cons) > 0L || t$base %in% constrained_bases)
+  any(vapply(t$elems, tuple_constrained, TRUE))
+}
+
+# sizes and bounds of a sized type; returns the checked type and its value type
+sem_decl_type <- function(s, t, need_data, bn, loc) {
+  if (bn == "parameters" && t$base == "int") stop_semantic("parameters cannot be integers", loc)
+  if (bn == "parameters" && is_cx_base(t$base)) stop_semantic("parameters cannot be complex; declare the real and imaginary parts", loc)
+  if (identical(t$base, "tuple")) {
+    t$adims <- lapply(t$adims, function(e) sem_size_expr(s, e, need_data))
+    rs <- lapply(t$elems, function(et) sem_decl_type(s, et, need_data, bn, loc))
+    t$elems <- lapply(rs, `[[`, "t")
+    return(list(t = t, vt = ty_tuple(lapply(rs, `[[`, "vt"), length(t$adims))))
+  }
+  if (t$base == "int" && (!is.null(t$cons$offset) || !is.null(t$cons$multiplier)))
+    stop_semantic("integer variables cannot have offset or multiplier", loc)
+  if (bn == "transformed parameters" && need_data && t$base == "int") stop_semantic("transformed parameters cannot be integers", loc)
+  # sizes must be integer expressions; at top level they must be data only
+  t$adims <- lapply(t$adims, function(e) sem_size_expr(s, e, need_data))
+  t$sizes <- lapply(t$sizes, function(e) sem_size_expr(s, e, need_data))
+  for (cn in names(t$cons)) {
+    ce <- sem_expr(s, t$cons[[cn]])
+    db <- decl_base_type(t$base)
+    shape_ok <- is_scalar_ty(ce$type) || (ce$type$base == db && ce$type$nd %in% c(0L, length(t$adims)))
+    if (!shape_ok) stop_semantic(sprintf("bound '%s' has type %s, which does not match the declared type", cn, ty_str(ce$type)), ce$loc)
+    if (t$base == "int" && ce$type$base != "int") stop_semantic(sprintf("bound '%s' of an integer variable must be an integer", cn), ce$loc)
+    if (bn == "parameters" || bn == "transformed parameters" || bn == "generated quantities" || bn == "data" || bn == "transformed data") {
+      # bounds of data may only depend on data
+      if (bn %in% origin_data && !ce$data_only) stop_semantic(sprintf("bound '%s' must only depend on data", cn), ce$loc)
+    }
+    t$cons[[cn]] <- ce
+  }
+  list(t = t, vt = ty(decl_base_type(t$base), length(t$adims)))
 }
 
 sem_size_expr <- function(s, e, need_data) {
@@ -235,6 +279,15 @@ sem_stmt <- function(s, st, top = FALSE) {
       } else if (!ty_assignable(lhs$type, rhs$type)) {
         stop_semantic(sprintf("cannot assign a value of type %s to a variable of type %s", ty_str(rhs$type), ty_str(lhs$type)), st$loc)
       }
+      st$lhs <- lhs
+      st$rhs <- rhs
+      st
+    },
+    unpack = {
+      rhs <- sem_expr(s, st$rhs)
+      lhs <- sem_unpack_lhs(s, st$lhs)
+      if (!ty_assignable(lhs$type, rhs$type))
+        stop_semantic(sprintf("cannot unpack a value of type %s into %s", ty_str(rhs$type), ty_str(lhs$type)), st$loc)
       st$lhs <- lhs
       st$rhs <- rhs
       st
@@ -314,7 +367,7 @@ sem_stmt <- function(s, st, top = FALSE) {
     foreach = {
       st$iter <- sem_expr(s, st$iter)
       it <- st$iter$type
-      et <- if (it$nd > 0L) ty(it$base, it$nd - 1L) else switch(it$base, vector = T_real, row_vector = T_real, matrix = T_real,
+      et <- if (it$nd > 0L) ty_nd(it, it$nd - 1L) else switch(it$base, vector = T_real, row_vector = T_real, matrix = T_real,
         complex_vector = , complex_row_vector = , complex_matrix = ty("complex"), NULL)
       if (is.null(et)) stop_semantic("foreach loops need an array, vector, row_vector or matrix", st$loc)
       st$elem_type <- et
@@ -362,9 +415,16 @@ sem_cond <- function(s, e) {
   te
 }
 
+sem_unpack_lhs <- function(s, e) {
+  if (e$kind != "tuple_expr") return(sem_lvalue(s, e))
+  e$items <- lapply(e$items, function(it) sem_unpack_lhs(s, it))
+  e$type <- ty_tuple(lapply(e$items, `[[`, "type"))
+  e
+}
+
 sem_lvalue <- function(s, e) {
   base <- e
-  while (base$kind == "index") base <- base$x
+  while (base$kind %in% c("index", "proj")) base <- base$x
   if (base$kind != "var") stop_semantic("invalid assignment target", e$loc)
   info <- sem_lookup(s, base$name)
   if (is.null(info)) stop_semantic(sprintf("identifier '%s' not in scope", base$name), base$loc)
@@ -389,6 +449,23 @@ sem_expr <- function(s, e, allow_void = FALSE) {
     int = { e$type <- T_int; e$data_only <- TRUE; e },
     real = { e$type <- T_real; e$data_only <- TRUE; e },
     imag = { e$type <- ty("complex"); e$data_only <- TRUE; e },
+    tuple_expr = {
+      items <- lapply(e$items, function(x) sem_expr(s, x))
+      e$items <- items
+      e$type <- ty_tuple(lapply(items, `[[`, "type"))
+      e$data_only <- all(vapply(items, function(x) isTRUE(x$data_only), TRUE))
+      e
+    },
+    proj = {
+      x <- sem_expr(s, e$x)
+      t <- x$type
+      if (!is_tuple_ty(t) || t$nd > 0L) stop_semantic(sprintf("'.%d' needs a tuple, found %s", e$k, ty_str(t)), e$loc)
+      if (e$k < 1L || e$k > length(t$elems)) stop_semantic(sprintf("tuple of %d elements has no element %d", length(t$elems), e$k), e$loc)
+      e$x <- x
+      e$type <- t$elems[[e$k]]
+      e$data_only <- x$data_only
+      e
+    },
     var = {
       info <- sem_lookup(s, e$name)
       if (is.null(info)) {
@@ -466,7 +543,7 @@ sem_expr <- function(s, e, allow_void = FALSE) {
       }
       e$items <- items
       e$elem_type <- et
-      e$type <- ty(et$base, et$nd + 1L)
+      e$type <- ty_nd(et, et$nd + 1L)
       e$data_only <- all(vapply(items, `[[`, TRUE, "data_only"))
       e
     },
@@ -556,7 +633,7 @@ sem_index <- function(s, e) {
   e$x <- x
   e$idx <- idx
   e$kinds <- kinds
-  e$type <- ty(res_base, res_nd)
+  e$type <- if (is_tuple_ty(t)) ty_nd(t, res_nd) else ty(res_base, res_nd)
   e$data_only <- data_only
   e
 }
@@ -823,7 +900,6 @@ unsupported_functions <- c(
   "integrate_1d_double_exponential", "integrate_1d_double_exponential_tol",
   "map_rect", "reduce_sum", "reduce_sum_static", "laplace_marginal", "laplace_marginal_tol", "laplace_latent_rng",
   "laplace_latent_tol_rng", "laplace_latent_solve", "laplace_latent_solve_tol",
-  "complex_schur_decompose", "eigendecompose", "eigendecompose_sym", "svd", "csr_extract",
   "wiener_lpdf", "wiener_lcdf_defective", "wiener_lccdf_defective",
   NULL)
 unsupported_distributions <- c("wiener", "gaussian_dlm_obs", "multi_gp", "multi_gp_cholesky",

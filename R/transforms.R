@@ -698,6 +698,7 @@ full_shape <- function(adims, eshape) {
 #   decl   list(kind, adims, eshape)
 #   args   evaluated constraint arguments (lower, upper, offset, multiplier)
 constrain_variable <- function(u, decl, args) {
+  if (identical(decl$kind, "tuple")) return(tuple_constrain(u, decl, args))
   tf <- transform_for(decl$kind)
   adims <- decl$adims
   eshape <- decl$eshape
@@ -750,6 +751,11 @@ bound_to_element_order <- function(b, adims, eshape) {
 }
 
 unconstrain_variable <- function(x, decl, args) {
+  if (identical(decl$kind, "tuple")) {
+    msg <- tuple_check(x, decl, args)
+    if (!is.null(msg)) stop_data(sprintf("parameter '%s' %s", decl$name %||% "", msg))
+    return(tuple_unconstrain(x, decl, args))
+  }
   msg <- check_variable(x, decl, args)
   if (!is.null(msg)) stop_data(sprintf("parameter '%s' %s", decl$name %||% "", msg))
   tf <- transform_for(decl$kind)
@@ -772,6 +778,7 @@ unconstrain_variable <- function(x, decl, args) {
 }
 
 check_variable <- function(x, decl, args) {
+  if (identical(decl$kind, "tuple")) return(tuple_check(x, decl, args))
   tf <- transform_for(decl$kind)
   adims <- decl$adims
   eshape <- decl$eshape
@@ -792,6 +799,7 @@ check_variable <- function(x, decl, args) {
 }
 
 free_size_variable <- function(decl) {
+  if (identical(decl$kind, "tuple")) return(decl$free_size)
   tf <- transform_for(decl$kind)
   n_elem <- if (length(decl$adims)) prod(decl$adims) else 1L
   as.integer(n_elem * tf$free_size(decl$eshape))

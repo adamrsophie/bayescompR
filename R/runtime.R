@@ -66,6 +66,7 @@ flat_index <- function(D, sel) {
 }
 
 rt_index <- function(x, kinds, vals) {
+  if (is_tarr(x)) return(tarr_index(x, kinds, vals))
   D <- storage_dims(x)
   is <- index_selection(D, kinds, vals)
   flat <- flat_index(D, is$sel)
@@ -80,6 +81,7 @@ rt_index <- function(x, kinds, vals) {
 }
 
 rt_assign_index <- function(x, kinds, vals, rhs, name) {
+  if (is_tarr(x)) return(tarr_assign(x, kinds, vals, rhs, name))
   D <- storage_dims(x)
   is <- index_selection(D, kinds, vals, what = sprintf("assignment to '%s': index", name))
   flat <- flat_index(D, is$sel)
@@ -101,6 +103,7 @@ rt_assign_index <- function(x, kinds, vals, rhs, name) {
 }
 
 rt_assign <- function(old, rhs, name) {
+  if (is_tarr(old) || is_tuple_val(old)) return(tuple_assign(old, rhs, name))
   vo <- val(old)
   vr <- val(rhs)
   do <- if (is.null(dim(vo))) length(vo) else dim(vo)
@@ -115,6 +118,7 @@ rt_assign <- function(old, rhs, name) {
 rt_range <- function(lo, hi) if (hi < lo) integer(0) else lo:hi
 
 rt_foreach <- function(x, nd, base) {
+  if (is_tarr(x)) return(unclass(x))
   v <- val(x)
   if (is_cx_base(base) && nd == 0L) {
     # the elements of a complex vector or matrix, in column major order

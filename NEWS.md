@@ -8,6 +8,8 @@ First release.
   differentiation tape with fused density kernels.
 * All constrained types of Stan 2.40 with Stan's transforms and Jacobians.
 * Math, container, linear algebra and distribution library.
+* Tuples in every block, including constrained tuple parameters, with
+  projection, unpacking and the library functions that return tuples.
 * Complex numbers: complex scalars, vectors, row vectors and matrices with
   differentiable arithmetic, elementwise functions, FFT, eigenvalues, SVD and
   Schur decompositions, and the transform, HMM and further distribution

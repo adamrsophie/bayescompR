@@ -172,7 +172,17 @@ parse_type <- function(p) {
   t <- expect_ident(p, "a type")
   base <- t$value
   if (!(base %in% basic_types)) stop_syntax(sprintf("unknown type '%s'", base), tk_loc(t))
-  if (base == "tuple") stop_unsupported("tuple types are not supported in this version", tk_loc(t))
+  if (base == "tuple") {
+    expect(p, "(")
+    elems <- list(parse_type(p))
+    while (tk_is(p, ",")) {
+      tk_next(p)
+      elems[[length(elems) + 1L]] <- parse_type(p)
+    }
+    expect(p, ")")
+    if (length(elems) < 2L) stop_syntax("a tuple type needs at least two element types", tk_loc(t))
+    return(list(base = "tuple", adims = adims, sizes = list(), cons = list(), elems = elems, loc = tk_loc(t0)))
+  }
   cons <- list()
   if (base %in% c("int", "real", "vector", "row_vector", "matrix")) cons <- parse_constraint(p)
   sizes <- list()
@@ -242,9 +252,18 @@ parse_unsized_type <- function(p) {
   if (!(t$value %in% c("int", "real", "vector", "row_vector", "matrix", "void", "complex",
                        "complex_vector", "complex_row_vector", "complex_matrix", "tuple")))
     stop_syntax(sprintf("'%s' is not a valid function argument or return type", t$value), tk_loc(t))
-  if (t$value == "tuple")
-    stop_unsupported(sprintf("type '%s' is not supported in this version", t$value), tk_loc(t))
   if (tk_is(p, "[")) stop_syntax("function argument types are unsized; old array syntax is not allowed", tk_loc(tk(p)))
+  if (t$value == "tuple") {
+    expect(p, "(")
+    elems <- list(parse_unsized_type(p))
+    while (tk_is(p, ",")) {
+      tk_next(p)
+      elems[[length(elems) + 1L]] <- parse_unsized_type(p)
+    }
+    expect(p, ")")
+    if (length(elems) < 2L) stop_syntax("a tuple type needs at least two element types", tk_loc(t))
+    return(list(base = "tuple", nd = nd, elems = elems, loc = tk_loc(t0)))
+  }
   list(base = t$value, nd = nd, loc = tk_loc(t0))
 }
 
@@ -414,7 +433,17 @@ parse_statement <- function(p, block) {
     tk_next(p)
     rhs <- parse_expr(p)
     expect(p, ";", "after assignment")
-    if (!(lhs$kind %in% c("var", "index")))
+    lv <- function(e) {
+      while (e$kind %in% c("index", "proj")) e <- e$x
+      e$kind == "var"
+    }
+    if (lhs$kind == "tuple_expr") {
+      if (nt$value != "=") stop_syntax("tuple unpacking needs '='", lhs$loc)
+      for (it in lhs$items) if (!lv(it) && it$kind != "tuple_expr")
+        stop_syntax("the left side of an unpacking assignment must list variables", it$loc)
+      return(list(kind = "unpack", lhs = lhs, rhs = rhs, loc = loc))
+    }
+    if (!lv(lhs))
       stop_syntax("the left side of an assignment must be a variable, optionally indexed", lhs$loc)
     return(list(kind = "assign", op = nt$value, lhs = lhs, rhs = rhs, loc = loc))
   }
@@ -518,6 +547,13 @@ parse_postfix <- function(p, no_gt) {
       e <- list(kind = "transpose", a = e, loc = tk_loc(t))
       next
     }
+    if (t$type == "op" && t$value == ".") {
+      tk_next(p)
+      k <- tk(p)
+      tk_next(p)
+      e <- list(kind = "proj", x = e, k = as.integer(k$value), loc = tk_loc(t))
+      next
+    }
     break
   }
   e
@@ -582,7 +618,15 @@ parse_primary <- function(p, no_gt) {
   if (t$type == "op" && t$value == "(") {
     tk_next(p)
     e <- parse_expr(p)
-    if (tk_is(p, ",")) stop_unsupported("tuple expressions are not supported in this version", loc)
+    if (tk_is(p, ",")) {
+      items <- list(e)
+      while (tk_is(p, ",")) {
+        tk_next(p)
+        items[[length(items) + 1L]] <- parse_expr(p)
+      }
+      expect(p, ")")
+      return(list(kind = "tuple_expr", items = items, loc = loc))
+    }
     expect(p, ")")
     return(list(kind = "paren", a = e, loc = loc))
   }

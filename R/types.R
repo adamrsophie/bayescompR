@@ -2,10 +2,14 @@
 #
 # A type is list(base, nd) where base is one of "int", "real", "vector",
 # "row_vector", "matrix", "complex", "complex_vector", "complex_row_vector",
-# "complex_matrix", "void", "string" and nd is the number of array
-# dimensions.
+# "complex_matrix", "tuple", "void", "string" and nd is the number of array
+# dimensions. A tuple type also has elems, the list of its element types.
 
 ty <- function(base, nd = 0L) list(base = base, nd = as.integer(nd))
+ty_tuple <- function(elems, nd = 0L) list(base = "tuple", nd = as.integer(nd), elems = elems)
+# the same type with nd array dimensions (keeps tuple elements)
+ty_nd <- function(t, nd) { t$nd <- as.integer(nd); t }
+is_tuple_ty <- function(t) !is.null(t) && identical(t$base, "tuple")
 T_int <- ty("int")
 T_real <- ty("real")
 T_vec <- ty("vector")
@@ -15,10 +19,15 @@ T_void <- ty("void")
 
 ty_str <- function(t) {
   if (is.null(t)) return("<unknown>")
-  if (t$nd > 0L) sprintf("array[%s] %s", strrep(",", t$nd - 1L), t$base) else t$base
+  b <- if (is_tuple_ty(t)) sprintf("tuple(%s)", paste(vapply(t$elems, ty_str, ""), collapse = ", ")) else t$base
+  if (t$nd > 0L) sprintf("array[%s] %s", strrep(",", t$nd - 1L), b) else b
 }
 
-ty_eq <- function(a, b) identical(a$base, b$base) && identical(a$nd, b$nd)
+ty_eq <- function(a, b) {
+  if (!identical(a$base, b$base) || !identical(a$nd, b$nd)) return(FALSE)
+  if (!is_tuple_ty(a)) return(TRUE)
+  length(a$elems) == length(b$elems) && all(mapply(ty_eq, a$elems, b$elems))
+}
 is_scalar_ty <- function(t) t$nd == 0L && t$base %in% c("int", "real")
 is_int_ty <- function(t) t$nd == 0L && t$base == "int"
 is_real_scalar_ty <- function(t) t$nd == 0L && t$base == "real"
@@ -36,6 +45,10 @@ ty_cx <- function(t) if (is_cx_ty(t)) t else ty(real_to_cx[[t$base]], t$nd)
 # promotion, real to complex promotion, also inside arrays)
 ty_assignable <- function(to, from) {
   if (to$nd != from$nd) return(FALSE)
+  if (is_tuple_ty(to) || is_tuple_ty(from)) {
+    if (!is_tuple_ty(to) || !is_tuple_ty(from) || length(to$elems) != length(from$elems)) return(FALSE)
+    return(all(mapply(ty_assignable, to$elems, from$elems)))
+  }
   if (to$base == from$base) return(TRUE)
   if (to$base == "real" && from$base == "int") return(TRUE)
   is_cx_base(to$base) && !is_cx_base(from$base) && from$base %in% names(real_to_cx) && real_to_cx[[from$base]] == to$base
@@ -43,7 +56,7 @@ ty_assignable <- function(to, from) {
 
 # element type after removing one array dimension, or one vector/matrix index
 ty_index_one <- function(t) {
-  if (t$nd > 0L) return(ty(t$base, t$nd - 1L))
+  if (t$nd > 0L) return(ty_nd(t, t$nd - 1L))
   switch(t$base,
     vector = T_real, row_vector = T_real, matrix = T_rvec,
     complex_vector = ty("complex"), complex_row_vector = ty("complex"), complex_matrix = ty("complex_row_vector"),

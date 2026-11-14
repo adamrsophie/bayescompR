@@ -211,16 +211,25 @@ Stan.
 
 The following Stan features raise `bayescomp_unsupported_error`:
 
-* tuples and the functions that return them (`eigendecompose`, `svd`,
-  `complex_schur_decompose`, `csr_extract`);
 * ODE, DAE and algebraic solvers, 1D integrators;
 * `map_rect`, `reduce_sum` and `reduce_sum_static`;
 * the embedded Laplace approximation functions;
 * the `wiener` distribution.
 
 ```{r, error = TRUE}
-bayescomp_check("transformed data { tuple(real, int) t = (1.5, 2); }")
+bayescomp_check("parameters { real y; } model { target += integrate_1d(f, 0, 1, {1.0}, {1.0}, {0}); }")
 ```
+
+## Tuples
+
+Tuples work in every block, including constrained tuple parameters such as
+`tuple(real<lower=0>, simplex[3]) p;`, with projection (`p.1`), tuple
+expressions (`(a, b)`), unpacking (`(a, b) = f(x);`) and the library
+functions that return tuples (`eigendecompose`, `eigendecompose_sym`,
+`svd`, `qr`, `qr_thin`, `complex_schur_decompose`, `csr_extract`). Tuple
+data are R lists (`list(2.5, c(3, 4))`), arrays of tuples lists of such
+lists. Draws use cmdstanr's names (`p:1`, `p:2[1]`, `q[1:2]`), and
+`bayescomp_constrain()` returns tuples as lists.
 
 ## Complex numbers
 

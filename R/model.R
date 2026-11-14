@@ -219,7 +219,9 @@ compile_r <- function(ir) {
           list(quote(.stmt$loc <- NULL)),
           check_calls(top_decls(ir, "generated quantities"), "generated quantities"))
   out_list <- function(decls) cl_list(as.name("list"), stats::setNames(lapply(decls, function(d)
-    if (is_cx_base(d$type$base)) cl(cx_out, vsym(d$name)) else vsym(d$name)), vapply(decls, `[[`, "", "name")))
+    if (is_cx_base(d$type$base)) cl(cx_out, vsym(d$name))
+    else if (identical(d$type$base, "tuple")) cl(tuple_out, vsym(d$name), cl(as.name("[["), quote(.decls), d$name))
+    else vsym(d$name)), vapply(decls, `[[`, "", "name")))
   tps <- top_decls(ir, "transformed parameters")
   gqs <- top_decls(ir, "generated quantities")
   # parameter transforms run before any statement: no location
@@ -246,6 +248,7 @@ compile_r <- function(ir) {
 
 decl_info <- function(d, env) {
   t <- d$type
+  if (identical(t$base, "tuple")) return(tuple_info(t, env, d$name))
   sh <- cg_decl_shape(t)
   adims <- as.integer(eval(sh$adims, env))
   eshape <- as.integer(eval(sh$eshape, env))
@@ -278,7 +281,7 @@ instantiate <- function(m, data) {
     v <- read_data_value(data, info)
     assign(paste0("V.", d$name), v, envir = env)
     env$.decls <- decls
-    args <- lapply(d$type$cons, function(e) eval(cg_expr(e), env))
+    args <- eval(cg_cons_args(d$type), env)
     msg <- check_variable(v, info, args)
     if (!is.null(msg)) stop_data(sprintf("variable '%s' %s", d$name, msg))
   }
@@ -314,6 +317,7 @@ read_data_value <- function(data, info) {
     stop_data(sprintf("variable '%s' is declared in the data block but was not supplied", nm))
   }
   x <- data[[nm]]
+  if (identical(info$kind, "tuple")) return(tuple_read_data(x, info))
   if (is.data.frame(x)) x <- as.matrix(x)
   if (is_cx_base(info$stan_type %||% "")) return(read_cx_data(x, info))
   if (is.list(x)) {
@@ -466,6 +470,7 @@ bayescomp_param_names <- function(model, include_tparams = TRUE, include_gqs = T
   nm <- c(model$params$pars, if (include_tparams) model$params$tps, if (include_gqs) model$params$gqs)
   unlist(lapply(nm, function(n) {
     d <- model$decls[[n]]
+    if (identical(d$kind, "tuple")) return(tuple_flat_names(n, d))
     if (is_cx_base(d$stan_type)) return(cx_flat_names(n, c(d$adims, d$eshape)))
     flat_names(n, c(d$adims, d$eshape))
   }))
@@ -480,8 +485,7 @@ bayescomp_dim <- function(model) model$dim
 # flatten a write_array result to a named numeric vector
 flatten_draw <- function(lst) {
   # complex values: real and imaginary parts of each element, as in CmdStan
-  unlist(lapply(lst, function(v) if (is.complex(v)) as.vector(rbind(Re(as.vector(v)), Im(as.vector(v)))) else as.numeric(v)),
-         use.names = FALSE)
+  unlist(lapply(lst, flatten_value), use.names = FALSE)
 }
 
 #' @export
