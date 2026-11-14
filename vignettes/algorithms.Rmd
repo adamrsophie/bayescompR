@@ -1,0 +1,334 @@
+---
+title: "A tour of the samplers"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{A tour of the samplers}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 7, fig.height = 4)
+library(bayescompR)
+```
+
+`vignette("inference")` covers NUTS, the other kernels of
+`bayescomp_sample()`, optimization, ADVI, Pathfinder and tempered SMC. This
+vignette covers the rest: samplers for multimodal posteriors, gradient free
+ensembles, Gibbs sampling, samplers that adapt to local geometry, piecewise
+deterministic processes, state space models, large data methods, model
+comparison and simulation based inference. Every function returns a
+`bayescomp_fit`, so `summary()`, `bayescomp_extract()`, the diagnostics and
+`plot()` work the same way. The runs below are short to keep the vignette
+quick; real analyses need longer ones.
+
+Each section names what the method needs from the model and whether its
+draws are exact (the Markov chain leaves the posterior invariant) or
+approximate.
+
+## A multimodal target
+
+Two well separated modes trap NUTS in whichever mode it starts in.
+
+```{r}
+mix <- bayescomp_model("
+  parameters { real x; }
+  model { target += log_mix(0.3, normal_lpdf(x | -5, 0.5), normal_lpdf(x | 5, 0.5)); }
+")
+```
+
+### Parallel tempering
+
+`bayescomp_parallel_tempering()` runs replicas of the bridge
+$g^{1 - \beta} p^\beta$ between a Gaussian reference `g` and the
+posterior `p`, lets neighbors swap states, and keeps the $\beta = 1$
+replica. Swaps are non reversible by default (Syed et al. 2022): even and
+odd pairs alternate, so states travel along the ladder in persistent sweeps.
+During warmup the temperatures move so that every pair rejects swaps at the
+same rate. Needs: log density. Exact.
+
+```{r}
+pt <- bayescomp_parallel_tempering(mix, num_temps = 8, chains = 2, iter_warmup = 300,
+                                   iter_sampling = 600, reference = "standard",
+                                   reference_scale = 8, seed = 1)
+mean(bayescomp_extract(pt, "x") < 0)
+round(pt$betas[[1]], 3)
+round(pt$swap_rate[[1]], 2)
+pt$log_evidence
+```
+
+The share of draws in the left mode is near its weight 0.3. The stepping
+stone evidence estimate is near 0, the log normalizing constant of this
+density. `barrier` is the estimated global communication barrier
+$\Lambda$; the schedule needs about $2 \Lambda$ temperatures.
+
+### Reverse diffusion Monte Carlo
+
+`bayescomp_diffusion()` (experimental) follows the time reversal of an
+Ornstein-Uhlenbeck process from a standard normal to the target, with the
+score estimated by importance sampling at every step (Huang et al. 2024).
+Its draws are independent and move between modes without a Markov chain,
+but they are approximate.
+
+```{r}
+dm <- bayescomp_diffusion(mix, num_samples = 150, steps = 30, inner_samples = 24,
+                          reference = "standard", reference_scale = 5, seed = 1)
+mean(bayescomp_extract(dm, "x") < 0)
+```
+
+## Gradient free samplers
+
+```{r}
+corr <- bayescomp_model("
+  parameters { vector[2] x; real<lower=0> s; }
+  model {
+    x ~ multi_normal([1, -1]', [[1, 0.9], [0.9, 1]]);
+    s ~ gamma(3, 2);
+  }
+")
+```
+
+### Elliptical slice sampling
+
+`algorithm = "elliptical_slice"` writes the posterior as a Gaussian times a
+remainder and runs elliptical slice sampling on the remainder (Nishihara
+et al. 2014). The Gaussian is fitted during a slice sampling warmup, so the
+sampler has no step size. Needs: log density. Exact.
+
+```{r}
+es <- bayescomp_sample(corr, chains = 2, iter_warmup = 300, iter_sampling = 500,
+                       algorithm = "elliptical_slice", metric = "dense_e", seed = 1, refresh = 0)
+summary(es)
+```
+
+### Ensemble samplers
+
+`bayescomp_ensemble()` moves a population of walkers, each using the
+others to propose: the affine invariant stretch move (Goodman and Weare
+2010) or differential evolution (ter Braak 2006). Both are invariant to
+linear transformations of the parameters. Walkers are reported as chains;
+they are not independent, so R-hat across walkers is optimistic. Needs: log
+density. Exact.
+
+```{r}
+de <- bayescomp_ensemble(corr, method = "de", iter_warmup = 300, iter_sampling = 300, seed = 1)
+summary(de)[, c("variable", "mean", "sd")]
+mean(de$acceptance)
+```
+
+## Gibbs sampling
+
+`bayescomp_gibbs()` updates one block of parameters at a time. With
+`kernel = "auto"` it tests whether each block's full conditional is
+Gaussian (log density quadratic), Gamma (positive scalar with log density
+$a \log x - b x^k$) or Beta (unit interval scalar), by fitting the family
+at several random states and checking its predictions. A detected block is
+drawn exactly from its conditional; the others use slice sampling. The draw
+is an independence Metropolis step whose acceptance is one when the
+detection is right, so the sampler stays exact even when it is not. Needs:
+log density. Exact.
+
+```{r}
+y <- c(1, 2, 0.5, 1.5, 2.5)
+nm <- bayescomp_model("
+  data { int N; vector[N] y; }
+  parameters { real mu; real<lower=0> tau; real<lower=0> nu; }
+  model {
+    mu ~ normal(0, 10);
+    tau ~ gamma(2, 1);
+    nu ~ lognormal(0, 1);
+    y ~ normal(mu, inv_sqrt(tau));
+  }
+", data = list(N = 5, y = y))
+gb <- bayescomp_gibbs(nm, chains = 2, iter_warmup = 200, iter_sampling = 500, seed = 1)
+gb$blocks
+```
+
+All three blocks are detected: `nu` has a lognormal prior and does not
+enter the likelihood, so its conditional on the unconstrained scale
+`log(nu)` is Gaussian.
+
+Blocks and kernels can be chosen by hand, for example random walk
+Metropolis on a pair of correlated parameters and MALA on the rest:
+
+```{r}
+gb2 <- bayescomp_gibbs(nm, blocks = list(list(pars = c("mu", "tau"), kernel = "metropolis"),
+                                         list(pars = "nu", kernel = "mala")),
+                       chains = 2, iter_warmup = 300, iter_sampling = 500, seed = 1)
+gb2$blocks
+```
+
+## Local geometry
+
+`bayescomp_riemannian()` uses a position dependent metric, the SoftAbs
+transform of the Hessian (Betancourt 2013). `"smmala"` (simplified
+manifold MALA) is exact; `"rmhmc"` integrates with the implicit generalized
+leapfrog. Hessians come from finite differences of gradients, so the cost
+grows with the square of the dimension: these are for small, strongly
+curved models. Needs: gradient.
+
+`bayescomp_mclmc()` is microcanonical Langevin Monte Carlo (Robnik et al.
+2023): unit speed dynamics with partial velocity refreshment and no
+accept step. It is fast per gradient but approximate.
+
+```{r}
+sm <- bayescomp_riemannian(corr, "smmala", chains = 2, iter_warmup = 150, iter_sampling = 300, seed = 1)
+mc <- bayescomp_mclmc(corr, chains = 2, iter_warmup = 500, iter_sampling = 1000, seed = 1)
+rbind(smmala = summary(sm)$mean[2:4], mclmc = summary(mc)$mean[2:4])
+```
+
+## Piecewise deterministic samplers
+
+`bayescomp_pdmp()` runs the Zig-Zag sampler (Bierkens et al. 2019) or the
+bouncy particle sampler (Bouchard-Cote et al. 2018): the state moves in
+straight lines and the velocity flips or reflects at random event times
+driven by the gradient. The event times are found by integrating the rate
+numerically, so the draws are approximate with error set by `dt`. Needs:
+gradient.
+
+```{r}
+zz <- bayescomp_pdmp(corr, "zigzag", chains = 2, iter_warmup = 150, iter_sampling = 400, seed = 1)
+summary(zz)[, c("variable", "mean", "sd", "ess_bulk")]
+```
+
+## State space models
+
+When the likelihood integrates over a latent process, the particle filter
+gives an unbiased estimate of it, and particle MCMC uses that estimate inside
+an exact sampler (Andrieu et al. 2010). The latent process is written as R
+functions; the static parameters and their priors come from a model.
+
+```{r}
+set.seed(1)
+Tn <- 40
+x <- numeric(Tn); x[1] <- rnorm(1)
+for (t in 2:Tn) x[t] <- 0.8 * x[t - 1] + rnorm(1, 0, 0.5)
+yobs <- x + rnorm(Tn, 0, 0.7)
+ssm <- bayescomp_ssm(yobs,
+  init = function(N, th) rnorm(N),
+  transition = function(x, t, th) th[["phi"]] * x + rnorm(length(x), 0, th[["q"]]),
+  log_obs = function(yt, x, t, th) dnorm(yt, x, 0.7, log = TRUE),
+  log_init = function(x, th) dnorm(x, log = TRUE),
+  log_transition = function(xn, xo, t, th) dnorm(xn, th[["phi"]] * xo, th[["q"]], log = TRUE))
+pars <- bayescomp_model("
+  parameters { real<lower=-1, upper=1> phi; real<lower=0> q; }
+  model { phi ~ normal(0, 1); q ~ normal(0, 1); }
+")
+pf <- bayescomp_particle_filter(ssm, c(phi = 0.8, q = 0.5), num_particles = 300)
+pf$log_lik
+pm <- bayescomp_pmcmc(pars, ssm, "pmmh", num_particles = 100, chains = 2,
+                      iter_warmup = 300, iter_sampling = 1000, seed = 1)
+summary(pm)[, c("variable", "mean", "sd", "rhat")]
+```
+
+`method = "pgibbs"` runs particle Gibbs with ancestor sampling instead,
+which needs the transition and initial densities. `pm$states` holds the
+sampled latent paths.
+
+## Large data
+
+`bayescomp_sgmcmc()` (SGLD, SGHMC) and `bayescomp_ep()` split the
+likelihood over observations. They find the observation count `N` in the
+data and subset every data element with `N` entries or rows; pass `subset`
+for other layouts. The prior is the model on an empty data set.
+
+```{r}
+set.seed(1)
+N <- 200
+X <- cbind(1, rnorm(N))
+yr <- as.vector(X %*% c(1, 2) + rnorm(N))
+reg <- bayescomp_model("
+  data { int N; matrix[N, 2] X; vector[N] y; }
+  parameters { vector[2] b; }
+  model { b ~ normal(0, 10); y ~ normal(X * b, 1); }
+", data = list(N = N, X = X, y = yr))
+ep <- bayescomp_ep(reg, sites = 4, seed = 1)
+rbind(ep = ep$mean, exact = as.vector(solve(crossprod(X) + diag(0.01, 2), crossprod(X, yr))))
+sg <- bayescomp_sgmcmc(reg, "sghmc", batch_size = 20, chains = 2, iter_warmup = 200,
+                       iter_sampling = 1000, seed = 1)
+colMeans(bayescomp_extract(sg, "b"))
+```
+
+EP is exact here because the posterior is Gaussian. SG-MCMC has no accept
+step and its draws are approximate; it pays off when the data are large.
+
+## Latent Gaussian models
+
+`bayescomp_inla()` integrates out a latent block by Laplace approximation
+and explores the remaining hyperparameters on a grid (Rue et al. 2009).
+
+```{r}
+schools <- bayescomp_model("
+  data { int J; vector[J] y; vector[J] s; }
+  parameters { real mu; real<lower=0> tau; vector[J] theta; }
+  model { mu ~ normal(0, 5); tau ~ normal(0, 5); theta ~ normal(mu, tau); y ~ normal(theta, s); }
+", data = list(J = 8, y = c(28, 8, -3, 7, -1, 1, 18, 12), s = c(15, 10, 16, 11, 9, 11, 10, 18)))
+il <- bayescomp_inla(schools, latent = c("theta", "mu"), seed = 1)
+s_il <- summary(il)
+s_il[s_il$variable %in% c("mu", "tau", "theta[1]"), c("variable", "mean", "sd")]
+```
+
+## Model comparison
+
+Nested sampling estimates the evidence of one model; reversible jump MCMC
+samples across several and returns posterior model probabilities.
+
+```{r}
+yy <- c(0.5, 1.2, 2, 0.8, 1.6)
+mk <- function(s) bayescomp_model(sprintf("
+  data { int N; vector[N] y; }
+  parameters { real mu; }
+  model { mu ~ normal(0, %g); y ~ normal(mu, 1); }", s), data = list(N = 5, y = yy))
+ns <- bayescomp_nested(mk(2), num_live = 200, seed = 1)
+c(estimate = ns$log_evidence, se = ns$log_evidence_se,
+  exact = -0.5 * as.numeric(determinant(2 * pi * (diag(5) + 4))$modulus) -
+    0.5 * sum(yy * solve(diag(5) + 4, yy)))
+rj <- bayescomp_rjmcmc(list(narrow = mk(1), wide = mk(10)), iter_sampling = 3000, seed = 1)
+rj
+```
+
+## Normalizing flows
+
+`bayescomp_flow_vi()` pushes a Gaussian through planar flows and fits them
+by maximizing the ELBO with gradients from reverse mode differentiation.
+The density of the fit is exact, so Pareto k diagnoses it.
+
+```{r}
+fl <- bayescomp_flow_vi(corr, layers = 4, iter = 600, learning_rate = 0.05, seed = 1)
+fl$pareto_k
+```
+
+## Simulation based inference
+
+When the model is a simulator without a likelihood,
+`bayescomp_npe()` trains a mixture density network on prior predictive
+simulations and evaluates it at the observed summaries. The prior is a
+model whose model block holds only the priors.
+
+```{r}
+prior <- bayescomp_model("
+  parameters { real mu; real<lower=0> sigma; }
+  model { mu ~ normal(0, 2); sigma ~ lognormal(0, 0.5); }
+")
+simulate <- function(th) {
+  y <- rnorm(20, th[["mu"]], th[["sigma"]])
+  c(mean(y), log(sd(y)))
+}
+np <- bayescomp_npe(prior, simulate, observed = c(0.8, log(1.4)), num_simulations = 1500,
+                    epochs = 150, seed = 1)
+s_np <- summary(np)
+s_np[s_np$variable %in% c("mu", "sigma"), c("variable", "mean", "sd")]
+```
+
+The network is amortized: `np$posterior(new_summaries)` returns draws for
+other data without retraining.
+
+## References
+
+Andrieu, Doucet and Holenstein (2010); Betancourt (2013); Bierkens,
+Fearnhead and Roberts (2019); Bouchard-Cote, Vollmer and Doucet (2018);
+Goodman and Weare (2010); Green (1995); Huang et al. (2024); Nishihara,
+Murray and Adams (2014); Papamakarios and Murray (2016); Rezende and
+Mohamed (2015); Robnik et al. (2023); Rue, Martino and Chopin (2009);
+Skilling (2006); Syed et al. (2022); ter Braak (2006); Vehtari et al.
+(2020); Welling and Teh (2011). Full citations are in the help pages.

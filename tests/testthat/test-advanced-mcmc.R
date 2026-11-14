@@ -57,6 +57,10 @@ test_that("Gibbs sampling detects conjugate conditionals", {
                           chains = 1, iter_warmup = 300, iter_sampling = 300, seed = 2)
   expect_equal(mean(bayescomp_extract(fit2, "p")), 9 / 15, tolerance = 0.1)
   expect_error(bayescomp_gibbs(m, blocks = list("mu")), "every parameter")
+  one <- bayescomp_model("parameters { real mu; } model { mu ~ normal(1, 2); }")
+  f1 <- bayescomp_gibbs(one, chains = 2, iter_warmup = 50, iter_sampling = 200, seed = 1)
+  expect_equal(nrow(f1$blocks), 1L)
+  expect_equal(mean(bayescomp_extract(f1, "mu")), 1, tolerance = 0.4)
 })
 
 test_that("Riemannian samplers and MCLMC target the posterior", {

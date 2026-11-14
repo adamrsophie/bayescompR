@@ -1,0 +1,186 @@
+---
+title: "Validation"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Validation}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 7, fig.height = 4)
+library(bayescompR)
+```
+
+A sampler can run without errors and still be wrong. This vignette
+describes how bayescompR is checked and reproduces a few of the checks. The
+full set runs in the package tests on every push, and the slow ones
+(simulation based calibration, long chains) run in a separate CI job with
+`BAYESCOMPR_LONG_TESTS=true`.
+
+## Layers of checks
+
+1. **Language.** The parser and the semantic checker are tested on valid
+   and invalid programs, with the expected error class, line and column.
+2. **Library.** Every density is compared with an independent R
+   implementation (`stats::dnorm` and friends, or direct formulas), and
+   every gradient with central finite differences.
+3. **Transforms.** Constraining and unconstraining round trip, and the log
+   Jacobians match the log absolute determinants of numerical Jacobians.
+4. **Automatic differentiation.** Gradients of whole models match finite
+   differences at random points.
+5. **Algorithms.** Each method is run on targets with known answers:
+   moments of Gaussian and Gamma posteriors, closed form marginal
+   likelihoods, Kalman filter likelihoods, mixture weights.
+6. **Calibration.** Simulation based calibration (Talts et al. 2018) draws
+   parameters from the prior, simulates data, fits, and checks that the
+   rank of the true value among the posterior draws is uniform.
+7. **Diagnostics.** R-hat, bulk ESS and tail ESS match the posterior package
+   on the same draws.
+8. **Backends.** `bayescomp_validate_backend()` compares a native backend's
+   log density and gradient with the R implementation at random points.
+
+## Gradients against finite differences
+
+```{r}
+m <- bayescomp_model("
+  data { int N; vector[N] y; matrix[N, 2] X; }
+  parameters { vector[2] b; real<lower=0> sigma; real<lower=2> nu; }
+  model {
+    b ~ normal(0, 2);
+    sigma ~ exponential(1);
+    nu ~ gamma(2, 0.1);
+    y ~ student_t(nu, X * b, sigma);
+  }
+", data = list(N = 4, y = c(0.3, -1.2, 2.1, 0.7), X = cbind(1, c(-1, 0, 1, 2))))
+u <- c(0.2, -0.4, 0.1, 0.5)
+g <- bayescomp_grad_log_prob(m, u)
+num <- vapply(seq_along(u), function(i) {
+  e <- replace(numeric(4), i, 1e-6)
+  (bayescomp_log_prob(m, u + e) - bayescomp_log_prob(m, u - e)) / 2e-6
+}, 0)
+max(abs(as.numeric(g) - num))
+```
+
+## Moments of a known posterior
+
+The posterior of a normal mean with known variance and a normal prior is
+normal with mean $\sum y / (n + 1/s^2)$ and variance $1 / (n + 1/s^2)$.
+
+```{r}
+y <- c(0.5, 1.2, 2, 0.8, 1.6)
+nm <- bayescomp_model("
+  data { int N; vector[N] y; }
+  parameters { real mu; }
+  model { mu ~ normal(0, 2); y ~ normal(mu, 1); }
+", data = list(N = 5, y = y))
+exact <- c(mean = sum(y) / 5.25, sd = sqrt(1 / 5.25))
+fits <- list(
+  nuts = bayescomp_sample(nm, seed = 1, refresh = 0),
+  slice = bayescomp_sample(nm, algorithm = "slice", seed = 1, refresh = 0),
+  gibbs = bayescomp_gibbs(nm, chains = 2, iter_warmup = 200, iter_sampling = 1000, seed = 1),
+  pathfinder = bayescomp_pathfinder(nm, seed = 1),
+  ep = bayescomp_ep(nm, sites = 2, seed = 1))
+est <- t(vapply(fits, function(f) {
+  x <- bayescomp_extract(f, "mu")
+  c(mean = mean(x), sd = sd(x))
+}, numeric(2)))
+rbind(est, exact = exact)
+```
+
+## Marginal likelihoods
+
+The same model has a closed form marginal likelihood: $y \sim N(0, I + s^2
+J)$ with $J$ the matrix of ones.
+
+```{r}
+S <- diag(5) + 4
+log_z <- -0.5 * as.numeric(determinant(2 * pi * S)$modulus) - 0.5 * sum(y * solve(S, y))
+smc <- bayescomp_smc(nm, num_particles = 500, seed = 1)
+pt <- bayescomp_parallel_tempering(nm, num_temps = 6, chains = 2, iter_warmup = 300,
+                                   iter_sampling = 600, seed = 1)
+ns <- bayescomp_nested(nm, num_live = 200, seed = 1)
+c(exact = log_z, smc = smc$log_evidence, tempering = mean(pt$log_evidence),
+  nested = ns$log_evidence)
+```
+
+## Particle filter against the Kalman filter
+
+For a linear Gaussian state space model the Kalman filter gives the exact
+likelihood. The particle filter estimate is unbiased on the natural scale,
+so its log has a small negative bias that shrinks with the number of
+particles.
+
+```{r}
+set.seed(1)
+Tn <- 40
+x <- numeric(Tn); x[1] <- rnorm(1)
+for (t in 2:Tn) x[t] <- 0.8 * x[t - 1] + rnorm(1, 0, 0.5)
+yobs <- x + rnorm(Tn, 0, 0.7)
+kalman <- function(phi, q, r = 0.7) {
+  m <- 0; P <- 1; ll <- 0
+  for (t in seq_len(Tn)) {
+    if (t > 1) { m <- phi * m; P <- phi^2 * P + q^2 }
+    S <- P + r^2
+    ll <- ll + dnorm(yobs[t], m, sqrt(S), log = TRUE)
+    K <- P / S; m <- m + K * (yobs[t] - m); P <- (1 - K) * P
+  }
+  ll
+}
+ssm <- bayescomp_ssm(yobs,
+  init = function(N, th) rnorm(N),
+  transition = function(x, t, th) th[["phi"]] * x + rnorm(length(x), 0, th[["q"]]),
+  log_obs = function(yt, x, t, th) dnorm(yt, x, 0.7, log = TRUE))
+est <- replicate(30, bayescomp_particle_filter(ssm, c(phi = 0.8, q = 0.5), 300)$log_lik)
+c(kalman = kalman(0.8, 0.5), particle_mean = mean(est), particle_sd = sd(est))
+```
+
+## Model probabilities
+
+Posterior model probabilities from reversible jump against the exact
+values from the two closed form marginal likelihoods:
+
+```{r}
+mk <- function(s) bayescomp_model(sprintf("
+  data { int N; vector[N] y; }
+  parameters { real mu; }
+  model { mu ~ normal(0, %g); y ~ normal(mu, 1); }", s), data = list(N = 5, y = y))
+lz <- function(s) {
+  S <- diag(5) + s^2
+  -0.5 * as.numeric(determinant(2 * pi * S)$modulus) - 0.5 * sum(y * solve(S, y))
+}
+rj <- bayescomp_rjmcmc(list(narrow = mk(1), wide = mk(10)), iter_sampling = 4000, seed = 1)
+z <- c(lz(1), lz(10))
+cbind(rj$probabilities[, c("model", "posterior", "mcse")], exact = exp(z) / sum(exp(z)))
+```
+
+## Simulation based calibration
+
+For each replication a parameter is drawn from the prior, data are
+simulated from it, and the posterior is sampled. If the sampler is right,
+the rank of the true parameter among the posterior draws is uniform. The
+package tests run this with many replications; here is a small version.
+
+```{r}
+sbc_model <- "
+  data { int N; vector[N] y; }
+  parameters { real mu; }
+  model { mu ~ normal(0, 1); y ~ normal(mu, 1); }
+"
+set.seed(2)
+ranks <- vapply(1:40, function(r) {
+  mu <- rnorm(1)
+  yy <- rnorm(5, mu, 1)
+  f <- bayescomp_sample(bayescomp_model(sbc_model, data = list(N = 5, y = yy)), chains = 1,
+                        iter_warmup = 200, iter_sampling = 99, thin = 1, seed = r, refresh = 0)
+  sum(bayescomp_extract(f, "mu") < mu)
+}, 0)
+hist(ranks, breaks = seq(-0.5, 99.5, length.out = 11), main = "SBC ranks", xlab = "rank")
+stats::chisq.test(table(cut(ranks, seq(-0.5, 99.5, length.out = 6))))$p.value
+```
+
+A histogram far from flat (a smile, a frown or a slope) points to a sampler
+that is too narrow, too wide or biased. Methods whose draws are approximate
+(ADVI, Pathfinder, MCLMC, SG-MCMC, PDMPs with coarse `dt`, diffusion) are
+expected to fail calibration at some level; the tests check them against
+known moments with tolerances instead.

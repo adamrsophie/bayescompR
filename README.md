@@ -65,9 +65,11 @@ bayescomp_diagnose(fit)
 | Language | all program blocks, user functions (recursion, `_lpdf`, `_lp`, `_rng`, `_jacobian`), every constrained type including `sum_to_zero_vector`, stochastic matrices and Cholesky factors, truncation, `offset` and `multiplier` |
 | Library | elementwise math, containers, linear algebra with analytic gradients, more than 100 distributions with lpdf, lcdf, lccdf and rng |
 | MCMC | `bayescomp_sample()`: NUTS, static HMC, MALA, block or componentwise random walk Metropolis with adaptive covariance, slice sampling; diagonal or dense metric |
-| Other inference | `bayescomp_smc()` (tempered SMC with log evidence), `bayescomp_optimize()`, `bayescomp_laplace()`, `bayescomp_variational()` (ADVI), `bayescomp_pathfinder()` (also as MCMC initializer), `bayescomp_generate_quantities()` |
+| More MCMC | elliptical slice sampling, `bayescomp_parallel_tempering()` (non reversible), `bayescomp_ensemble()` (DE MCMC, stretch move), `bayescomp_gibbs()` (blocked, with conjugacy detection), `bayescomp_riemannian()` (smMALA, RMHMC), `bayescomp_mclmc()`, `bayescomp_pdmp()` (Zig-Zag, BPS), `bayescomp_sgmcmc()` (SGLD, SGHMC), `bayescomp_rjmcmc()` |
+| Sequential and evidence | `bayescomp_smc()` (tempered SMC with log evidence), `bayescomp_nested()`, `bayescomp_ssm()`, `bayescomp_particle_filter()`, `bayescomp_pmcmc()` (PMMH, particle Gibbs) |
+| Approximations | `bayescomp_optimize()`, `bayescomp_laplace()`, `bayescomp_variational()` (ADVI), `bayescomp_pathfinder()` (also as MCMC initializer), `bayescomp_flow_vi()`, `bayescomp_ep()`, `bayescomp_inla()`, `bayescomp_npe()`, `bayescomp_diffusion()` (experimental), `bayescomp_generate_quantities()` |
 | Model interface | `bayescomp_log_prob()`, `bayescomp_grad_log_prob()`, `bayescomp_constrain()`, `bayescomp_unconstrain()` |
-| Diagnostics | rank normalized split R-hat, bulk and tail ESS, MCSE, divergences, tree depth, E-BFMI |
+| Diagnostics | rank normalized split R-hat, bulk, tail and quantile ESS, MCSE, divergences, tree depth, E-BFMI; trace, density, rank and ESS plots |
 | Backends | typed versioned IR (`bayescomp_ir()`), backend registry with explicit fallback and `bayescomp_validate_backend()`; native backends in [bayescompRCranelift](https://github.com/adamrsophie/bayescompRCranelift) and [bayescompRLLVM](https://github.com/adamrsophie/bayescompRLLVM) |
 
 Features of Stan that are not implemented (complex numbers, tuples, ODE and
@@ -86,9 +88,14 @@ to machine code. See `vignette("performance")`.
 ## Which algorithm?
 
 NUTS is the default for differentiable models. Pathfinder and Laplace give
-fast approximations and good starting points. Tempered SMC handles
-multimodal posteriors and estimates the marginal likelihood. Metropolis and
-slice sampling need no gradients. `TODO.md` lists the roadmap.
+fast approximations and good starting points. Tempered SMC and parallel
+tempering handle multimodal posteriors and estimate the marginal likelihood;
+nested sampling and reversible jump compare models. Metropolis, slice,
+elliptical slice and ensemble samplers need no gradients. Gibbs sampling
+draws conjugate blocks exactly. Particle MCMC handles state space models
+with intractable likelihoods, NPE handles simulators, INLA latent Gaussian
+models, and EP or SG-MCMC large data. `vignette("algorithms")` compares them
+and `TODO.md` lists the roadmap.
 
 ## Documentation
 

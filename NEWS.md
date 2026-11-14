@@ -16,6 +16,19 @@ First release.
 * Adaptive tempered sequential Monte Carlo with a Gaussian reference and a
   log evidence estimate.
 * Pathfinder and ADVI fits can initialize MCMC chains.
+* SMC rejuvenation by Metropolis, MALA or HMC, with systematic, stratified,
+  residual or multinomial resampling.
+* Generalized elliptical slice sampling, non reversible parallel tempering
+  with schedule adaptation, differential evolution and stretch move
+  ensembles, blocked Gibbs with numerical conjugacy detection.
+* Simplified manifold MALA and RMHMC with the SoftAbs metric, microcanonical
+  Langevin Monte Carlo, Zig-Zag and bouncy particle samplers.
+* State space models with particle filters, PMMH and particle Gibbs with
+  ancestor sampling.
+* SGLD and SGHMC, expectation propagation, nested sampling, reversible jump
+  MCMC, INLA, planar normalizing flow VI, neural posterior estimation and
+  reverse diffusion Monte Carlo.
+* Rank histograms and local, quantile and folded ESS plots.
 * Optimization (L-BFGS, BFGS, Newton), Laplace approximation, ADVI (mean
   field and full rank) and Pathfinder with Pareto smoothed importance
   resampling.

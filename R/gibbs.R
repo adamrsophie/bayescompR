@@ -95,7 +95,8 @@ bayescomp_gibbs <- function(model, blocks = NULL, chains = 4L, iter_warmup = 100
   })
   fit <- make_fit(model, res, list(algorithm = "gibbs"), "gibbs", seed, proc.time()[["elapsed"]] - t0)
   fit$blocks <- res[[1L]]$info
-  if (chains > 1L) fit$blocks$acceptance <- rowMeans(vapply(res, function(r) r$info$acceptance, numeric(nrow(res[[1L]]$info))))
+  if (chains > 1L) fit$blocks$acceptance <- rowMeans(matrix(vapply(res, function(r) r$info$acceptance, numeric(nrow(res[[1L]]$info))),
+                                                            nrow(res[[1L]]$info)))
   fit
 }
 

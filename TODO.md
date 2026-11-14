@@ -8,17 +8,51 @@ those needs are met.
 
 ## Shipped in 0.1.0
 
-* NUTS and static HMC (diagonal or dense metric, Stan warmup).
-* MALA, block and componentwise random walk Metropolis with adaptive
-  covariance during warmup, coordinate slice sampling (stepping out and
-  shrinkage).
+Gradient based MCMC
+
+* NUTS and static HMC (diagonal or dense metric, Stan warmup), MALA.
+* Simplified manifold MALA and Riemannian manifold HMC with the SoftAbs
+  metric (`bayescomp_riemannian()`), for small models.
+* Microcanonical Langevin Monte Carlo, unadjusted (`bayescomp_mclmc()`).
+* Zig-Zag and bouncy particle samplers with numerical event times
+  (`bayescomp_pdmp()`).
+* Stochastic gradient Langevin dynamics and stochastic gradient HMC on
+  minibatches (`bayescomp_sgmcmc()`).
+
+Gradient free MCMC
+
+* Block and componentwise random walk Metropolis with adaptive covariance,
+  coordinate slice sampling, generalized elliptical slice sampling.
+* Differential evolution MCMC and the affine invariant stretch move
+  (`bayescomp_ensemble()`).
+* Non reversible and reversible parallel tempering with schedule adaptation
+  and a stepping stone evidence (`bayescomp_parallel_tempering()`).
+* Blocked Gibbs with per block kernels and numerical detection of Gaussian,
+  Gamma and Beta full conditionals (`bayescomp_gibbs()`).
+* Reversible jump MCMC across a list of models (`bayescomp_rjmcmc()`).
+
+Sequential and evidence methods
+
+* Adaptive tempered SMC with Metropolis, MALA or HMC rejuvenation and four
+  resampling schemes; nested sampling.
+* State space models: bootstrap particle filter, particle marginal
+  Metropolis-Hastings, particle Gibbs with ancestor sampling.
+
+Optimization and approximations
+
 * L-BFGS, BFGS and Newton optimization; Laplace approximation.
-* Mean field and full rank ADVI; single and multipath Pathfinder with Pareto
-  k diagnostics; Pathfinder or ADVI fits as MCMC initializers.
-* Adaptive tempered SMC with a Gaussian reference and log evidence estimate.
-* Rank normalized and folded split R-hat, bulk and tail ESS, MCSE,
-  divergences, tree depth, E-BFMI; simulation based calibration in the long
-  CI tests.
+* Mean field and full rank ADVI; multipath Pathfinder with Pareto k; planar
+  normalizing flow VI.
+* Expectation propagation over data partitions; INLA for a user chosen
+  latent block.
+* Neural posterior estimation for simulators; reverse diffusion Monte Carlo
+  (experimental).
+
+Diagnostics
+
+* Rank normalized and folded split R-hat, bulk, tail and quantile ESS, MCSE,
+  divergences, tree depth, E-BFMI; trace, density, rank, local ESS and
+  quantile ESS plots; simulation based calibration in the long CI tests.
 
 ## Next (0.2.0)
 
@@ -26,30 +60,12 @@ those needs are met.
   jaxR (StableHLO, XLA through PJRT: CUDA, ROCm, TPU, Metal and PJRT NPU
   plugins). The IR already carries the shapes and types needed. Apple's
   Neural Engine has no public general compute API.
-* Parallel tempering (replica exchange) with temperature ladder adaptation,
-  then non reversible swap schedules.
-* Elliptical slice sampling for Gaussian prior blocks detected in the IR.
-* Differential evolution MCMC and affine invariant ensemble samplers.
-* User composable blocked samplers (different kernels for parameter
-  blocks).
-* HMC or MALA rejuvenation and stratified or residual resampling in SMC.
-* Folded and localized ESS plots; rank plots.
-
-## Later
-
-* Compiler pass that detects a whitelist of conjugate structures, then
-  automatic Gibbs and block Gibbs.
-* State space abstractions, particle filters and particle MCMC.
-* Riemannian manifold HMC, microcanonical Langevin Monte Carlo, Zig-Zag and
-  bouncy particle samplers, normalizing flow VI: realistic once the native
-  backends are mature.
-
-## Not planned for the core package
-
-INLA, generic expectation propagation, reversible jump MCMC, neural
-simulation based inference, diffusion posterior sampling, stochastic
-gradient MCMC and nested sampling. They target narrower or structurally
-different problems; tempered SMC already covers evidence estimation.
+* Conjugacy detection on the IR instead of numerically, which would also
+  cover Dirichlet, Wishart and Poisson Gamma blocks.
+* Exact event times for Zig-Zag and BPS on models whose gradient bounds can
+  be derived from the IR.
+* Richer flows (coupling layers) for normalizing flow VI and neural
+  posterior estimation.
 
 ## Language features not yet supported
 
@@ -71,6 +87,23 @@ distributions. Programs that use them fail at checking with
 * Girolami and Calderhead (2011). Riemann manifold Langevin and Hamiltonian
   Monte Carlo methods.
 * Hoffman and Gelman (2014). The No-U-Turn sampler.
+* ter Braak (2006). Differential evolution Markov chain.
+* Goodman and Weare (2010). Ensemble samplers with affine invariance.
+* Welling and Teh (2011). Stochastic gradient Langevin dynamics.
+* Chen, Fox and Guestrin (2014). Stochastic gradient HMC.
+* Lindsten, Jordan and Schon (2014). Particle Gibbs with ancestor sampling.
+* Rezende and Mohamed (2015). Variational inference with normalizing flows.
+* Green (1995). Reversible jump MCMC.
+* Skilling (2006). Nested sampling.
+* Rue, Martino and Chopin (2009). INLA.
+* Betancourt (2013). The SoftAbs metric.
+* Bouchard-Cote, Vollmer and Doucet (2018). The bouncy particle sampler.
+* Bierkens, Fearnhead and Roberts (2019). The Zig-Zag process.
+* Vehtari et al. (2020). Expectation propagation as a way of life.
+* Syed, Bouchard-Cote, Deligiannidis and Doucet (2022). Non reversible
+  parallel tempering.
+* Robnik, De Luca, Silverstein and Seljak (2023). Microcanonical HMC.
+* Huang et al. (2024). Reverse diffusion Monte Carlo.
 * Betancourt (2017). A conceptual introduction to Hamiltonian Monte Carlo.
 * Kucukelbir, Tran, Ranganath, Gelman and Blei (2017). Automatic
   differentiation variational inference.
