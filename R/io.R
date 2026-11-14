@@ -107,11 +107,11 @@ json_num <- function(x) {
 }
 
 # nested row major arrays; the last dimension varies fastest
-json_array <- function(x, dims, leaf) {
+json_nested <- function(x, dims, leaf) {
   if (length(dims) == 1L) return(paste0("[", paste(leaf(x), collapse = ", "), "]"))
   inner <- vapply(seq_len(dims[1L]), function(i) {
     sl <- x[(seq_len(prod(dims[-1L])) - 1L) * dims[1L] + i]
-    json_array(sl, dims[-1L], leaf)
+    json_nested(sl, dims[-1L], leaf)
   }, "")
   paste0("[", paste(inner, collapse = ", "), "]")
 }
@@ -137,7 +137,7 @@ json_value <- function(v) {
     return(paste0("[", paste(leaf(v), collapse = ", "), "]"))
   }
   if (prod(d) == 0L) return("[]")
-  json_array(as.vector(v), d, leaf)
+  json_nested(as.vector(v), d, leaf)
 }
 
 # ---- R dump -----------------------------------------------------------------
@@ -148,7 +148,14 @@ read_rdump <- function(txt, file) {
   # evaluated in an environment that holds only the constructors R dump
   # files use (its parent is the empty environment), so no other code runs
   safe <- new.env(parent = emptyenv())
-  for (f in c("c", "structure", "list", ":", "-", "+", "integer", "double", "numeric", "seq", "rep", "array", "matrix", "as.integer", "as.double"))
+  # R dump files write .Dim, which structure() no longer accepts silently
+  assign("structure", function(.Data, ...) {
+    a <- list(...)
+    names(a)[names(a) == ".Dim"] <- "dim"
+    names(a)[names(a) == ".Dimnames"] <- "dimnames"
+    do.call(base::structure, c(list(.Data), a))
+  }, envir = safe)
+  for (f in c("c", "list", ":", "-", "+", "integer", "double", "numeric", "seq", "rep", "array", "matrix", "as.integer", "as.double"))
     assign(f, get(f, envir = baseenv()), envir = safe)
   assign("Inf", Inf, envir = safe); assign("NaN", NaN, envir = safe)
   assign("T", TRUE, envir = safe); assign("F", FALSE, envir = safe)

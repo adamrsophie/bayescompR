@@ -61,7 +61,7 @@ def_bounds <- function(stem, nb, constrain, unconstrain) {
     nm <- paste0(stem, "_", s)
     impl <- switch(s,
       constrain = function(y, ...) constrain(nm, y, list(...), NULL),
-      jacobian = function(y, ..., .ctx) constrain(nm, y, head(list(...), nb), .ctx),
+      jacobian = function(y, ..., .ctx) constrain(nm, y, utils::head(list(...), nb), .ctx),
       unconstrain = function(x, ...) unconstrain(nm, x, list(...)))
     def(nm, c("any", rep("any", nb)), r_bound_args, impl, ctx = s == "jacobian")
   })

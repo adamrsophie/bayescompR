@@ -242,7 +242,7 @@ ode_solve <- function(callf, y0, t0, ts, args, rtol, atol, maxsteps, method, nam
     # Jacobian of the augmented system: the state block and the identical
     # sensitivity diagonal blocks exactly, the dependence of the
     # sensitivity equations on the state by finite differences
-    jac <- function(t, Yv, F0) {
+    jac_aug <- function(t, Yv, F0) {
       M <- N * (P + 1L)
       y <- Yv[seq_len(N)]
       Jy <- hof_jac(function(z) callf(t, z, pv), y)$J
@@ -257,7 +257,7 @@ ode_solve <- function(callf, y0, t0, ts, args, rtol, atol, maxsteps, method, nam
     }
     # the tolerances apply to the states and their sensitivities
     Y0 <- c(y0v, as.vector(S0))
-    full <- if (method == "bdf") ode_ros(aug, t0v, Y0, tv, rtol, atol, maxsteps, name, jac)
+    full <- if (method == "bdf") ode_ros(aug, t0v, Y0, tv, rtol, atol, maxsteps, name, jac_aug)
             else ode_dopri(aug, t0v, Y0, tv, rtol, atol, maxsteps, name)
     Y <- full[, seq_len(N), drop = FALSE]
     S <- lapply(seq_along(tv), function(j) matrix(full[j, -seq_len(N)], N, P))
