@@ -11,6 +11,9 @@ bayescomp_smc(
   reference_scale = 1.5,
   ess_threshold = 0.5,
   num_mcmc_steps = 10L,
+  kernel = c("metropolis", "mala", "hmc"),
+  hmc_steps = 5L,
+  resampling = c("systematic", "stratified", "residual", "multinomial"),
   max_stages = 200L,
   seed = NULL,
   cores = 1L
@@ -31,7 +34,17 @@ best Pathfinder approximation with its covariance inflated by
 \item{ess_threshold}{Target relative effective sample size used to pick
 each temperature.}
 
-\item{num_mcmc_steps}{Metropolis steps per particle and temperature.}
+\item{num_mcmc_steps}{MCMC steps per particle and temperature.}
+
+\item{kernel}{Rejuvenation kernel: \code{"metropolis"} (random walk, no
+gradients), \code{"mala"} or \code{"hmc"} (\code{hmc_steps} leapfrog steps), all
+preconditioned by the particle covariance and tuned toward their
+optimal acceptance rates between stages.}
+
+\item{hmc_steps}{Leapfrog steps per HMC move.}
+
+\item{resampling}{\code{"systematic"}, \code{"stratified"}, \code{"residual"} or
+\code{"multinomial"}.}
 
 \item{max_stages}{Maximum number of temperatures.}
 

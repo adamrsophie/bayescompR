@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="bayescompR favicon: sampler trajectory in a hexagon">
+<polygon points="256,16 464,136 464,376 256,496 48,376 48,136" fill="#16233A" stroke="#E8A33D" stroke-width="24" stroke-linejoin="round"></polygon>
+<ellipse cx="256" cy="256" rx="150" ry="86" transform="rotate(-28 256 256)" fill="none" stroke="#3BA99C" stroke-width="12" opacity="0.55"></ellipse>
+<ellipse cx="256" cy="256" rx="70" ry="40" transform="rotate(-28 256 256)" fill="none" stroke="#3BA99C" stroke-width="12"></ellipse>
+<polyline points="128,360 196,300 256,256 318,212 380,176" fill="none" stroke="#E8A33D" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"></polyline>
+<circle cx="128" cy="360" r="20" fill="#E8A33D"></circle>
+<circle cx="380" cy="176" r="30" fill="#F4F1EA" stroke="#E8A33D" stroke-width="12"></circle>
+</svg>

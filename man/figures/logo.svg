@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="694" viewBox="0 0 600 694" role="img" aria-label="bayescompR hexagon logo: a sampler trajectory over posterior density contours">
+<polygon points="300,12 588,178 588,516 300,682 12,516 12,178" fill="#16233A" stroke="#E8A33D" stroke-width="18" stroke-linejoin="round"></polygon>
+<g fill="none" stroke="#3BA99C" stroke-width="5" opacity="0.9">
+<ellipse cx="300" cy="300" rx="190" ry="112" transform="rotate(-28 300 300)" opacity="0.35"></ellipse>
+<ellipse cx="300" cy="300" rx="134" ry="78" transform="rotate(-28 300 300)" opacity="0.6"></ellipse>
+<ellipse cx="300" cy="300" rx="76" ry="44" transform="rotate(-28 300 300)"></ellipse>
+</g>
+<polyline points="150,402 196,352 238,330 276,300 318,262 362,238 404,214 444,206" fill="none" stroke="#E8A33D" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"></polyline>
+<g fill="#E8A33D">
+<circle cx="150" cy="402" r="11"></circle>
+<circle cx="196" cy="352" r="9"></circle>
+<circle cx="238" cy="330" r="9"></circle>
+<circle cx="276" cy="300" r="9"></circle>
+<circle cx="318" cy="262" r="9"></circle>
+<circle cx="362" cy="238" r="9"></circle>
+<circle cx="404" cy="214" r="9"></circle>
+</g>
+<circle cx="444" cy="206" r="17" fill="#F4F1EA" stroke="#E8A33D" stroke-width="6"></circle>
+<text x="300" y="540" text-anchor="middle" fill="#F4F1EA" font-family="Space Grotesk, Avenir Next, Helvetica Neue, sans-serif" font-weight="700" font-size="68" letter-spacing="-0.5">bayescomp<tspan fill="#E8A33D">R</tspan></text>
+</svg>

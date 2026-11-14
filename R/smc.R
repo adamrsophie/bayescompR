@@ -27,7 +27,14 @@
 #' @param reference_scale Scale factor for the reference.
 #' @param ess_threshold Target relative effective sample size used to pick
 #'   each temperature.
-#' @param num_mcmc_steps Metropolis steps per particle and temperature.
+#' @param num_mcmc_steps MCMC steps per particle and temperature.
+#' @param kernel Rejuvenation kernel: `"metropolis"` (random walk, no
+#'   gradients), `"mala"` or `"hmc"` (`hmc_steps` leapfrog steps), all
+#'   preconditioned by the particle covariance and tuned toward their
+#'   optimal acceptance rates between stages.
+#' @param hmc_steps Leapfrog steps per HMC move.
+#' @param resampling `"systematic"`, `"stratified"`, `"residual"` or
+#'   `"multinomial"`.
 #' @param max_stages Maximum number of temperatures.
 #' @param seed Random seed.
 #' @param cores Workers for the particle moves (forked, not on Windows).
@@ -47,9 +54,15 @@
 #' @export
 bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinder", "standard"),
                           reference_scale = 1.5, ess_threshold = 0.5, num_mcmc_steps = 10L,
+                          kernel = c("metropolis", "mala", "hmc"), hmc_steps = 5L,
+                          resampling = c("systematic", "stratified", "residual", "multinomial"),
                           max_stages = 200L, seed = NULL, cores = 1L) {
   check_model(model)
   reference <- match.arg(reference)
+  kernel <- match.arg(kernel)
+  resampling <- match.arg(resampling)
+  resample <- switch(resampling, systematic = systematic_resample, stratified = stratified_resample,
+                     residual = residual_resample, multinomial = multinomial_resample)
   N <- as_count(num_particles, "num_particles", 10L)
   n <- model$dim
   if (n == 0L) stop("the model has no parameters", call. = FALSE)
@@ -58,6 +71,7 @@ bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinde
   info <- NULL
   res <- run_chains(model, 1L, seed, 1L, function(id) {
     lp <- lp_value_fun(model)
+    lpg_full <- model_lpg(model, jacobian = TRUE, propto = FALSE)
     mu <- rep(0, n)
     L <- diag(reference_scale, n)
     if (reference == "pathfinder") {
@@ -80,7 +94,7 @@ bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinde
     betas <- 0
     accs <- numeric(0)
     lw <- numeric(N)
-    scale <- 2.38 / sqrt(n)
+    scale <- switch(kernel, metropolis = 2.38 / sqrt(n), mala = 1 / n^(1 / 6), hmc = 1 / n^(1 / 4))
     for (stage in seq_len(max_stages)) {
       dl <- lpv - lg
       dl[!is.finite(dl)] <- -Inf
@@ -102,12 +116,22 @@ bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinde
       w <- exp(inc - mx)
       beta <- nb
       betas <- c(betas, beta)
-      idx <- systematic_resample(w / sum(w))
+      idx <- resample(w / sum(w))
       U <- U[idx, , drop = FALSE]; lg <- lg[idx]; lpv <- lpv[idx]
       # random walk Metropolis moves targeting pi_beta
       C <- stats::cov(U)
       Lc <- tryCatch(t(chol(C + diag(1e-10 * mean(diag(C)) + 1e-12, n))), error = function(e) diag(sqrt(pmax(diag(C), 1e-12)), n))
       acc_n <- 0
+      if (kernel != "metropolis") {
+        mv <- smc_gradient_moves(U, lg, lpv, beta, mu, L, Lc, scale, kernel, hmc_steps, num_mcmc_steps, lpg_full, cores)
+        U <- mv$U; lg <- mv$lg; lpv <- mv$lpv
+        acc <- mv$acc
+        accs <- c(accs, acc)
+        target_acc <- if (kernel == "mala") 0.574 else 0.65
+        scale <- scale * exp(acc - target_acc)
+        if (beta >= 1) break
+        next
+      }
       for (k in seq_len(num_mcmc_steps)) {
         P <- U + scale * matrix(stats::rnorm(N * n), N, n) %*% t(Lc)
         lgp <- log_g(P)
@@ -151,4 +175,84 @@ systematic_resample <- function(w) {
   N <- length(w)
   u <- (stats::runif(1) + 0:(N - 1L)) / N
   pmin(findInterval(u, cumsum(w)) + 1L, N)
+}
+
+stratified_resample <- function(w) {
+  N <- length(w)
+  u <- (stats::runif(N) + 0:(N - 1L)) / N
+  pmin(findInterval(u, cumsum(w)) + 1L, N)
+}
+multinomial_resample <- function(w) sample.int(length(w), length(w), replace = TRUE, prob = w)
+residual_resample <- function(w) {
+  N <- length(w)
+  k <- floor(N * w)
+  idx <- rep(seq_len(N), k)
+  R <- N - sum(k)
+  if (R > 0L) {
+    r <- N * w - k
+    idx <- c(idx, sample.int(N, R, replace = TRUE, prob = r))
+  }
+  idx
+}
+
+# MALA or HMC moves for every particle targeting
+# pi_beta = g^(1 - beta) p^beta, preconditioned by the particle covariance
+# C = Lc Lc^T (the inverse metric).
+smc_gradient_moves <- function(U, lg, lpv, beta, mu, L, Lc, eps, kernel, hmc_steps, steps, lpg, cores) {
+  N <- nrow(U)
+  C <- tcrossprod(Lc)
+  Sinv_apply <- function(x) backsolve(t(L), forwardsolve(L, x))
+  log_g1 <- function(u) {
+    z <- forwardsolve(L, u - mu)
+    -0.5 * sum(z^2) - 0.5 * length(u) * log(2 * pi) - sum(log(abs(diag(L))))
+  }
+  tgt <- function(u) {
+    r <- tryCatch(lpg(u), bayescomp_fatal_error = function(e) stop(e), bayescomp_error = function(e) NULL)
+    if (is.null(r) || !is.finite(r$value) || any(!is.finite(r$grad))) return(list(V = Inf, lp = -Inf, lg = log_g1(u), g = rep(0, length(u))))
+    lgu <- log_g1(u)
+    grad <- beta * r$grad - (1 - beta) * Sinv_apply(u - mu)
+    list(V = -(beta * r$value + (1 - beta) * lgu), lp = r$value, lg = lgu, g = -grad)
+  }
+  one <- function(i) {
+    u <- U[i, ]
+    st <- tgt(u)
+    acc_sum <- 0
+    for (k in seq_len(steps)) {
+      if (kernel == "mala") {
+        m0 <- u - 0.5 * eps^2 * as.vector(C %*% st$g)
+        un <- m0 + eps * as.vector(Lc %*% stats::rnorm(length(u)))
+        sn <- tgt(un)
+        a <- 0
+        if (is.finite(sn$V)) {
+          m1 <- un - 0.5 * eps^2 * as.vector(C %*% sn$g)
+          lf <- -0.5 * sum(forwardsolve(Lc, un - m0)^2) / eps^2
+          lb <- -0.5 * sum(forwardsolve(Lc, u - m1)^2) / eps^2
+          la <- st$V - sn$V + lb - lf
+          a <- if (is.nan(la)) 0 else min(1, exp(la))
+        }
+      } else {
+        p <- backsolve(t(Lc), stats::rnorm(length(u)))
+        H0 <- st$V + 0.5 * sum(p * as.vector(C %*% p))
+        sn <- st; un <- u
+        for (l in seq_len(hmc_steps)) {
+          p <- p - 0.5 * eps * sn$g
+          un <- un + eps * as.vector(C %*% p)
+          sn <- tgt(un)
+          if (!is.finite(sn$V)) break
+          p <- p - 0.5 * eps * sn$g
+        }
+        H1 <- sn$V + 0.5 * sum(p * as.vector(C %*% p))
+        a <- if (is.finite(H1)) min(1, exp(H0 - H1)) else 0
+      }
+      if (stats::runif(1) < a) { u <- un; st <- sn }
+      acc_sum <- acc_sum + a
+    }
+    c(u, st$lg, st$lp, acc_sum / steps)
+  }
+  rows <- if (cores > 1L && .Platform$OS.type != "windows") {
+    parallel::mclapply(seq_len(N), one, mc.cores = cores)
+  } else lapply(seq_len(N), one)
+  M <- do.call(rbind, rows)
+  n <- ncol(U)
+  list(U = M[, seq_len(n), drop = FALSE], lg = M[, n + 1L], lpv = M[, n + 2L], acc = mean(M[, n + 3L]))
 }
