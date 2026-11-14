@@ -76,5 +76,6 @@ Collate:
     'geometric.R'
     'pdmp.R'
     'flow.R'
+    'ssm.R'
     'ir.R'
 Config/roxygen2/version: 8.1.1
