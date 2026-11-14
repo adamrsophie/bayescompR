@@ -1,36 +1,37 @@
 Package: bayescompR
-Title: A Pure R Implementation of the Stan Probabilistic Programming Language
+Title: Pure R Implementation of the 'Stan' Probabilistic Programming Language
 Version: 0.1.0
 Authors@R:
     person("Adam R", "Sophie", email = "adamrsophie@gmail.com",
            role = c("aut", "cre", "cph"))
-Description: An independent implementation, written entirely in R, of the
-    Stan probabilistic programming language and its inference algorithms.
-    Stan programs are tokenized, parsed into a typed abstract syntax tree,
-    checked by a semantic analyzer, and compiled into R closures that run on
-    a reverse mode automatic differentiation tape. Constrained parameters are
-    mapped to an unconstrained space with the Jacobian adjustments used by
-    Stan. Inference includes the No-U-Turn sampler with multinomial
-    trajectory sampling and windowed step size and metric adaptation, static
-    Hamiltonian Monte Carlo, Riemannian manifold samplers, microcanonical
-    Langevin Monte Carlo, the Metropolis adjusted Langevin algorithm,
-    adaptive random walk Metropolis, slice and elliptical slice sampling,
-    blocked Gibbs sampling, affine invariant and differential evolution
-    ensembles, non-reversible parallel tempering, zig-zag and bouncy
-    particle samplers, tempered sequential Monte Carlo, particle filters
-    and particle MCMC for state space models, stochastic gradient MCMC,
-    expectation propagation, nested sampling, reversible jump MCMC,
-    integrated nested Laplace approximation, maximum a posteriori and
-    maximum likelihood optimization, Laplace approximation, mean field,
-    full rank and normalizing flow variational inference, Pathfinder,
-    neural posterior estimation and diffusion based sampling. A typed,
-    versioned intermediate representation lets separately installed native
-    backends compute the log density and its gradient. Posterior summaries
-    use
-    rank normalized split R-hat and bulk and tail effective sample sizes.
-    No C++ compiler, Stan installation, or external inference engine is
-    required. This package is not affiliated with or endorsed by the Stan
-    Development Team or NumFOCUS.
+Description: An independent implementation, written entirely in R, of a large
+    subset of the 'Stan' probabilistic programming language (Carpenter et al.
+    2017 <doi:10.18637/jss.v076.i01>) and of many inference algorithms.
+    Programs are parsed into a typed syntax tree, checked by a semantic
+    analyzer, and compiled into R closures that run on a reverse mode
+    automatic differentiation tape. Constrained parameters are mapped to an
+    unconstrained space with the Jacobian adjustments used by 'Stan'.
+    Inference includes the No-U-Turn sampler (Hoffman and Gelman 2014
+    <doi:10.48550/arXiv.1111.4246>; Betancourt 2017
+    <doi:10.48550/arXiv.1701.02434>) with windowed step size and metric
+    adaptation, static Hamiltonian Monte Carlo, Riemannian manifold samplers,
+    microcanonical Langevin Monte Carlo, the Metropolis adjusted Langevin
+    algorithm, adaptive random walk Metropolis, slice and elliptical slice
+    sampling, blocked Gibbs sampling, ensemble samplers, non-reversible
+    parallel tempering, zig-zag and bouncy particle samplers, sequential
+    Monte Carlo, particle MCMC for state space models, stochastic gradient
+    MCMC, expectation propagation, nested sampling, reversible jump MCMC,
+    integrated nested Laplace approximation, optimization, Laplace
+    approximation, mean field, full rank and normalizing flow variational
+    inference, Pathfinder (Zhang et al. 2022
+    <doi:10.48550/arXiv.2108.03782>), neural posterior estimation
+    and diffusion based sampling. A typed, versioned intermediate
+    representation lets separately installed native backends compute the log
+    density and its gradient. Posterior summaries use rank normalized split
+    R-hat and bulk and tail effective sample sizes (Vehtari et al. 2021
+    <doi:10.1214/20-BA1221>). No C++ compiler or 'Stan' installation is
+    required. This package is not affiliated with or endorsed by the 'Stan'
+    Development Team or 'NumFOCUS'.
 License: GPL-3
 Encoding: UTF-8
 Language: en-US

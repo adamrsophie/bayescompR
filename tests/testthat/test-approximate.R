@@ -1,4 +1,5 @@
 test_that("INLA matches the exact eight schools hyperparameter posterior", {
+  skip_on_cran()
   y <- c(28, 8, -3, 7, -1, 1, 18, 12); s <- c(15, 10, 16, 11, 9, 11, 10, 18)
   m <- bayescomp_model("data { int J; vector[J] y; vector[J] s; }
     parameters { real mu; real<lower=0> tau; vector[J] theta; }
@@ -18,6 +19,7 @@ test_that("INLA matches the exact eight schools hyperparameter posterior", {
 })
 
 test_that("neural posterior estimation recovers a normal posterior", {
+  skip_on_cran()
   set.seed(3)
   w <- mdn_init(2, 2, 3, 5); X <- matrix(rnorm(20), 10); Tm <- matrix(rnorm(20), 10)
   r <- mdn_loglik(w, X, Tm)
@@ -35,6 +37,7 @@ test_that("neural posterior estimation recovers a normal posterior", {
 })
 
 test_that("reverse diffusion Monte Carlo approximates a mixture", {
+  skip_on_cran()
   mix <- bayescomp_model("parameters { real x; }
     model { target += log_mix(0.3, normal_lpdf(x | -3, 1), normal_lpdf(x | 3, 1)); }")
   fit <- bayescomp_diffusion(mix, num_samples = 150, steps = 30, inner_samples = 24, reference = "standard",

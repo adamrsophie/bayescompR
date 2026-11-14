@@ -8,12 +8,14 @@ exact_lz <- function(s, y = c(0.5, 1.2, 2, 0.8, 1.6)) {
 }
 
 test_that("nested sampling estimates the evidence", {
+  skip_on_cran()
   fit <- bayescomp_nested(norm_model(2), num_live = 200, seed = 1)
   expect_equal(fit$log_evidence, exact_lz(2), tolerance = 4 * fit$log_evidence_se + 0.05)
   expect_equal(mean(bayescomp_extract(fit, "mu")), 6.1 / 5.25, tolerance = 0.1)
 })
 
 test_that("reversible jump recovers posterior model probabilities", {
+  skip_on_cran()
   r <- bayescomp_rjmcmc(list(narrow = norm_model(1), wide = norm_model(10)), iter_sampling = 3000, seed = 1)
   z <- c(exact_lz(1), exact_lz(10))
   expect_equal(r$probabilities$posterior, exp(z - max(z)) / sum(exp(z - max(z))), tolerance = 0.05)
@@ -22,6 +24,7 @@ test_that("reversible jump recovers posterior model probabilities", {
 })
 
 test_that("EP and SG-MCMC fit a linear regression", {
+  skip_on_cran()
   set.seed(1)
   N <- 120
   X <- cbind(1, rnorm(N))

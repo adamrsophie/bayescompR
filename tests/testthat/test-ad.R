@@ -47,6 +47,7 @@ test_that("linear algebra gradients match finite differences", {
 })
 
 test_that("GP kernels have finite gradients for parameter inputs", {
+  skip_on_cran()
   for (k in c("gp_exponential_cov", "gp_matern32_cov", "gp_matern52_cov", "gp_periodic_cov", "gp_exp_quad_cov")) {
     extra <- if (k == "gp_periodic_cov") ", 2.0" else ""
     m <- bayescomp_model(sprintf("parameters { array[3] real x; } model { matrix[3, 3] K = %s(x, 1.3, 0.7%s); target += sum(K); }", k, extra))

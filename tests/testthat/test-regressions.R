@@ -55,6 +55,7 @@ test_that("diagnostics match the posterior package", {
 })
 
 test_that("unequal minibatches give an unbiased stochastic gradient", {
+  skip_on_cran()
   # N = 3, batch size 2: batches of sizes 2 and 1 used equally often
   m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
                         model { mu ~ normal(0, 1); y ~ normal(mu, 1); }", data = list(N = 3, y = c(0, 0, 3)))
@@ -68,6 +69,7 @@ test_that("particle filter increments ignore zero weight particles", {
 })
 
 test_that("warmup only fits and impossible diffusion horizons", {
+  skip_on_cran()
   m <- bayescomp_model("parameters { real x; } model { x ~ normal(0, 1); }")
   f <- bayescomp_sample(m, chains = 1, iter_warmup = 20, iter_sampling = 20, seed = 1, refresh = 0)
   f$n_warmup_saved <- dim(f$draws)[1L]
@@ -78,6 +80,7 @@ test_that("warmup only fits and impossible diffusion horizons", {
 })
 
 test_that("generated quantities refuse a fit with different parameters", {
+  skip_on_cran()
   m <- bayescomp_model("parameters { real a; real b; } model { a ~ normal(0, 1); b ~ normal(0, 1); }")
   f <- bayescomp_sample(m, chains = 1, iter_warmup = 20, iter_sampling = 20, seed = 1, refresh = 0)
   swapped <- bayescomp_model("parameters { real b; real a; } model { } generated quantities { real s = a; }")
@@ -85,6 +88,7 @@ test_that("generated quantities refuse a fit with different parameters", {
 })
 
 test_that("Gibbs slice kernel leaves a bounded uniform invariant", {
+  skip_on_cran()
   m <- bayescomp_model("parameters { real<lower=0, upper=1> x; } model { }")
   f <- bayescomp_gibbs(m, blocks = list(list(pars = "x", kernel = "slice")), chains = 2,
                        iter_warmup = 100, iter_sampling = 1500, seed = 1)

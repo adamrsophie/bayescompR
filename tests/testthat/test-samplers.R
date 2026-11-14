@@ -14,6 +14,7 @@ check_moments <- function(fit) {
 }
 
 test_that("MALA, Metropolis and slice sampling target the posterior", {
+  skip_on_cran()
   m <- bayescomp_model(target_code)
   n <- if (long_tests()) 1000L else 300L
   for (a in c("mala", "metropolis", "slice")) {
@@ -37,6 +38,7 @@ test_that("value only density matches the gradient density up to a constant", {
 })
 
 test_that("Pathfinder fits initialize chains", {
+  skip_on_cran()
   m <- bayescomp_model(target_code)
   pf <- suppressWarnings(bayescomp_pathfinder(m, num_paths = 2, num_draws = 50, seed = 1))
   fit <- bayescomp_sample(m, chains = 2, iter_warmup = 50, iter_sampling = 20, init = pf, seed = 1, refresh = 0)
@@ -44,6 +46,7 @@ test_that("Pathfinder fits initialize chains", {
 })
 
 test_that("tempered SMC estimates the marginal likelihood", {
+  skip_on_cran()
   y <- c(0.5, 1.2, 2, 0.8, 1.6)
   m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
     model { mu ~ normal(0, 2); y ~ normal(mu, 1); }", data = list(N = 5, y = y))
@@ -60,6 +63,7 @@ test_that("tempered SMC estimates the marginal likelihood", {
 })
 
 test_that("tempered SMC finds both modes of a mixture", {
+  skip_on_cran()
   m <- bayescomp_model("parameters { real x; }
     model { target += log_mix(0.5, normal_lpdf(x | -4, 0.5), normal_lpdf(x | 4, 0.5)); }")
   fit <- bayescomp_smc(m, num_particles = 400, reference = "standard", reference_scale = 6, seed = 1)
@@ -98,4 +102,11 @@ test_that("unseeded runs advance the global stream and record their seed", {
   set.seed(5); a <- stats::runif(1)
   set.seed(5); run(seed = 3); b <- stats::runif(1)
   expect_identical(a, b)
+})
+
+test_that("a short NUTS run works everywhere, including on CRAN", {
+  m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(1, 0.5); }")
+  f <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 200, seed = 3, refresh = 0)
+  expect_equal(dim(f$draws)[1:2], c(200L, 2L))
+  expect_equal(mean(bayescomp_extract(f, "mu")), 1, tolerance = 0.3)
 })

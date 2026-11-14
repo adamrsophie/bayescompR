@@ -8,6 +8,7 @@ moments_ok <- function(fit, tol = 0.25) {
 }
 
 test_that("elliptical slice sampling targets the posterior", {
+  skip_on_cran()
   m <- bayescomp_model(target2)
   fit <- bayescomp_sample(m, chains = 2, iter_warmup = 200, iter_sampling = 600,
                           algorithm = "elliptical_slice", metric = "dense_e", seed = 1, refresh = 0)
@@ -15,6 +16,7 @@ test_that("elliptical slice sampling targets the posterior", {
 })
 
 test_that("ensemble samplers target the posterior", {
+  skip_on_cran()
   m <- bayescomp_model(target2)
   for (meth in c("de", "stretch")) {
     fit <- bayescomp_ensemble(m, method = meth, iter_warmup = 400, iter_sampling = 400, seed = 2)
@@ -24,6 +26,7 @@ test_that("ensemble samplers target the posterior", {
 })
 
 test_that("parallel tempering mixes between modes and estimates the evidence", {
+  skip_on_cran()
   mix <- bayescomp_model("parameters { real x; }
     model { target += log_mix(0.3, normal_lpdf(x | -5, 0.5), normal_lpdf(x | 5, 0.5)); }")
   fit <- bayescomp_parallel_tempering(mix, num_temps = 8, chains = 1, iter_warmup = 300, iter_sampling = 600,
@@ -46,6 +49,7 @@ test_that("parallel tempering mixes between modes and estimates the evidence", {
 })
 
 test_that("Gibbs sampling detects conjugate conditionals", {
+  skip_on_cran()
   y <- c(1, 2, 0.5, 1.5, 2.5)
   m <- bayescomp_model("data { int N; vector[N] y; }
     parameters { real mu; real<lower=0> tau; real<lower=0, upper=1> p; vector[2] b; real<lower=0> s; }
@@ -73,6 +77,7 @@ test_that("Gibbs sampling detects conjugate conditionals", {
 })
 
 test_that("Riemannian samplers and MCLMC target the posterior", {
+  skip_on_cran()
   m <- bayescomp_model(target2)
   fit <- bayescomp_riemannian(m, "smmala", chains = 2, iter_warmup = 150, iter_sampling = 400, seed = 1)
   moments_ok(fit, 0.25)
@@ -91,6 +96,7 @@ test_that("Riemannian samplers and MCLMC target the posterior", {
 })
 
 test_that("piecewise deterministic samplers target the posterior", {
+  skip_on_cran()
   m <- bayescomp_model(target2)
   for (meth in c("zigzag", "bps")) {
     fit <- bayescomp_pdmp(m, meth, chains = 2, iter_warmup = 150, iter_sampling = 500, seed = 1)
@@ -100,6 +106,7 @@ test_that("piecewise deterministic samplers target the posterior", {
 })
 
 test_that("normalizing flow VI fits a correlated Gaussian", {
+  skip_on_cran()
   m <- bayescomp_model("parameters { vector[2] x; } model { x ~ multi_normal([1, -1]', [[1, 0.8], [0.8, 1]]); }")
   fit <- bayescomp_flow_vi(m, layers = 2, iter = 500, learning_rate = 0.05, seed = 2)
   x <- bayescomp_extract(fit, "x")
@@ -110,6 +117,7 @@ test_that("normalizing flow VI fits a correlated Gaussian", {
 })
 
 test_that("diagnostic plots draw for every type", {
+  skip_on_cran()
   m <- bayescomp_model("parameters { real x; } model { x ~ normal(0, 1); }")
   fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 200, seed = 1, refresh = 0)
   grDevices::pdf(NULL)

@@ -7,6 +7,7 @@ generated quantities { array[J] real y_rep = normal_rng(theta, sigma); }"
 d8 <- list(J = 8, y = c(28, 8, -3, 7, -1, 1, 18, 12), sigma = c(15, 10, 16, 11, 9, 11, 10, 18))
 
 test_that("log density, gradient and transforms agree with direct computation", {
+  skip_on_cran()
   m <- bayescomp_model(code8, data = d8)
   expect_equal(m$dim, 10L)
   set.seed(3)

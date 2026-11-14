@@ -153,9 +153,9 @@ set_block <- function(q, idx, v) { q[idx] <- v; q }
 # list(draw(), logd(v)) or NULL when the fit fails
 gibbs_fit <- function(family, b, q, lpf) {
   idx <- b$idx
+  f <- function(v) lpf(set_block(q, idx, v))
   if (family == "gaussian") {
     k <- length(idx)
-    f <- function(v) lpf(set_block(q, idx, v))
     v0 <- q[idx]
     f0 <- f(v0)
     if (!is.finite(f0)) return(NULL)
@@ -183,7 +183,6 @@ gibbs_fit <- function(family, b, q, lpf) {
                 logd = function(v) sum(log(diag(R))) - 0.5 * sum((R %*% (v - m))^2)))
   }
   u0 <- q[idx]
-  f <- function(u) lpf(set_block(q, idx, u))
   if (family %in% c("gamma1", "gamma-1", "gamma2", "gamma-2")) {
     kk <- as.numeric(sub("gamma", "", family))
     f0 <- f(u0)

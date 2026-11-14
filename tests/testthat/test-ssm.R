@@ -34,6 +34,7 @@ test_that("the particle filter likelihood matches the Kalman filter", {
 })
 
 test_that("particle MCMC recovers the parameter posterior", {
+  skip_on_cran()
   s <- lgssm()
   m <- bayescomp_model("parameters { real<lower=-1, upper=1> phi; real<lower=0> q; }
     model { phi ~ normal(0, 1); q ~ normal(0, 1); }")

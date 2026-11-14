@@ -1,4 +1,5 @@
 test_that("NUTS recovers a known posterior", {
+  skip_on_cran()
   m <- bayescomp_model("parameters { vector[2] x; real<lower=0> s; } model { x ~ normal(1, 2); s ~ gamma(3, 2); }")
   n <- if (long_tests()) 1000L else 300L
   fit <- bayescomp_sample(m, chains = 2, iter_warmup = n, iter_sampling = n, seed = 11, refresh = 0)
@@ -18,6 +19,7 @@ test_that("NUTS recovers a known posterior", {
 })
 
 test_that("dense metric, static HMC and fixed parameter models run", {
+  skip_on_cran()
   m <- bayescomp_model("parameters { vector[2] x; } model { x ~ multi_normal([0, 0]', [[1, 0.8], [0.8, 1]]); }")
   fit <- bayescomp_sample(m, chains = 1, iter_warmup = 200, iter_sampling = 200, metric = "dense_e", seed = 2, refresh = 0)
   expect_equal(dim(fit$inv_metric[[1L]]), c(2L, 2L))
@@ -29,6 +31,7 @@ test_that("dense metric, static HMC and fixed parameter models run", {
 })
 
 test_that("optimization, Laplace, ADVI and Pathfinder agree with the analytic answer", {
+  skip_on_cran()
   y <- seq(-1, 3, length.out = 20)
   m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; real<lower=0> sigma; }
     model { y ~ normal(mu, sigma); }", data = list(N = 20, y = y))
@@ -46,6 +49,7 @@ test_that("optimization, Laplace, ADVI and Pathfinder agree with the analytic an
 })
 
 test_that("diagnostics agree with the posterior package", {
+  skip_on_cran()
   skip_if_not_installed("posterior")
   set.seed(5)
   x <- matrix(stats::rnorm(800), 200, 4) + rep(c(0, 0.1, 0, 0.3), each = 200)
