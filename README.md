@@ -63,7 +63,7 @@ bayescomp_diagnose(fit)
 | Area | Functions |
 |------|-----------|
 | Language | all program blocks, user functions (recursion, `_lpdf`, `_lp`, `_rng`, `_jacobian`), every constrained type including `sum_to_zero_vector`, stochastic matrices and Cholesky factors, truncation, `offset` and `multiplier` |
-| Library | elementwise math, containers, linear algebra with analytic gradients, more than 100 distributions with lpdf, lcdf, lccdf and rng |
+| Library | elementwise math, containers, linear algebra with analytic gradients, 66 distribution families (31 with lcdf and lccdf, 61 with rng) |
 | MCMC | `bayescomp_sample()`: NUTS, static HMC, MALA, block or componentwise random walk Metropolis with adaptive covariance, slice sampling; diagonal or dense metric |
 | More MCMC | elliptical slice sampling, `bayescomp_parallel_tempering()` (non reversible), `bayescomp_ensemble()` (DE MCMC, stretch move), `bayescomp_gibbs()` (blocked, with conjugacy detection), `bayescomp_riemannian()` (smMALA, RMHMC), `bayescomp_mclmc()`, `bayescomp_pdmp()` (Zig-Zag, BPS), `bayescomp_sgmcmc()` (SGLD, SGHMC), `bayescomp_rjmcmc()` |
 | Sequential and evidence | `bayescomp_smc()` (tempered SMC with log evidence), `bayescomp_nested()`, `bayescomp_ssm()`, `bayescomp_particle_filter()`, `bayescomp_pmcmc()` (PMMH, particle Gibbs) |
@@ -80,7 +80,7 @@ the program is checked. See `vignette("stan-language")` for the full list.
 ## Speed
 
 Everything runs in the R interpreter, so a gradient costs tens to hundreds of
-microseconds rather than the nanoseconds of compiled Stan. Densities are
+microseconds, far slower than compiled Stan. Densities are
 fused into single tape nodes with analytic partial derivatives, and the tape
 avoids copying. For large models, the native backends compile the same IR
 to machine code. See `vignette("performance")`.

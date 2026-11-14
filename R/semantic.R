@@ -403,7 +403,7 @@ sem_expr <- function(s, e, allow_void = FALSE) {
         if (!is_scalar_ty(t)) stop_semantic("'!' needs an int or real operand", e$loc)
         e$type <- T_int
       } else {
-        if (t$nd > 0L || !(t$base %in% c("int", "real", "vector", "row_vector", "matrix")))
+        if (!(t$base %in% c("int", "real", "vector", "row_vector", "matrix")))
           stop_semantic(sprintf("unary %s is not defined for %s", e$op, ty_str(t)), e$loc)
         e$type <- t
       }
@@ -587,10 +587,8 @@ binop_type <- function(op, a, b) {
       if (sc(a) && sc(b)) return(T_real)
       NULL
     },
-    "^" = {
-      if (sc(a) && sc(b)) return(T_real)
-      NULL
-    },
+    # since Stan 2.30 ^ is elementwise like .^
+    "^" = ,
     ".^" = {
       if (sc(a) && sc(b)) return(T_real)
       if (isC(a) && sc(b)) return(a)
@@ -650,6 +648,10 @@ describe_sigs <- function(s, name) {
 
 sem_call <- function(s, e) {
   nm <- e$name
+  # higher order functions (ODE solvers, reduce_sum, ...) take a function name
+  # as an argument; report them before that argument fails to resolve
+  if (nm %in% unsupported_functions && is.null(s$ufuns[[nm]]) && is.null(.lib[[nm]]))
+    stop_unsupported(sprintf("function '%s' is not implemented in this version of bayescompR", nm), e$loc)
   args <- lapply(e$args, function(a) sem_expr(s, a))
   types <- lapply(args, `[[`, "type")
   if (nm == "target") {

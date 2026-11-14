@@ -169,7 +169,7 @@ op_sub <- function(a, b) {
   same_shape(a, b, "subtraction")
   as_dbl(a) - as_dbl(b)
 }
-op_neg <- function(a) if (is.integer(a)) -a else -as_dbl(a)
+op_neg <- function(a) if (is.list(a) && !is_ad(a)) lapply(a, op_neg) else if (is.integer(a)) -a else -as_dbl(a)
 op_elt_mul <- function(a, b) {
   same_shape(a, b, "elementwise multiplication")
   as_dbl(a) * as_dbl(b)
@@ -188,7 +188,7 @@ int_check <- function(x, what) {
 op_int_add <- function(a, b) int_check(suppressWarnings(a + b), "addition")
 op_int_sub <- function(a, b) int_check(suppressWarnings(a - b), "subtraction")
 op_int_mul <- function(a, b) int_check(suppressWarnings(a * b), "multiplication")
-op_int_neg <- function(a) -a
+op_int_neg <- function(a) if (is.list(a) && !is_ad(a)) lapply(a, op_int_neg) else -a
 op_int_div <- function(a, b) {
   if (b == 0L) stop_domain("integer division by zero")
   q <- abs(a) %/% abs(b)
@@ -234,6 +234,8 @@ op_cmp <- function(op, a, b) {
   vb <- val(b)
   r <- switch(op, "==" = va == vb, "!=" = va != vb, "<" = va < vb, "<=" = va <= vb,
               ">" = va > vb, ">=" = va >= vb)
+  # comparisons with NaN are false, except != which is true
+  if (anyNA(r)) return(as.integer(op == "!="))
   as.integer(isTRUE(r))
 }
 op_not <- function(a) as.integer(val(a) == 0)
@@ -367,8 +369,9 @@ bin2 <- function(nm, f) {
   })
 }
 bin2("pow", function(a, b) ad_pow(a, b))
-bin2("fmin", function(a, b) ad_ifelse(val(a) <= val(b) | is.na(val(b)), a, b))
-bin2("fmax", function(a, b) ad_ifelse(val(a) >= val(b) | is.na(val(b)), a, b))
+# a NaN argument is ignored, as in C's fmin and fmax
+bin2("fmin", function(a, b) ad_ifelse(is.na(val(b)) | (!is.na(val(a)) & val(a) <= val(b)), a, b))
+bin2("fmax", function(a, b) ad_ifelse(is.na(val(b)) | (!is.na(val(a)) & val(a) >= val(b)), a, b))
 bin2("fdim", function(a, b) ad_ifelse(val(a) > val(b), a - b, 0 * a))
 bin2("fmod", function(a, b) ad_binary(a, b, function(x, y) x - trunc(x / y) * y,
                                       function(x, y, r) 1, function(x, y, r) -trunc(x / y)))

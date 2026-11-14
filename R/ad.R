@@ -104,7 +104,9 @@ ad_backward <- function(out) {
   adj[[out$id]] <- 1
   for (i in seq.int(out$id, 1L)) {
     g <- adj[[i]]
-    if (is.null(g)) next
+    # a zero adjoint contributes nothing; skipping it also keeps 0 * Inf
+    # partials (a log at a boundary) from turning the gradient into NaN
+    if (is.null(g) || (!anyNA(g) && all(g == 0))) next
     gr <- grl[[i]]
     if (is.null(gr)) next
     cs <- gr(g)
@@ -551,8 +553,10 @@ ad_lbeta <- function(a, b) {
     function(a, b, y) digamma(a) - digamma(a + b),
     function(a, b, y) digamma(b) - digamma(a + b))
 }
+# lchoose rounds k, so real arguments use Stan's -log1p(n) - lbeta(n - k + 1, k + 1)
+lchoose_real <- function(n, k) ifelse(k == round(k), lchoose(n, round(k)), -log1p(n) - lbeta(n - k + 1, k + 1))
 ad_lchoose <- function(n, k) {
-  ad_binary(n, k, lchoose,
+  ad_binary(n, k, lchoose_real,
     function(n, k, y) digamma(n + 1) - digamma(n - k + 1),
     function(n, k, y) digamma(n - k + 1) - digamma(k + 1))
 }

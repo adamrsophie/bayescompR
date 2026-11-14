@@ -181,3 +181,32 @@ test_that("generated quantities of tempering, ensembles and RJMCMC are reproduci
   ens <- function() bayescomp_extract(bayescomp_ensemble(m, iter_warmup = 20, iter_sampling = 5, seed = 2), "z")
   expect_identical(ens(), ens())
 })
+
+test_that("large precision negative binomials, real lchoose and NaN comparisons match Stan", {
+  v <- function(code) bayescomp_constrain(bayescomp_model(paste("generated quantities { real a =", code, "; }")), numeric(0))$a
+  expect_equal(v("neg_binomial_2_lpmf(3 | 2, 1e15)"), stats::dpois(3, 2, log = TRUE))
+  expect_equal(v("neg_binomial_2_log_lpmf(3 | log(2), 1e15)"), stats::dpois(3, 2, log = TRUE))
+  expect_equal(v("neg_binomial_2_lpmf(3 | 2, 5)"), stats::dnbinom(3, size = 5, mu = 2, log = TRUE))
+  expect_equal(v("lchoose(5.5, 2.5)"), lgamma(6.5) - lgamma(3.5) - lgamma(4), tolerance = 1e-12)
+  expect_equal(v("not_a_number() != 1"), 1L)
+  expect_equal(v("not_a_number() < 1"), 0L)
+  expect_equal(v("fmax(not_a_number(), 2)"), 2)
+  expect_equal(v("fmin(not_a_number(), 2)"), 2)
+  m <- bayescomp_model("parameters { real<lower=0> p; } model { target += neg_binomial_2_lpmf(3 | 2, p); }")
+  fd <- (bayescomp_log_prob(m, 1 + 1e-6) - bayescomp_log_prob(m, 1 - 1e-6)) / 2e-6
+  expect_equal(as.vector(bayescomp_grad_log_prob(m, 1)), fd, tolerance = 1e-6)
+  b <- bayescomp_model("parameters { real x; } model { target += binary_log_loss(1, inv_logit(x)); }")
+  expect_true(is.finite(bayescomp_grad_log_prob(b, 40)))
+})
+
+test_that("elementwise ^, unary minus on arrays and unsupported higher order calls", {
+  m <- bayescomp_model("parameters { vector[3] v; array[2] real a; } model { vector[3] w = v ^ 2; array[2] real b = -a; target += sum(w) + sum(b); }
+                        generated quantities { array[2] vector[2] q = -{[1, 2]', [3, 4]'}; array[2] int k = -{1, 2}; }")
+  expect_equal(as.vector(bayescomp_grad_log_prob(m, 1:5)), c(2, 4, 6, -1, -1))
+  r <- bayescomp_constrain(m, 1:5)
+  expect_equal(r$k, c(-1L, -2L))
+  expect_equal(as.vector(t(r$q)), -(1:4))
+  expect_error(bayescomp_model("functions { real ps(array[] real s, int a, int b) { return sum(s); } }
+                                data { array[2] real y; } parameters { real x; } model { target += reduce_sum(ps, y, 1); }"),
+               class = "bayescomp_unsupported_error")
+})

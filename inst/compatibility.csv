@@ -18,9 +18,9 @@ language,algebraic solvers and 1D integrators,not_implemented,,raises bayescomp_
 language,map_rect and reduce_sum,not_implemented,,raises bayescomp_unsupported_error
 language,embedded Laplace functions,not_implemented,,raises bayescomp_unsupported_error
 language,transform functions (*_constrain *_unconstrain *_jacobian),not_implemented,test-semantic.R,raise bayescomp_unsupported_error
-library,elementwise math functions,implemented,test-ad.R,gradients checked by finite differences
-library,container and array functions,implemented,test-model.R,
-library,linear algebra,partial,test-ad.R,no SVD gradients; no general eigendecomposition; no FFT
+library,elementwise math functions,partial,test-ad.R,gradients checked by finite differences; the ^ operator takes scalars only and some vectorized signatures are missing
+library,container and array functions,partial,test-model.R,unary minus on arrays and some overloads are missing
+library,linear algebra,partial,test-ad.R,singular values have gradients but svd_U and svd_V do not; no general eigendecomposition; no FFT
 library,sparse CSR functions,not_implemented,,
 library,HMM functions,not_implemented,,
 library,distributions lpdf and lpmf,partial,test-distributions.R,Wiener; Gaussian DLM; multi GP and beta negative binomial missing

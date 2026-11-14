@@ -1069,6 +1069,17 @@ lp_neg_binomial <- function(n, alpha, beta, propto) {
 defdist("neg_binomial", c("ints", "reals", "reals"), lp_neg_binomial, discrete = TRUE,
   rng = function(a, b) vrng(function(n, a, b) as.integer(stats::rpois(n, stats::rgamma(n, a, b))), a, b))
 
+# lgamma(n + phi) - lgamma(phi) for counts n, accurate for large phi
+# (the direct difference cancels); the phi partial sums 1 / (phi + j)
+ad_lgamma_ratio <- function(nn, phi) {
+  vp <- rep_len(val(phi), length(nn))
+  v <- ifelse(nn == 0, 0, lgamma(pmax(nn, 1)) - lbeta(pmax(nn, 1), vp))
+  if (!is_ad(phi)) return(v)
+  d <- ifelse(nn <= 100, vapply(seq_along(nn), function(i) sum(1 / (vp[i] + seq_len(nn[i]) - 1)), 0),
+              digamma(nn + vp) - digamma(vp))
+  ad_node(v, list(phi), function(g) list(unbroadcast(g * d, val(phi))))
+}
+
 lp_neg_binomial_2 <- function(n, mu, phi, propto) {
   f <- "neg_binomial_2_lpmf"
   chk_int_range(f, "Failures variable", n, 0L); chk_positive_finite(f, "Location parameter", mu); chk_positive_finite(f, "Precision parameter", phi)
@@ -1076,11 +1087,11 @@ lp_neg_binomial_2 <- function(n, mu, phi, propto) {
   N <- vlen_check(f, n, mu, phi)
   nn <- rep_len(as.numeric(n), N)
   lp <- 0
-  if (inc(propto, phi)) lp <- lp + ad_sum(flat(lgamma(nn + phi) - lgamma(phi) + 0 * nn))
+  if (inc(propto, phi)) lp <- lp + ad_sum(ad_lgamma_ratio(nn, phi))
   if (!propto) lp <- lp - sum(lgamma(nn + 1))
   if (inc(propto, mu, phi)) {
     lmp <- log(mu + phi)
-    lp <- lp + ad_sum(flat(ad_mult_log(nn, mu) - nn * lmp + phi * (log(phi) - lmp) + 0 * nn))
+    lp <- lp + ad_sum(flat(ad_mult_log(nn, mu) - nn * lmp - phi * log1p(mu / phi) + 0 * nn))
   }
   lp
 }
@@ -1108,12 +1119,12 @@ lp_neg_binomial_2_log <- function(n, eta, phi, propto) {
   N <- vlen_check(f, n, eta, phi)
   nn <- rep_len(as.numeric(n), N)
   lp <- 0
-  if (inc(propto, phi)) lp <- lp + ad_sum(flat(lgamma(nn + phi) - lgamma(phi) + 0 * nn))
+  if (inc(propto, phi)) lp <- lp + ad_sum(ad_lgamma_ratio(nn, phi))
   if (!propto) lp <- lp - sum(lgamma(nn + 1))
   if (inc(propto, eta, phi)) {
     lphi <- log(phi)
     lse <- ad_log_sum_exp2(eta, lphi)
-    lp <- lp + ad_sum(flat(nn * (eta - lse) + phi * (lphi - lse) + 0 * nn))
+    lp <- lp + ad_sum(flat(nn * (eta - lse) - phi * log1p(exp(eta - lphi)) + 0 * nn))
   }
   lp
 }
