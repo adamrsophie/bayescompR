@@ -109,3 +109,21 @@ test_that("rng functions draw from the right distributions", {
   x <- vapply(1:4000, function(i) lib_fun("skew_double_exponential_rng")(0, 1, 0.3), 0)
   expect_equal(mean(x <= 0), 0.3, tolerance = 0.03)
 })
+
+test_that("edge cases of special functions and densities", {
+  m <- bayescomp_model("generated quantities {
+    real g0 = gamma_lpdf(0 | 1, 2);
+    real h1 = hypergeometric_2F1(1, 1, 2, -3);
+    real h2 = hypergeometric_2F1(1, 1, 2, 0.4);
+    real ie = inv_erfc(0.3);
+  }")
+  v <- bayescomp_constrain(m, numeric(0))
+  expect_equal(v$g0, log(2))
+  expect_equal(v$h1, log(4) / 3, tolerance = 1e-10)
+  expect_equal(v$h2, -log(0.6) / 0.4, tolerance = 1e-10)
+  expect_equal(2 * stats::pnorm(-v$ie * sqrt(2)), 0.3)
+  bad <- bayescomp_model("generated quantities { real h = hypergeometric_2F1(1, 1, 2, 1.5); }")
+  expect_error(bayescomp_constrain(bad, numeric(0)), class = "bayescomp_domain_error")
+  expect_error(bayescomp_model("parameters { real x; } model { target += lower_bound_jacobian(x, 0); }"),
+               class = "bayescomp_unsupported_error")
+})

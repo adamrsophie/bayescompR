@@ -45,3 +45,17 @@ test_that("linear algebra gradients match finite differences", {
   expect_grad_ok(function(x) ad_sum(ad_eigen_sym(spd(x), "values") * (1:3)), x0, tol = 1e-4)
   expect_grad_ok(function(x) ad_sum(ad_matrix_exp(0.3 * ad_reshape(x, c(3L, 3L))) * matrix(1:9, 3)), x0, tol = 1e-4)
 })
+
+test_that("GP kernels have finite gradients for parameter inputs", {
+  for (k in c("gp_exponential_cov", "gp_matern32_cov", "gp_matern52_cov", "gp_periodic_cov", "gp_exp_quad_cov")) {
+    extra <- if (k == "gp_periodic_cov") ", 2.0" else ""
+    m <- bayescomp_model(sprintf("parameters { array[3] real x; } model { matrix[3, 3] K = %s(x, 1.3, 0.7%s); target += sum(K); }", k, extra))
+    u <- c(0.3, -0.2, 1.1)
+    g <- bayescomp_grad_log_prob(m, u)
+    fd <- vapply(1:3, function(i) {
+      e <- replace(numeric(3), i, 1e-6)
+      (bayescomp_log_prob(m, u + e) - bayescomp_log_prob(m, u - e)) / 2e-6
+    }, 0)
+    expect_equal(as.vector(g), fd, tolerance = 1e-6, info = k)
+  }
+})

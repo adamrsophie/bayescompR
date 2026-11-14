@@ -60,3 +60,56 @@ bayescomp_register_backend("r", c("log_density", "gradient", "constrain", "gener
                            description = "Pure R closures on a reverse mode AD tape")
 
 ir_version <- "1.0.0"
+
+# capabilities this version takes from a native backend
+native_capabilities <- c("log_density", "gradient")
+
+#' Inputs for a native backend
+#'
+#' Collects what a native backend needs to compile a model: the IR as JSON
+#' and the values of every data and transformed data variable, already
+#' computed by the R implementation. Values are flattened in Stan order
+#' (array elements in row major order, each element column major).
+#'
+#' @param model A `bayescomp_model` (any backend) or the data bound model
+#'   passed to a backend's `compile` function.
+#' @return A list with `ir` (JSON string), `data` (JSON string mapping each
+#'   name to `dims` and `values`) and `dim` (number of unconstrained
+#'   parameters).
+#' @export
+bayescomp_native_inputs <- function(model) {
+  check_model(model)
+  ir <- bayescomp_ir(model, json = TRUE)
+  names_d <- c(vapply(model$compiled$data_decls, `[[`, "", "name"),
+               vapply(model$compiled$td_decls, `[[`, "", "name"))
+  parts <- vapply(names_d, function(nm) {
+    info <- model$decls[[nm]]
+    v <- val(get(paste0("V.", nm), envir = model$env))
+    dims <- c(info$adims, info$eshape)
+    x <- to_element_order(as.numeric(v), info$adims, info$eshape)
+    paste0(json_str(nm), ":{\"dims\":", to_json(as.list(as.numeric(dims))),
+           ",\"values\":", to_json(as.list(x)), "}")
+  }, "")
+  list(ir = ir, data = paste0("{", paste(parts, collapse = ","), "}"), dim = model$dim)
+}
+
+#' Signal an error raised by a native backend
+#'
+#' Native runtimes report errors as strings with a code prefix. This turns
+#' them into the condition classes the R backend uses, so samplers treat a
+#' rejection the same way whichever backend raised it.
+#'
+#' @param message Error string such as `"E_REJECT: ..."`.
+#' @return Does not return.
+#' @export
+bayescomp_native_error <- function(message) {
+  code <- sub(":.*$", "", message)
+  body <- sub("^[A-Z_]+:[[:space:]]*", "", message)
+  switch(code,
+    E_REJECT = stop_reject(body),
+    E_FATAL = stop_reject(body, fatal = TRUE),
+    E_UNSUPPORTED = stop_unsupported(body),
+    E_DOMAIN = stop_domain(body),
+    E_SHAPE = stop_shape(body),
+    stop(sprintf("native backend error: %s", body), call. = FALSE))
+}

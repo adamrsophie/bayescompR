@@ -438,10 +438,10 @@ lp_gamma <- function(y, alpha, beta, propto) {
   lp <- 0
   if (inc(propto, alpha)) lp <- lp - rep1(lgamma(va))
   if (inc(propto, alpha, beta)) lp <- lp + rep1(va * log(vb))
-  if (inc(propto, y, alpha)) lp <- lp + rep1((va - 1) * ly)
+  if (inc(propto, y, alpha)) lp <- lp + rep1(zmul(va - 1, ly))
   if (inc(propto, y, beta)) lp <- lp - rep1(vb * vy)
   if (!any_ad(y, alpha, beta)) return(lp)
-  fused(lp, list(y, alpha, beta), function() list((va - 1) / vy - vb, -digamma(va) + log(vb) + ly, va / vb - vy), N)
+  fused(lp, list(y, alpha, beta), function() list(zmul(va - 1, 1 / vy) - vb, -digamma(va) + log(vb) + ly, va / vb - vy), N)
 }
 defdist("gamma", c("reals", "reals", "reals"), lp_gamma,
   lcdf = function(y, a, b) gamma_cdf_ad(y, a, b, TRUE),
@@ -973,7 +973,6 @@ lp_ordered_probit <- function(k, eta, cuts, propto) {
 }
 defdist("ordered_logistic", c("ints", "reals", "vector"), lp_ordered_logistic, discrete = TRUE,
   rng = function(eta, c) {
-    p <- diff(c(0, stats::plogis(val(eta) - val(c)), 1))
     p <- -diff(c(1, stats::plogis(val(eta) - val(c)), 0))
     sample.int(length(p), 1L, prob = pmax(p, 0))
   })

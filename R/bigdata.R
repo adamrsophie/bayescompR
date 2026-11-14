@@ -100,6 +100,7 @@ bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32
       g0 + (sp$N / length(batches[[k]])) * (bg[[k]](u)$grad - g0)
     }
     full <- safe_lp(model, jacobian = TRUE)
+    lp_full <- lp_value_fun(model)
     u <- find_init(model, init, id)
     eps <- step_size
     if (is.null(eps)) {
@@ -136,7 +137,7 @@ bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32
       if (it > nw && ((it - nw - 1L) %% thin == 0L)) {
         row <- row + 1L
         qs[row, ] <- u
-        dg[row, c("lp__", "stepsize__")] <- c(full(u)$value, eps)
+        dg[row, c("lp__", "stepsize__")] <- c(lp_full(u), eps)
       }
     }
     list(q = qs, gq = chain_write_draws(model, qs, FALSE), diag = dg, step_size = eps, inv_metric = NULL,

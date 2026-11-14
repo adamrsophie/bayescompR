@@ -86,3 +86,16 @@ test_that("simulation based calibration of NUTS is uniform", {
     expect_gt(stats::chisq.test(counts)$p.value, 0.001)
   }
 })
+
+test_that("unseeded runs advance the global stream and record their seed", {
+  m <- bayescomp_model("parameters { real x; } model { x ~ normal(0, 1); }")
+  run <- function(...) bayescomp_sample(m, chains = 1, iter_warmup = 30, iter_sampling = 10, refresh = 0, ...)
+  set.seed(11); f1 <- run(); f2 <- run()
+  set.seed(11); f3 <- run()
+  expect_false(identical(f1$draws, f2$draws))
+  expect_identical(f1$draws, f3$draws)
+  expect_true(is.numeric(f1$seed))
+  set.seed(5); a <- stats::runif(1)
+  set.seed(5); run(seed = 3); b <- stats::runif(1)
+  expect_identical(a, b)
+})

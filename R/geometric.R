@@ -274,12 +274,15 @@ bayescomp_mclmc <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampli
         xi_sum <- 0.95 * xi_sum + w * xi / eps^6
         w_sum <- 0.95 * w_sum + w
         eps <- (xi_sum / w_sum)^(-1 / 6)
-        if (it > nw / 2) est_add(est, x)
-        if (it == nw && est$n > 10) {
+        # precondition at the middle of warmup from the draws of the second
+        # quarter, then keep tuning the step size in the new coordinates
+        if (it > nw / 4 && it <= nw / 2) est_add(est, x)
+        if (it == floor(nw / 2) && est$n > 10) {
           v <- est_value(est)
           sig <- sqrt(pmax(v, 1e-12))
           L <- 0.4 * sqrt(n)
-          eps <- eps * sqrt(n) / sqrt(sum(1 / sig^2) * mean(sig^2))
+          eps <- eps / sqrt(mean(sig^2))
+          xi_sum <- 0; w_sum <- 0
         }
       } else {
         i <- it - nw

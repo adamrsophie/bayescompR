@@ -58,3 +58,16 @@ test_that("unit vector, sum to zero and arrays of constrained types work", {
   expect_equal(apply(x, c(1, 2), sum), matrix(1, 2, 3))
   expect_equal(unconstrain_variable(x, decl, list()), u, tolerance = 1e-10)
 })
+
+test_that("finite and infinite bounds can be mixed elementwise", {
+  m <- bayescomp_model("parameters { vector<lower=[0, negative_infinity(), 1]', upper=[positive_infinity(), 2, 3]'>[3] x; } model { x ~ normal(0, 1); }")
+  u <- c(0.2, -0.4, 0.5)
+  expect_equal(bayescomp_constrain(m, u)$x, c(exp(0.2), 2 - exp(-0.4), 1 + 2 * stats::plogis(0.5)))
+  expect_equal(bayescomp_unconstrain(m, list(x = bayescomp_constrain(m, u)$x)), u)
+  g <- bayescomp_grad_log_prob(m, u)
+  fd <- vapply(1:3, function(i) {
+    e <- replace(numeric(3), i, 1e-6)
+    (bayescomp_log_prob(m, u + e) - bayescomp_log_prob(m, u - e)) / 2e-6
+  }, 0)
+  expect_equal(as.vector(g), fd, tolerance = 1e-6)
+})

@@ -9,6 +9,9 @@ bayescomp_dim(model)
 \arguments{
 \item{model}{A \code{bayescomp_model}.}
 }
+\value{
+The number of unconstrained parameters, an integer.
+}
 \description{
 Number of unconstrained parameters
 }

@@ -32,11 +32,13 @@ strip_ir <- function(x) {
     if (!is.null(x$impl) || !is.null(x$args) && !is.null(x$ret) && !is.null(x$name) && !is.null(x$loc) && isTRUE(x$user)) {
       # a resolved signature
       return(list(name = x$name, user = isTRUE(x$user), mangled = x$mangled,
-                  args = if (isTRUE(x$user)) lapply(x$args, strip_ir) else unlist(x$args),
+                  args = if (isTRUE(x$user)) lapply(x$args, strip_ir) else as.list(unlist(x$args)),
                   ret = if (is.function(x$ret)) "computed" else strip_ir(x$ret)))
     }
     nm <- names(x)
     out <- lapply(x, strip_ir)
+    # vector valued fields stay arrays in JSON even with one element
+    if (is.character(out$kinds)) out$kinds <- as.list(out$kinds)
     keep <- !vapply(out, is.null, TRUE) | vapply(x, is.null, TRUE)
     out <- out[keep]
     if (!is.null(nm)) names(out) <- nm[keep]

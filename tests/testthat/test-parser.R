@@ -22,6 +22,12 @@ test_that("operator precedence and associativity follow Stan", {
   v <- bayescomp_constrain(m, numeric(0))
   expect_equal(v$xx, -4)
   expect_equal(c(v$aa, v$bb, v$cc), c(3L, -3L, 1L))
+  # left division binds tighter than *, and elementwise operators tighter still
+  e <- stan_parse("transformed data { matrix[2, 2] A; vector[2] v; vector[2] w = A * A \\ v; vector[2] u = v * 2 .* v; }")$blocks[["transformed data"]]$body
+  expect_equal(e[[3L]]$init$op, "*")
+  expect_equal(e[[3L]]$init$b$op, "\\")
+  expect_equal(e[[4L]]$init$op, "*")
+  expect_equal(e[[4L]]$init$b$op, ".*")
 })
 
 test_that("syntax errors carry the right class and location", {

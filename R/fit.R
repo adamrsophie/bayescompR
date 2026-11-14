@@ -21,7 +21,7 @@ make_fit <- function(model, res, cfg, method, seed, elapsed) {
     inv_metric = lapply(res, `[[`, "inv_metric"),
     unconstrained = lapply(res, `[[`, "q"),
     time = list(chains = do.call(rbind, lapply(res, `[[`, "time")), total = elapsed),
-    config = cfg, seed = seed),
+    config = cfg, seed = if (is.null(seed)) attr(res, "seed") else seed),
     class = c("bayescomp_fit"))
 }
 

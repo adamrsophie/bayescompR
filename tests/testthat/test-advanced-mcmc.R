@@ -37,6 +37,11 @@ test_that("parallel tempering mixes between modes and estimates the evidence", {
   expect_equal(fit_dims <- dim(two$draws)[1:2], c(100L, 1L))
   s <- pt_update_schedule(seq(0, 1, length.out = 5), c(0.8, 0.1, 0.1, 0.1))
   expect_lt(s[2], 0.25)
+  # zero density regions: a standard normal truncated at 1 by reject()
+  tr <- bayescomp_model("parameters { real x; } model { if (x > 1) reject(\"out\"); x ~ normal(0, 1); }")
+  ft <- bayescomp_parallel_tempering(tr, num_temps = 8, chains = 1, seed = 2, reference = "standard")
+  expect_lt(abs(ft$log_evidence - log(stats::pnorm(1))), 0.1)
+  expect_lte(max(ft$draws[, , "x"]), 1)
 })
 
 test_that("Gibbs sampling detects conjugate conditionals", {
@@ -72,6 +77,12 @@ test_that("Riemannian samplers and MCLMC target the posterior", {
   moments_ok(fit, 0.25)
   fit <- bayescomp_mclmc(m, chains = 2, iter_warmup = 500, iter_sampling = 1500, seed = 1)
   moments_ok(fit, 0.2)
+  # the preconditioned step size must not depend on the scale of the target
+  for (sc in c(100, 0.01)) {
+    ms <- bayescomp_model("data { real s; } parameters { vector[5] x; } model { x ~ normal(0, s); }", data = list(s = sc))
+    fs <- bayescomp_mclmc(ms, chains = 1, iter_warmup = 500, iter_sampling = 1000, seed = 2)
+    expect_equal(mean(apply(fs$unconstrained[[1L]], 2, stats::sd)) / sc, 1, tolerance = 0.2)
+  }
   skip_if_not(long_tests())
   fit <- bayescomp_riemannian(m, "rmhmc", chains = 1, iter_warmup = 100, iter_sampling = 300, seed = 1)
   moments_ok(fit, 0.35)

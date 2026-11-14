@@ -41,8 +41,10 @@ bayescomp_sample(
 \item{iter_warmup, iter_sampling}{Warmup and sampling iterations per chain.}
 
 \item{seed}{Integer seed. Each chain uses its own L'Ecuyer-CMRG stream, so
-results do not depend on \code{cores}. The global random number state is
-restored on exit.}
+results do not depend on \code{cores}. With a seed, the global random number
+state is left unchanged. Without one, a seed is drawn from the global
+stream (so \code{set.seed()} makes the call reproducible and repeated calls
+differ) and recorded in the fit's \code{seed} element.}
 
 \item{init}{Initial values: a radius \code{r} (uniform on \verb{(-r, r)} in the
 unconstrained space, default 2), \code{0}, a named list of constrained values,

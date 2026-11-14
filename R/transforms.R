@@ -46,6 +46,25 @@ tf_bounds <- list(
       lj <- if (length(val(lm)) == 1L) lm * length(val(u)) else ad_sum(lm)
       return(list(x = x, lj = lj))
     }
+    n_u <- length(val(u))
+    flo <- if (is.null(lo)) rep(FALSE, n_u) else rep_len(is.finite(val(lo)), n_u)
+    fup <- if (is.null(up)) rep(FALSE, n_u) else rep_len(is.finite(val(up)), n_u)
+    grp <- flo + 2L * fup
+    if (n_u > 1L && length(unique(grp)) > 1L) {
+      # finite and infinite bounds mixed elementwise: transform each group of
+      # elements with the same kind of bounds, then restore the order
+      pick <- function(b, idx) if (is.null(b) || length(val(b)) == 1L) b else ad_gather(b, idx)
+      parts <- list(); lj <- 0; ord <- integer(0)
+      for (k in unique(grp)) {
+        idx <- which(grp == k)
+        r <- tf_bounds$constrain(ad_gather(u, idx), length(idx),
+                                 list(lower = if (k %% 2L == 1L) pick(lo, idx), upper = if (k >= 2L) pick(up, idx)))
+        parts[[length(parts) + 1L]] <- r$x
+        lj <- lj + r$lj
+        ord <- c(ord, idx)
+      }
+      return(list(x = ad_gather(ad_c(parts), order(ord)), lj = lj))
+    }
     has_lo <- !is.null(lo)
     has_up <- !is.null(up)
     if (has_lo && has_up) {

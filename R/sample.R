@@ -21,8 +21,10 @@
 #' @param chains Number of chains.
 #' @param iter_warmup,iter_sampling Warmup and sampling iterations per chain.
 #' @param seed Integer seed. Each chain uses its own L'Ecuyer-CMRG stream, so
-#'   results do not depend on `cores`. The global random number state is
-#'   restored on exit.
+#'   results do not depend on `cores`. With a seed, the global random number
+#'   state is left unchanged. Without one, a seed is drawn from the global
+#'   stream (so `set.seed()` makes the call reproducible and repeated calls
+#'   differ) and recorded in the fit's `seed` element.
 #' @param init Initial values: a radius `r` (uniform on `(-r, r)` in the
 #'   unconstrained space, default 2), `0`, a named list of constrained values,
 #'   a list of such lists (one per chain), a function returning a list, or a
@@ -126,8 +128,12 @@ fixed_param_chain <- function(cfg) {
 }
 
 # Run `f(chain_id)` for every chain with independent RNG streams.
+# Without a seed, one is drawn from the caller's stream (which therefore
+# advances, so repeated calls differ); the drawn seed is returned as the
+# "seed" attribute and recorded in the fit.
 run_chains <- function(model, chains, seed, cores, f) {
   old_kind <- RNGkind()
+  if (is.null(seed)) seed <- sample.int(.Machine$integer.max, 1L)
   had <- exists(".Random.seed", envir = globalenv(), inherits = FALSE)
   if (had) old_seed <- get(".Random.seed", envir = globalenv())
   on.exit({
@@ -135,7 +141,6 @@ run_chains <- function(model, chains, seed, cores, f) {
     if (had) assign(".Random.seed", old_seed, envir = globalenv())
   }, add = TRUE)
   RNGkind("L'Ecuyer-CMRG", "Inversion", "Rejection")
-  if (is.null(seed)) seed <- sample.int(.Machine$integer.max, 1L)
   set.seed(seed)
   streams <- vector("list", chains)
   s <- get(".Random.seed", envir = globalenv())
@@ -151,10 +156,11 @@ run_chains <- function(model, chains, seed, cores, f) {
     out <- parallel::mclapply(seq_len(chains), one, mc.cores = min(cores, chains), mc.preschedule = FALSE)
     bad <- vapply(out, inherits, TRUE, what = "try-error")
     if (any(bad)) stop(sprintf("chain %d failed: %s", which(bad)[1L], attr(out[[which(bad)[1L]]], "condition")$message), call. = FALSE)
-    out
   } else {
-    lapply(seq_len(chains), one)
+    out <- lapply(seq_len(chains), one)
   }
+  attr(out, "seed") <- seed
+  out
 }
 
 # Stan's initialization: up to 100 attempts at a point with finite log

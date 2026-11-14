@@ -23,4 +23,23 @@ test_that("native backends are used, validated and never mixed silently", {
   fit <- bayescomp_sample(m, chains = 1, iter_warmup = 100, iter_sampling = 100, seed = 1, refresh = 0)
   expect_equal(dim(fit$draws)[3L], 3L)
   expect_error(bayescomp_model(code, backend = "missing"), "not available")
+  # capabilities beyond the density are never taken from a native backend
+  bayescomp_register_backend("fake5", c("log_density", "gradient", "constrain", "generated_quantities", "rng"),
+    ir_versions = "1.0.0", compile = function(ir, model) list(log_density_gradient = function(u, jacobian, propto)
+      list(value = -(u - 1)^2 / 8, grad = -(u - 1) / 4)))
+  on.exit(rm("fake5", envir = .backends), add = TRUE)
+  expect_error(bayescomp_model(code, backend = "fake5"), "allow_fallback")
+  m5 <- bayescomp_model(code, backend = "fake5", allow_fallback = TRUE)
+  expect_equal(m5$provenance$constrain, "r")
+  expect_equal(m5$provenance$rng, "r")
+  # native inputs: IR and data in Stan order
+  md <- bayescomp_model("data { array[2] vector[3] x; } parameters { real mu; } model { mu ~ normal(0, 1); }",
+                        data = list(x = matrix(1:6, 2, 3)))
+  inp <- bayescomp_native_inputs(md)
+  expect_equal(inp$dim, 1L)
+  expect_match(inp$data, "\"values\":\\[1,3,5,2,4,6\\]")
+  expect_error(bayescomp_native_error("E_REJECT: no"), class = "bayescomp_reject_error")
+  expect_error(bayescomp_native_error("E_DOMAIN: no"), class = "bayescomp_domain_error")
+  expect_error(bayescomp_native_error("E_SHAPE: no"), class = "bayescomp_shape_error")
+  expect_error(bayescomp_native_error("E_INTERNAL: boom"), "boom")
 })

@@ -39,7 +39,9 @@ read_stan_source <- function(code, file) {
 #'   backends compute the log density and its gradient.
 #' @param allow_fallback When the backend lacks a capability the model needs
 #'   (constraining transforms, generated quantities or random numbers), use
-#'   the R implementation for it. The default `FALSE` raises an error
+#'   the R implementation for it. In this version only the log density and
+#'   its gradient are ever taken from a native backend, so a native backend
+#'   always needs `allow_fallback = TRUE` for sampling. The default `FALSE` raises an error
 #'   instead, so implementations are never mixed silently. The model's
 #'   `provenance` element records which backend provides each capability.
 #' @return An object of class `bayescomp_model`.
@@ -62,7 +64,10 @@ bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL
   m <- compile_r(ir)
   inst <- with_seed(seed, instantiate(m, data))
   caps <- c("log_density", "gradient", "constrain", "generated_quantities", "rng")
-  prov <- stats::setNames(as.list(ifelse(caps %in% be$capabilities, be$name, "r")), caps)
+  # this version takes only the log density and its gradient from a native
+  # backend; the other capabilities always run in R, whatever is declared
+  used <- intersect(be$capabilities, native_capabilities)
+  prov <- stats::setNames(as.list(ifelse(caps %in% used, be$name, "r")), caps)
   out <- structure(list(code = src, ir = ir, compiled = m, env = inst$env, decls = inst$decls,
                         params = inst$params, dim = inst$dim, data = data, backend = be$name,
                         provenance = prov, native = NULL),
@@ -71,7 +76,7 @@ bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL
   core <- setdiff(c("log_density", "gradient"), be$capabilities)
   if (length(core))
     stop(sprintf("backend '%s' does not provide %s", be$name, paste(core, collapse = " and ")), call. = FALSE)
-  other <- setdiff(caps, be$capabilities)
+  other <- setdiff(caps, used)
   if (length(other) && !isTRUE(allow_fallback))
     stop(sprintf("backend '%s' does not provide %s; set allow_fallback = TRUE to use the R implementation for %s",
                  be$name, paste(other, collapse = ", "), if (length(other) > 1L) "them" else "it"), call. = FALSE)
@@ -411,6 +416,7 @@ bayescomp_param_names <- function(model, include_tparams = TRUE, include_gqs = T
 
 #' Number of unconstrained parameters
 #' @param model A `bayescomp_model`.
+#' @return The number of unconstrained parameters, an integer.
 #' @export
 bayescomp_dim <- function(model) model$dim
 

@@ -29,7 +29,9 @@ backends compute the log density and its gradient.}
 
 \item{allow_fallback}{When the backend lacks a capability the model needs
 (constraining transforms, generated quantities or random numbers), use
-the R implementation for it. The default \code{FALSE} raises an error
+the R implementation for it. In this version only the log density and
+its gradient are ever taken from a native backend, so a native backend
+always needs \code{allow_fallback = TRUE} for sampling. The default \code{FALSE} raises an error
 instead, so implementations are never mixed silently. The model's
 \code{provenance} element records which backend provides each capability.}
 }

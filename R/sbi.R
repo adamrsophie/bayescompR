@@ -107,11 +107,14 @@ bayescomp_npe <- function(model, simulator, observed, num_simulations = 2000L, c
   K <- as_count(components, "components", 1L); h <- as_count(hidden, "hidden", 1L)
   S <- as_count(output_samples, "output_samples", 1L)
   t0 <- proc.time()[["elapsed"]]
+  # separate streams for the prior draws and for the simulator
+  if (is.null(seed)) seed <- sample.int(.Machine$integer.max - 1L, 1L)
   pr <- bayescomp_sample(model, chains = 4L, iter_warmup = 500L, iter_sampling = ceiling(Ns / 4) * 2L, thin = 2L,
                          seed = seed, refresh = 0L)
+  sim_seed <- as.integer(seed) %% (.Machine$integer.max - 1L) + 1L
   U <- do.call(rbind, pr$unconstrained)[seq_len(Ns), , drop = FALSE]
   info <- NULL
-  res <- run_chains(model, 1L, seed, 1L, function(id) {
+  res <- run_chains(model, 1L, sim_seed, 1L, function(id) {
     X <- t(vapply(seq_len(Ns), function(i) as.numeric(simulator(ssm_theta(model, U[i, ]))), as.numeric(simulator(ssm_theta(model, U[1L, ])))))
     if (length(observed) == 1L) X <- matrix(X, ncol = 1L)
     ok <- apply(is.finite(X), 1L, all)

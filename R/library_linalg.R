@@ -2,8 +2,8 @@
 #
 # Adjoint formulas follow Giles (2008), "Collected matrix derivative results
 # for forward and reverse mode algorithmic differentiation", and Murray
-# (2016), "Differentiation of the Cholesky decomposition". Each is verified
-# against central finite differences in tests/testthat/test-ad-linalg.R.
+# (2016), "Differentiation of the Cholesky decomposition". The adjoints are
+# checked against central finite differences in tests/testthat/test-ad.R.
 
 sym_check <- function(f, A, tol = 1e-8) {
   v <- val(A)
@@ -415,14 +415,22 @@ gp_kernel <- function(name, kfun) {
     })
   }
 }
+# distance from squared distance; the derivative at zero distance is taken as
+# zero (the diagonal and coincident inputs) instead of infinity
+gp_dist <- function(d2) {
+  v <- val(d2)
+  r <- sqrt(v)
+  if (!is_ad(d2)) return(r)
+  ad_node(r, list(d2), function(g) list(ifelse(r > 0, g * 0.5 / r, 0)))
+}
 k_sqexp <- function(d2, s, l) s * s * exp(-0.5 * d2 / (l * l))
-k_exp <- function(d2, s, l) s * s * exp(-sqrt(d2 + 0) / l)
+k_exp <- function(d2, s, l) s * s * exp(-gp_dist(d2) / l)
 k_m32 <- function(d2, s, l) {
-  r <- sqrt(d2 + 0) * sqrt(3) / l
+  r <- gp_dist(d2) * sqrt(3) / l
   s * s * (1 + r) * exp(-r)
 }
 k_m52 <- function(d2, s, l) {
-  r <- sqrt(d2 + 0) * sqrt(5) / l
+  r <- gp_dist(d2) * sqrt(5) / l
   s * s * (1 + r + r * r / 3) * exp(-r)
 }
 gp_kernel("gp_exp_quad_cov", k_sqexp)
@@ -431,7 +439,7 @@ gp_kernel("gp_exponential_cov", k_exp)
 gp_kernel("gp_matern32_cov", k_m32)
 gp_kernel("gp_matern52_cov", k_m52)
 def("gp_periodic_cov", c("real[]", "real", "real", "real"), "matrix", function(x, s, l, p) {
-  d <- sqrt(gp_sqdist(x, x) + 0)
+  d <- gp_dist(gp_sqdist(x, x))
   s <- as_dbl(s); l <- as_dbl(l); p <- as_dbl(p)
   sn <- sin(pi * d / p)
   s * s * exp(-2 * sn * sn / (l * l))

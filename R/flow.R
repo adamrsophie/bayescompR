@@ -99,6 +99,8 @@ bayescomp_flow_vi <- function(model, layers = 6L, iter = 2000L, grad_samples = 8
       th <- th + lr * (m1 / (1 - 0.9^it)) / (sqrt(m2 / (1 - 0.999^it)) + 1e-8)
       if (refresh > 0L && it %% refresh == 0L) message(sprintf("iter %5d ELBO %.3f", it, run_e))
     }
+    # the iterate with the best running ELBO, not the last one
+    if (is.finite(best_e)) th <- best
     E <- matrix(stats::rnorm(S * n), S, n)
     qs <- matrix(NA_real_, S, n); log_g <- numeric(S)
     for (s in seq_len(S)) {

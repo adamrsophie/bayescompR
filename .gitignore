@@ -13,3 +13,4 @@ tests/testthat/testthat-problems.rds
 Rplots.pdf
 vignettes/*.html
 vignettes/*.R
+figure/

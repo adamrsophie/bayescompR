@@ -74,8 +74,13 @@ bayescomp_parallel_tempering <- function(model, num_temps = 10L, chains = 2L, it
           y <- X[k, ] + sc[k] * as.vector(Ls[[k]] %*% stats::rnorm(n))
           lpy <- lp_full(y)
           lgy <- ref$log_g(y)
-          la <- (1 - b) * (lgy - lg[k]) + b * (lpy - lp[k])
-          a <- if (is.finite(la)) min(1, exp(la)) else 0
+          # log ratio of g^(1 - b) p^b; zero weight terms are skipped so that
+          # 0 * (-Inf) does not arise, and a move between two zero density
+          # states is driven by the reference alone
+          dp <- lpy - lp[k]
+          if (is.nan(dp)) dp <- 0
+          la <- (if (b < 1) (1 - b) * (lgy - lg[k]) else 0) + (if (b > 0) b * dp else 0)
+          a <- if (is.nan(la)) 0 else min(1, exp(la))
           if (stats::runif(1) < a) { X[k, ] <- y; lp[k] <- lpy; lg[k] <- lgy }
           a_sum <- a_sum + a
         }

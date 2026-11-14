@@ -39,3 +39,15 @@ First release.
   backend registry for native code backends. Missing backend capabilities
   require `allow_fallback = TRUE`; `bayescomp_validate_backend()` compares
   a native backend with the R implementation.
+* `bayescomp_native_inputs()` gives a native backend the IR and the data and
+  transformed data values in Stan order; `bayescomp_native_error()` turns
+  native error codes into the package's condition classes. Only the log
+  density and gradient are taken from a native backend in this version, and
+  `provenance` says so.
+* Operator precedence follows Stan: `\` binds tighter than `*`, and `.*`,
+  `./` tighter still.
+* Without `seed`, a seed is drawn from the global stream (so repeated calls
+  differ and `set.seed()` reproduces them) and recorded in `fit$seed`.
+* Bounds may mix finite and infinite values elementwise.
+* `inv_erfc()`; `hypergeometric_2F1()` for all `z < 1`. Stan functions that
+  are not implemented yet raise `bayescomp_unsupported_error`.

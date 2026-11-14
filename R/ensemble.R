@@ -37,6 +37,11 @@ bayescomp_ensemble <- function(model, method = c("stretch", "de"), walkers = NUL
   if (n == 0L) stop("the model has no parameters", call. = FALSE)
   W <- if (is.null(walkers)) 2L * n + 2L else as_count(walkers, "walkers", 3L)
   if (method == "stretch" && W %% 2L == 1L) W <- W + 1L
+  # the walkers span the affine hull of their starting points: with W - 1 < n
+  # the ensemble never leaves a lower dimensional subspace
+  if (W <= n + 1L)
+    stop(sprintf("'walkers' must exceed the number of parameters plus one (%d); use at least %d", n + 1L, 2L * n), call. = FALSE)
+  if (W < 2L * n) warning(sprintf("%d walkers for %d parameters; at least %d are recommended", W, n, 2L * n), call. = FALSE)
   nw <- as_count(iter_warmup, "iter_warmup")
   ns <- as_count(iter_sampling, "iter_sampling", 1L)
   thin <- as_count(thin, "thin", 1L)

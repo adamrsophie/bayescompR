@@ -26,8 +26,11 @@ lp_value_fun <- function(model, print = FALSE, jacobian = TRUE, propto = FALSE) 
     nat <- model$native
     fv <- nat$log_density %||% function(u, jacobian, propto) nat$log_density_gradient(u, jacobian, propto)$value
     return(function(q) {
+      # the same conditions as the R path below: only domain errors and
+      # rejections give -Inf, everything else aborts
       r <- tryCatch(fv(q, jacobian, propto), bayescomp_fatal_error = function(e) stop(e),
-                    bayescomp_error = function(e) -Inf)
+                    bayescomp_domain_error = function(e) -Inf,
+                    bayescomp_reject_error = function(e) -Inf)
       if (length(r) != 1L || is.nan(r)) -Inf else r
     })
   }

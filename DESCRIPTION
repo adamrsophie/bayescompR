@@ -12,12 +12,21 @@ Description: An independent implementation, written entirely in R, of the
     mapped to an unconstrained space with the Jacobian adjustments used by
     Stan. Inference includes the No-U-Turn sampler with multinomial
     trajectory sampling and windowed step size and metric adaptation, static
-    Hamiltonian Monte Carlo, the Metropolis adjusted Langevin algorithm,
-    adaptive random walk Metropolis, slice sampling, tempered sequential
-    Monte Carlo with marginal likelihood estimates, maximum a posteriori and
-    maximum likelihood optimization, Laplace approximation, mean field and
-    full rank automatic differentiation variational inference, and
-    Pathfinder. Posterior summaries use
+    Hamiltonian Monte Carlo, Riemannian manifold samplers, microcanonical
+    Langevin Monte Carlo, the Metropolis adjusted Langevin algorithm,
+    adaptive random walk Metropolis, slice and elliptical slice sampling,
+    blocked Gibbs sampling, affine invariant and differential evolution
+    ensembles, non-reversible parallel tempering, zig-zag and bouncy
+    particle samplers, tempered sequential Monte Carlo, particle filters
+    and particle MCMC for state space models, stochastic gradient MCMC,
+    expectation propagation, nested sampling, reversible jump MCMC,
+    integrated nested Laplace approximation, maximum a posteriori and
+    maximum likelihood optimization, Laplace approximation, mean field,
+    full rank and normalizing flow variational inference, Pathfinder,
+    neural posterior estimation and diffusion based sampling. A typed,
+    versioned intermediate representation lets separately installed native
+    backends compute the log density and its gradient. Posterior summaries
+    use
     rank normalized split R-hat and bulk and tail effective sample sizes.
     No C++ compiler, Stan installation, or external inference engine is
     required. This package is not affiliated with or endorsed by the Stan

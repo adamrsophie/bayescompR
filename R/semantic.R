@@ -662,7 +662,8 @@ sem_call <- function(s, e) {
     if (!ok) stop_semantic(sprintf("unnormalized function '%s' is only allowed in the model block or in the body of _lpdf, _lpmf or _lp functions", nm), e$loc)
   }
   if (is.null(s$ufuns[[uname]]) && is.null(.lib[[uname]])) {
-    if (nm %in% unsupported_functions) stop_unsupported(sprintf("function '%s' is not implemented in this version of bayescompR", nm), e$loc)
+    # the transform functions of Stan 2.36 (lower_bound_jacobian, simplex_constrain, ...)
+    if (nm %in% unsupported_functions || grepl("_(constrain|unconstrain|jacobian)$", nm)) stop_unsupported(sprintf("function '%s' is not implemented in this version of bayescompR", nm), e$loc)
     stop_semantic(sprintf("unknown function '%s'", nm), e$loc)
   }
   res <- resolve_call(s, uname, types)
@@ -736,6 +737,13 @@ unsupported_functions <- c(
   "complex_schur_decompose", "fft", "inv_fft", "fft2", "inv_fft2", "eigendecompose",
   "eigendecompose_sym", "svd", "csr_extract", "csr_extract_w", "csr_extract_v", "csr_extract_u",
   "csr_to_dense_matrix", "csr_matrix_times_vector", "get_real", "get_imag", "to_complex",
-  "wiener_lpdf", "wiener_lcdf_defective", "wiener_lccdf_defective")
+  "wiener_lpdf", "wiener_lcdf_defective", "wiener_lccdf_defective",
+  "symmetrize_from_lower_tri", "ordered_logistic_glm_lpmf", "ordered_logistic_glm_lupmf",
+  "matrix_normal_prec_lpdf", "matrix_normal_prec_lupdf", "lkj_cov_lpdf", "lkj_cov_lupdf", "norm",
+  "neg_binomial_cdf", "neg_binomial_lcdf", "neg_binomial_lccdf",
+  "skew_normal_cdf", "skew_normal_lcdf", "skew_normal_lccdf",
+  "exp_mod_normal_cdf", "exp_mod_normal_lcdf", "exp_mod_normal_lccdf",
+  "von_mises_cdf", "von_mises_lcdf", "von_mises_lccdf",
+  "skew_double_exponential_cdf", "skew_double_exponential_lcdf", "skew_double_exponential_lccdf")
 unsupported_distributions <- c("wiener", "gaussian_dlm_obs", "multi_gp", "multi_gp_cholesky",
                                "multi_student_t_cholesky_dummy", "beta_neg_binomial")

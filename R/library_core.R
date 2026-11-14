@@ -280,6 +280,10 @@ unary_defs <- list(
   trigamma = function(x) trigamma(x),
   erf = function(x) ad_erf(x),
   erfc = function(x) ad_erfc(x),
+  inv_erfc = function(x) {
+    if (any(val(x) < 0 | val(x) > 2, na.rm = TRUE)) stop_domain("inv_erfc: argument must be in [0, 2]")
+    ad_unary(x, function(v) -stats::qnorm(v / 2) / sqrt(2), function(v, y) -sqrt(pi) / 2 * exp(y * y))
+  },
   Phi = function(x) ad_Phi(x),
   inv_Phi = function(x) {
     chk_prob("inv_Phi", "Probability variable", x)
@@ -440,7 +444,14 @@ def("log_mix", c("vectors", "vectors"), "real", function(th, lp) {
   ad_log_sum_exp(log(flat(as_dbl(th))) + flat(as_dbl(lp)))
 })
 def("hypergeometric_2F1", c("real", "real", "real", "real"), "real", function(a, b, c, z) {
-  f <- function(a, b, c, z) hyper_pfq(c(a, b), c, z)
+  # the series converges for |z| < 1; for z < -1/2 the Pfaff transformation
+  # 2F1(a, b; c; z) = (1 - z)^(-a) 2F1(a, c - b; c; z / (z - 1)) maps z into
+  # (0, 1/2] and extends the function to all z < 1
+  f <- function(a, b, c, z) {
+    if (!is.finite(z) || z >= 1) stop_domain(sprintf("hypergeometric_2F1: z is %s, but must be less than 1", format(z)))
+    if (z < -0.5) return((1 - z)^(-a) * hyper_pfq(c(a, c - b), c, z / (z - 1)))
+    hyper_pfq(c(a, b), c, z)
+  }
   num_ad4(f, as_dbl(a), as_dbl(b), as_dbl(c), as_dbl(z))
 })
 def("hypergeometric_3F2", c("vector", "vector", "real"), "real", function(a, b, z) {
