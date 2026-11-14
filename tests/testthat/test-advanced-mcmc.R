@@ -58,3 +58,34 @@ test_that("Gibbs sampling detects conjugate conditionals", {
   expect_equal(mean(bayescomp_extract(fit2, "p")), 9 / 15, tolerance = 0.1)
   expect_error(bayescomp_gibbs(m, blocks = list("mu")), "every parameter")
 })
+
+test_that("Riemannian samplers and MCLMC target the posterior", {
+  m <- bayescomp_model(target2)
+  fit <- bayescomp_riemannian(m, "smmala", chains = 2, iter_warmup = 150, iter_sampling = 400, seed = 1)
+  moments_ok(fit, 0.25)
+  fit <- bayescomp_mclmc(m, chains = 2, iter_warmup = 500, iter_sampling = 1500, seed = 1)
+  moments_ok(fit, 0.2)
+  skip_if_not(long_tests())
+  fit <- bayescomp_riemannian(m, "rmhmc", chains = 1, iter_warmup = 100, iter_sampling = 300, seed = 1)
+  moments_ok(fit, 0.35)
+  expect_gt(mean(fit$sampler_diagnostics[, , "accept_stat__"]), 0.6)
+})
+
+test_that("piecewise deterministic samplers target the posterior", {
+  m <- bayescomp_model(target2)
+  for (meth in c("zigzag", "bps")) {
+    fit <- bayescomp_pdmp(m, meth, chains = 2, iter_warmup = 150, iter_sampling = 500, seed = 1)
+    moments_ok(fit, 0.25)
+    expect_true(all(fit$events > 0))
+  }
+})
+
+test_that("normalizing flow VI fits a correlated Gaussian", {
+  m <- bayescomp_model("parameters { vector[2] x; } model { x ~ multi_normal([1, -1]', [[1, 0.8], [0.8, 1]]); }")
+  fit <- bayescomp_flow_vi(m, layers = 2, iter = 500, learning_rate = 0.05, seed = 2)
+  x <- bayescomp_extract(fit, "x")
+  expect_equal(colMeans(x), c(1, -1), tolerance = 0.15)
+  expect_equal(cor(x)[1, 2], 0.8, tolerance = 0.1)
+  expect_lt(fit$pareto_k, 0.7)
+  expect_lt(abs(mean(utils::tail(fit$elbo, 50))), 0.2)
+})

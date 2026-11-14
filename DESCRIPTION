@@ -73,5 +73,8 @@ Collate:
     'tempering.R'
     'ensemble.R'
     'gibbs.R'
+    'geometric.R'
+    'pdmp.R'
+    'flow.R'
     'ir.R'
 Config/roxygen2/version: 8.1.1
