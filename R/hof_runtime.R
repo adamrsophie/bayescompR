@@ -410,6 +410,60 @@ rt_integrate_1d <- function(f, fixed, va, ctx, opts) {
   ad_node(value, list(a, b, theta), function(g) list(if (!is.null(ga)) g * ga, if (!is.null(gb)) g * gb, if (!is.null(gth)) g * gth))
 }
 
+# integrate_1d_double_exponential and integrate_1d_gauss_kronrod: the
+# integrand takes (x, xc, ...). Both use adaptive Gauss-Kronrod quadrature
+# (stats::integrate); for the double exponential form the integrand also
+# receives xc, the distance to the nearer finite limit, as Stan's does.
+# ponytail: max_refinements is accepted but stats::integrate's own
+# subdivision limit is used
+rt_integrate_1d_v <- function(f, fixed, va, ctx, opts) {
+  name <- opts$name
+  a <- fixed[[1L]]; b <- fixed[[2L]]
+  rtol <- if (opts$tol) val(fixed[[3L]]) else sqrt(.Machine$double.eps)
+  atol <- if (opts$tol) val(fixed[[4L]]) else sqrt(.Machine$double.eps)
+  if (opts$tol) {
+    if (!(rtol >= 0)) stop_domain(sprintf("%s: relative_tolerance must be non-negative", name))
+    if (!(atol >= 0)) stop_domain(sprintf("%s: absolute_tolerance must be non-negative", name))
+    if (!(val(fixed[[5L]]) >= 1)) stop_domain(sprintf("%s: max_refinements must be positive", name))
+  }
+  av <- val(a); bv <- val(b)
+  if (is.nan(av) || is.nan(bv)) stop_domain(sprintf("%s: integration limits must not be NaN", name))
+  if (av > bv) stop_domain(sprintf("%s: lower limit (%s) must be less than or equal to the upper limit (%s)", name, format_scalar(av), format_scalar(bv)))
+  fl <- hof_flatten(va)
+  thv <- fl$theta
+  if (av == bv) return(if (any_ad(a, b) || length(fl$parents)) ad_node(0, c(list(a, b), fl$parents), function(g) vector("list", 2L + length(fl$parents))) else 0)
+  one <- function(x, xc, z) do.call(f, c(list(x, xc), fl$rebuild(z), list(ctx)))
+  infinite <- is.infinite(av) || is.infinite(bv)
+  gk <- opts$method == "gauss_kronrod"
+  quad <- function(g) {
+    h <- function(x) vapply(x, function(xx) {
+      xc <- if (gk || infinite) NaN else if (xx - av <= bv - xx) av - xx else bv - xx
+      g(xx, xc)
+    }, 0)
+    r <- tryCatch(stats::integrate(h, av, bv, rel.tol = max(rtol, 50 * .Machine$double.eps), abs.tol = atol, subdivisions = 1000L),
+                  error = function(e) stop_domain(sprintf("%s: %s", name, conditionMessage(e))))
+    r$value
+  }
+  value <- quad(function(x, xc) as.numeric(val(one(x, xc, thv))))
+  if (!any_ad(a, b) && !length(fl$parents)) return(value)
+  ga <- if (inherits(a, "bcad")) -as.numeric(val(one(av, 0, thv))) else NULL
+  gb <- if (inherits(b, "bcad")) as.numeric(val(one(bv, 0, thv))) else NULL
+  gth <- if (length(thv)) vapply(seq_along(thv), function(k) quad(function(x, xc) ad_value_grad(function(z) one(x, xc, z), thv)$grad[k]), 0) else numeric(0)
+  ad_node(value, c(list(a, b), fl$parents), function(g) c(list(if (!is.null(ga)) g * ga, if (!is.null(gb)) g * gb),
+                                                           lapply(hof_split(gth, fl$parents), function(d) g * d)))
+}
+
+# integrate_ode_*: the deprecated interface; the function takes
+# (t, y, theta, x_r, x_i) with y an array, which is stored as a vector here
+rt_ode_legacy <- function(f, fixed, va, ctx, opts) {
+  ctl <- length(fixed) == 9L
+  rtol <- if (ctl) val(fixed[[7L]]) else 1e-6
+  atol <- if (ctl) val(fixed[[8L]]) else 1e-6
+  maxsteps <- if (ctl) val(fixed[[9L]]) else 1e6
+  ode_solve(hof_call(f, ctx), fixed[[1L]], fixed[[2L]], fixed[[3L]], list(fixed[[4L]], fixed[[5L]], fixed[[6L]]),
+            rtol, atol, maxsteps, opts$method, opts$name)
+}
+
 # ---- map_rect and reduce_sum ------------------------------------------------------------------------
 
 rt_map_rect <- function(f, fixed, va, ctx, opts) {

@@ -22,8 +22,11 @@ First release.
 * Embedded Laplace approximation (`laplace_marginal` and related
   functions, including the built in Poisson, Bernoulli and negative
   binomial forms).
-* ODE, DAE and algebraic solvers, `integrate_1d`, `map_rect` and
-  `reduce_sum`, differentiated with respect to all their parameters.
+* ODE, DAE and algebraic solvers (including the deprecated
+  `integrate_ode_*` interface), the 1D integrators (`integrate_1d`,
+  `integrate_1d_double_exponential`, `integrate_1d_gauss_kronrod` and their
+  `_tol` forms), `map_rect` and `reduce_sum`, differentiated with respect to
+  all their parameters.
 * Tuples in every block, including constrained tuple parameters, with
   projection, unpacking and the library functions that return tuples.
 * Complex numbers: complex scalars, vectors, row vectors and matrices with

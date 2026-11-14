@@ -52,6 +52,25 @@ hof_specs <- local({
                                function(fixed, va) list(T_real, T_real, T_ra, T_ra, T_ia), T_real, T_real,
                                function(...) rt_integrate_1d(...), variadic = FALSE,
                                opts = list(alt = list(T_real, T_real, T_ra, T_ra, T_ia, T_real)))
+  # variadic 1D integrators (Stan 2.40)
+  i1_f <- function(fixed, va) c(list(T_real, T_real), va)
+  for (m in c("double_exponential", "gauss_kronrod")) local({
+    meth <- m
+    sp[[paste0("integrate_1d_", meth)]] <<- hof_entry(list(T_real, T_real), c(FALSE, FALSE), i1_f, T_real, T_real,
+                                                      function(...) rt_integrate_1d_v(...), opts = list(method = meth, tol = FALSE))
+    sp[[paste0("integrate_1d_", meth, "_tol")]] <<- hof_entry(list(T_real, T_real, T_real, T_real, T_int), c(FALSE, FALSE, TRUE, TRUE, TRUE),
+                                                             i1_f, T_real, T_real, function(...) rt_integrate_1d_v(...),
+                                                             opts = list(method = meth, tol = TRUE))
+  })
+  # deprecated ODE interface (integrate_ode_*): arrays of reals, data x_r,
+  # x_i and control arguments
+  legacy_ode <- function(fixed, va) list(T_real, T_ra, T_ra, T_ra, T_ia)
+  for (nm in c("integrate_ode", "integrate_ode_rk45", "integrate_ode_bdf", "integrate_ode_adams")) local({
+    meth <- switch(nm, integrate_ode = "rk45", integrate_ode_rk45 = "rk45", integrate_ode_bdf = "bdf", integrate_ode_adams = "adams")
+    sp[[nm]] <<- hof_entry(list(T_ra, T_real, T_ra, T_ra, T_ra, T_ia), c(FALSE, FALSE, FALSE, FALSE, TRUE, TRUE), legacy_ode, T_ra, T_ra2,
+                           function(...) rt_ode_legacy(...), variadic = FALSE,
+                           opts = list(method = meth, alt = if (nm != "integrate_ode") list(T_ra, T_real, T_ra, T_ra, T_ra, T_ia, T_real, T_real, T_real)))
+  })
   # map_rect
   sp$map_rect <- hof_entry(list(T_vec, T_va, T_ra2, T_ia2), c(FALSE, FALSE, TRUE, TRUE),
                            function(fixed, va) list(T_vec, T_vec, T_ra, T_ia), T_vec, T_vec,

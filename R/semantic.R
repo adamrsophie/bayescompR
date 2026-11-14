@@ -578,6 +578,8 @@ sem_expr <- function(s, e, allow_void = FALSE) {
     stop_semantic(sprintf("unexpected expression '%s'", k), e$loc))
   if (!allow_void && !is.null(out$type) && ty_eq(out$type, T_void))
     stop_semantic("void function used in an expression", out$loc)
+  # integers are never parameters, so integer expressions are data
+  if (identical(out$type$base, "int")) out$data_only <- TRUE
   out
 }
 

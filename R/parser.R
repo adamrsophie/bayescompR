@@ -305,6 +305,26 @@ parse_fundef <- function(p) {
 
 assign_ops <- c("=", "+=", "-=", "*=", "/=", ".*=", "./=")
 
+# does the brace at the current token close with a '~' right after it?
+brace_then_tilde <- function(p) {
+  depth <- 0L
+  k <- 0L
+  n <- length(p$toks) - p$pos
+  while (k <= n) {
+    t <- tk(p, k)
+    if (t$type == "op") {
+      if (t$value %in% c("{", "(", "[")) depth <- depth + 1L
+      else if (t$value %in% c("}", ")", "]")) {
+        depth <- depth - 1L
+        if (depth == 0L) return(tk_is(p, "~", "op", k + 1L))
+      } else if (t$value == ";" && depth == 1L) return(FALSE)
+    }
+    if (t$type == "eof") return(FALSE)
+    k <- k + 1L
+  }
+  FALSE
+}
+
 parse_statement <- function(p, block) {
   t <- tk(p)
   loc <- tk_loc(t)
@@ -312,7 +332,9 @@ parse_statement <- function(p, block) {
     tk_next(p)
     return(list(kind = "empty", loc = loc))
   }
-  if (t$type == "op" && t$value == "{") {
+  # a brace opens a block, unless it is an array expression starting a
+  # sampling statement: { a, b } ~ normal(0, 1)
+  if (t$type == "op" && t$value == "{" && !brace_then_tilde(p)) {
     tk_next(p)
     body <- parse_stmts_until_close(p, block)
     expect(p, "}")

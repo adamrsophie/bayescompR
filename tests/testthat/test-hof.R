@@ -50,3 +50,36 @@ test_that("solver failures raise domain errors", {
   out <- utils::capture.output(invisible(bayescomp_model(paste0(f, "transformed data { print(solve_newton(s, [1]', -4.0)); }"))))
   expect_identical(out, "[2]")
 })
+
+test_that("variadic 1D integrators and the deprecated ODE interface match CmdStan", {
+  code <- "
+functions {
+  real ig(real x, real xc, real a) { return exp(-a * x); }
+  real ig2(real x, real xc, real a) { return 1 / sqrt(x) * a; }
+  real igo(real x, real xc, array[] real th, array[] real xr, array[] int xi) { return exp(-th[1] * x) * xr[1]; }
+  array[] real rhs(real t, array[] real y, array[] real th, array[] real xr, array[] int xi) { return {-th[1] * y[1] + xr[1], th[1] * y[1] - 0.5 * y[2]}; }
+}
+data { array[1] real xr; }
+transformed data {
+  print(integrate_1d_double_exponential(ig, 0, 1, 2.0), \" \", integrate_1d_gauss_kronrod(ig, 0, 1, 2.0), \" \",
+        integrate_1d_double_exponential_tol(ig, 0, 1, 1e-8, 1e-8, 10, 2.0), \" \", integrate_1d_gauss_kronrod_tol(ig, 0, positive_infinity(), 1e-8, 1e-8, 10, 2.0),
+        \" \", integrate_1d_double_exponential(ig2, 0, 1, 1.5));
+}
+parameters { real<lower=0> k; }
+model {
+  k ~ lognormal(0, 1);
+  target += integrate_1d_double_exponential(ig, 0, 1, k) + integrate_1d_gauss_kronrod(ig, 0.5, 2, k) + log(integrate_1d_gauss_kronrod_tol(ig, 0, positive_infinity(), 1e-8, 1e-8, 15, k));
+  target += integrate_1d(igo, 0, 1, {k}, xr, rep_array(0, 0), 1e-8);
+  array[3, 2] real yh = integrate_ode_rk45(rhs, {1.0, 0.0}, 0.0, {0.5, 1.0, 2.0}, {k}, xr, rep_array(0, 0));
+  array[2, 2] real yb = integrate_ode_bdf(rhs, {1.0, 0.0}, 0.0, {0.5, 1.0}, {k}, xr, rep_array(0, 0), 1e-8, 1e-8, 10000);
+  array[2, 2] real ya = integrate_ode_adams(rhs, {1.0, 0.0}, 0.0, {0.5, 1.0}, {k}, xr, rep_array(0, 0));
+  array[2, 2] real yi = integrate_ode(rhs, {1.0, 0.0}, 0.0, {0.5, 1.0}, {k}, xr, rep_array(0, 0));
+  target += sum(to_array_1d(yh)) + sum(to_array_1d(yb)) + sum(to_array_1d(ya)) - sum(to_array_1d(yi));
+}
+"
+  out <- utils::capture.output(m <- bayescomp_model(code, data = list(xr = 0.3)))
+  expect_identical(out, "0.432332 0.432332 0.432332 0.5 3")
+  g <- bayescomp_grad_log_prob(m, bayescomp_unconstrain(m, list(k = 0.7)), jacobian = TRUE, propto = TRUE)
+  expect_equal(attr(g, "log_prob"), 6.7157821, tolerance = 1e-6)
+  expect_equal(as.numeric(g), -1.9755955, tolerance = 1e-5)
+})
