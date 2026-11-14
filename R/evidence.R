@@ -25,6 +25,14 @@
 #'   `log_evidence`, `log_evidence_se` and `information`.
 #' @references Skilling, J. (2006). Nested sampling for general Bayesian
 #'   computation. *Bayesian Analysis* 1, 833 to 859.
+#' @examples
+#' \donttest{
+#' m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
+#'   model { mu ~ normal(0, 10); y ~ normal(mu, 1); }",
+#'   data = list(N = 20, y = seq(-1, 3, length.out = 20)))
+#' fit <- bayescomp_nested(m, num_live = 100, seed = 1)
+#' fit$log_evidence
+#' }
 #' @export
 bayescomp_nested <- function(model, num_live = 400L, mcmc_steps = 20L, dlogz = 0.01, max_iter = 50000L,
                              n_name = "N", subset = NULL, output_samples = 1000L, seed = NULL) {
@@ -35,7 +43,7 @@ bayescomp_nested <- function(model, num_live = 400L, mcmc_steps = 20L, dlogz = 0
   nl <- as_count(num_live, "num_live", 10L)
   S <- as_count(output_samples, "output_samples", 1L)
   t0 <- proc.time()[["elapsed"]]
-  pseed <- if (is.null(seed)) NULL else seed + 1L
+  pseed <- next_seed(seed)
   pr_fit <- bayescomp_sample(sp$prior, chains = 1L, iter_warmup = 500L, iter_sampling = 4L * nl, seed = pseed, refresh = 0L)
   info <- NULL
   res <- run_chains(model, 1L, seed, 1L, function(id) {
@@ -126,6 +134,14 @@ log_sum_exp_v <- function(x) { m <- max(x); if (!is.finite(m)) m else m + log(su
 #' @references Green, P. J. (1995). Reversible jump Markov chain Monte Carlo
 #'   computation and Bayesian model determination. *Biometrika* 82, 711 to
 #'   732.
+#' @examples
+#' \donttest{
+#' y <- c(0.5, 1.2, 2, 0.8, 1.6)
+#' mk <- function(s) bayescomp_model(sprintf("data { int N; vector[N] y; } parameters { real mu; }
+#'   model { mu ~ normal(0, %g); y ~ normal(mu, 1); }", s), data = list(N = length(y), y = y))
+#' r <- bayescomp_rjmcmc(list(narrow = mk(1), wide = mk(10)), iter_sampling = 1000, seed = 1)
+#' r$model_prob
+#' }
 #' @export
 bayescomp_rjmcmc <- function(models, prior_prob = NULL, iter_warmup = 500L, iter_sampling = 5000L,
                              proposal_scale = 1.2, seed = NULL) {

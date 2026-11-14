@@ -38,3 +38,10 @@ quantile estimates, both against the probability; dashed lines mark the
 bulk ESS, tail ESS and the ESS of the folded draws |x - median|, which
 measures the efficiency for scale.
 }
+\examples{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+                        seed = 1, refresh = 0)
+plot(fit)
+plot(fit, type = "rank")
+}

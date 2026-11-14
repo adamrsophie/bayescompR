@@ -95,6 +95,13 @@ mdn_sample <- function(w, x, S) {
 #'   inference of simulation models with Bayesian conditional density
 #'   estimation. *NeurIPS*. Cranmer, K., Brehmer, J. and Louppe, G. (2020).
 #'   The frontier of simulation based inference. *PNAS* 117, 30055 to 30062.
+#' @examples
+#' \donttest{
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' sim <- function(th) mean(rnorm(10, th[["mu"]], 1))
+#' fit <- bayescomp_npe(m, sim, observed = 1, num_simulations = 500, epochs = 50, seed = 1)
+#' mean(bayescomp_extract(fit, "mu"))
+#' }
 #' @export
 bayescomp_npe <- function(model, simulator, observed, num_simulations = 2000L, components = 3L, hidden = 32L,
                           epochs = 300L, batch_size = 100L, learning_rate = 3e-3, output_samples = 1000L,

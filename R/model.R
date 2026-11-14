@@ -37,13 +37,37 @@ read_stan_source <- function(code, file, include_paths = NULL) {
   expand_includes(unlist(strsplit(paste(code, collapse = "\n"), "\n", fixed = TRUE)), include_paths, character())
 }
 
-# replace each #include line by the named file, searched in include_paths
-expand_includes <- function(lines, paths, seen) {
+# TRUE for lines that start inside a /* */ comment
+in_block_comment <- function(lines) {
+  inside <- FALSE
+  out <- logical(length(lines))
+  for (i in seq_along(lines)) {
+    out[i] <- inside
+    m <- regmatches(lines[i], gregexpr('/\\*|\\*/|//|"', lines[i]))[[1L]]
+    str <- FALSE
+    for (t in m) {
+      if (inside) { if (t == "*/") inside <- FALSE }
+      else if (str) { if (t == '"') str <- FALSE }
+      else if (t == '"') str <- TRUE
+      else if (t == "//") break
+      else if (t == "/*") inside <- TRUE
+    }
+  }
+  out
+}
+
+# replace each #include line by the named file, searched in include_paths.
+# With includes, attribute "linemap" gives the file (NA for the main
+# program) and line of every line of the result, for error messages.
+expand_includes <- function(lines, paths, seen, file = NA_character_) {
   re <- "^[[:space:]]*#include[[:space:]]*[<\"]?([^>\"[:space:]]+)[>\"]?[[:space:]]*$"
   hit <- grep(re, lines)
-  if (!length(hit)) return(paste(lines, collapse = "\n"))
+  # stanc ignores directives inside block comments
+  hit <- hit[!in_block_comment(lines)[hit]]
+  if (!length(hit) && is.na(file)) return(paste(lines, collapse = "\n"))
   out <- vector("list", length(lines))
   out[] <- as.list(lines)
+  map <- lapply(seq_along(lines), function(i) list(file = rep(file, 1L), line = i))
   inc <- character()
   for (i in hit) {
     name <- sub(re, "\\1", lines[i])
@@ -54,11 +78,14 @@ expand_includes <- function(lines, paths, seen) {
                               list(line = i, col = 1L))
     f <- normalizePath(f)
     if (f %in% seen) stop_syntax(sprintf("#include file '%s' includes itself", name), list(line = i, col = 1L))
-    sub_src <- expand_includes(readLines(f, warn = FALSE), c(paths, dirname(f)), c(seen, f))
+    sub_src <- expand_includes(readLines(f, warn = FALSE), c(paths, dirname(f)), c(seen, f), name)
     inc <- c(inc, f, attr(sub_src, "included"))
     out[[i]] <- as.vector(sub_src)
+    map[[i]] <- attr(sub_src, "linemap")
   }
-  structure(paste(unlist(out), collapse = "\n"), included = unique(inc))
+  txt <- paste(unlist(out), collapse = "\n")
+  structure(txt, included = unique(inc),
+            linemap = list(file = unlist(lapply(map, `[[`, "file")), line = unlist(lapply(map, `[[`, "line"))))
 }
 
 #' Compile a Stan program and bind data
@@ -115,6 +142,9 @@ bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL
   m$external_impl <- functions
   m$chain_id_auto <- "CHAIN_ID" %in% vapply(top_decls(ir, "data"), `[[`, "", "name") && is.null(data$CHAIN_ID)
   if (m$chain_id_auto) data$CHAIN_ID <- 1L
+  # transformed data rebuilt per chain for CHAIN_ID must draw the same random
+  # numbers in every chain, so such a model always has a seed
+  if (m$chain_id_auto && is.null(seed)) seed <- sample.int(.Machine$integer.max, 1L)
   m$seed <- seed
   inst <- with_seed(seed, instantiate(m, data))
   caps <- c("log_density", "gradient", "constrain", "generated_quantities", "rng")
@@ -188,6 +218,15 @@ model_lpg <- function(model, jacobian, propto, print = FALSE) {
 #' @return A data frame with the absolute and relative differences of the
 #'   log density and the largest ones of the gradient at each point, for
 #'   each combination of `jacobian` and `propto`.
+#' @examples
+#' # a backend that evaluates the standard normal density in closed form
+#' bayescomp_register_backend("example_normal", c("log_density", "gradient"), ir_versions = "1.0.0",
+#'   compile = function(ir, model) list(log_density_gradient = function(u, jacobian, propto)
+#'     list(value = -0.5 * sum(u^2) - if (propto) 0 else 0.5 * length(u) * log(2 * pi), grad = -u)),
+#'   description = "closed form normal density")
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }",
+#'                      backend = "example_normal", allow_fallback = TRUE)
+#' bayescomp_validate_backend(m, n = 5)
 #' @export
 bayescomp_validate_backend <- function(model, n = 20L, radius = 2, seed = 1L) {
   check_model(model)
@@ -210,13 +249,21 @@ bayescomp_validate_backend <- function(model, n = 20L, radius = 2, seed = 1L) {
   do.call(rbind, rows)
 }
 
+# a second seed derived from a seed, valid for every integer seed
+next_seed <- function(seed) if (is.null(seed)) NULL else as.integer(as.numeric(seed) %% (.Machine$integer.max - 1) + 1)
+
 with_seed <- function(seed, expr) {
   if (is.null(seed)) return(expr)
   had <- exists(".Random.seed", envir = globalenv(), inherits = FALSE)
   if (had) old <- get(".Random.seed", envir = globalenv())
-  on.exit(if (had) assign(".Random.seed", old, envir = globalenv()) else
-    if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) rm(".Random.seed", envir = globalenv()))
-  set.seed(seed)
+  old_kind <- RNGkind()
+  on.exit({
+    RNGkind(old_kind[1L], old_kind[2L], old_kind[3L])
+    if (had) assign(".Random.seed", old, envir = globalenv())
+    else if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) rm(".Random.seed", envir = globalenv())
+  })
+  # the same stream whatever generator the caller (or a chain) has set
+  set.seed(seed, kind = "Mersenne-Twister", normal.kind = "Inversion", sample.kind = "Rejection")
   expr
 }
 
@@ -320,7 +367,11 @@ instantiate <- function(m, data, generate = FALSE) {
     decls[[d$name]] <- info
     if (generate) {
       args <- eval(cg_cons_args(d$type), env)
-      v <- gen[[d$name]] <- generate_value(info, args, d$name)
+      g <- generate_value(info, args, d$name)
+      # a container of one element stays a JSON array
+      if (!identical(info$kind, "tuple") && length(c(info$adims, info$eshape)) && is.null(dim(g)) && length(g) == 1L) g <- I(g)
+      gen[[d$name]] <- g
+      v <- read_data_value(stats::setNames(list(g), d$name), info)
     } else v <- read_data_value(data, info)
     assign(paste0("V.", d$name), v, envir = env)
     env$.decls <- decls
@@ -341,8 +392,12 @@ instantiate <- function(m, data, generate = FALSE) {
   # out of range in a branch that never runs) is left to fail where used
   for (hx in m$hoist) local({
     v <- tryCatch(eval(hx$code, env), error = function(e) e)
-    if (inherits(v, "error")) eval(call("delayedAssign", hx$name, hx$code, env, env))
-    else assign(hx$name, v, envir = env)
+    # an active binding re-signals the error on every use (a promise warns
+    # "restarting interrupted promise evaluation" from the second use on)
+    if (inherits(v, "error")) {
+      code <- hx$code
+      makeActiveBinding(hx$name, function() eval(code, env), env)
+    } else assign(hx$name, v, envir = env)
   })
   # parameters, transformed parameters, generated quantities
   off <- 0L
@@ -401,7 +456,7 @@ simplify_data_list <- function(x) {
   d1 <- if (is.null(dim(parts[[1L]]))) length(parts[[1L]]) else dim(parts[[1L]])
   n <- length(parts)
   flat <- unlist(lapply(parts, as.vector))
-  if (length(parts[[1L]]) == 1L) return(flat)
+  if (!is.list(x[[1L]])) return(flat)
   arr <- array(flat, dim = c(d1, n))
   aperm(arr, c(length(d1) + 1L, seq_along(d1)))
 }
@@ -456,6 +511,10 @@ lp_grad <- function(model, upars, jacobian = TRUE, propto = TRUE, print = TRUE) 
 #' @return The log density (a number, or a vector for a matrix of points).
 #'   `bayescomp_grad_log_prob()` returns the gradient (a matrix with one row
 #'   per point for a matrix) with the log density in attribute `"log_prob"`.
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' bayescomp_log_prob(m, 0.5)
+#' bayescomp_grad_log_prob(m, 0.5)
 #' @export
 bayescomp_log_prob <- function(model, upars, jacobian = TRUE, propto = FALSE) {
   f <- model_lp(model, jacobian, propto, TRUE)
@@ -494,6 +553,11 @@ as_upars <- function(model, upars) {
 #' @param seed Seed for random number generators in generated quantities.
 #' @return `bayescomp_unconstrain()` returns a numeric vector;
 #'   `bayescomp_constrain()` returns a named list of arrays.
+#' @examples
+#' m <- bayescomp_model("parameters { real<lower=0> sigma; } model { sigma ~ exponential(1); }")
+#' u <- bayescomp_unconstrain(m, list(sigma = 2))
+#' u
+#' bayescomp_constrain(m, u)
 #' @export
 bayescomp_unconstrain <- function(model, pars) {
   if (!is.list(pars)) stop("'pars' must be a named list", call. = FALSE)
@@ -536,6 +600,11 @@ flat_names <- function(name, dims) {
 #' @param include_tparams,include_gqs Include transformed parameters and
 #'   generated quantities.
 #' @return Character vector of flattened names in Stan's output order.
+#' @examples
+#' m <- bayescomp_model("parameters { vector[2] b; } model { b ~ normal(0, 1); }
+#'   generated quantities { real s = sum(b); }")
+#' bayescomp_param_names(m)
+#' bayescomp_param_names(m, include_gqs = FALSE)
 #' @export
 bayescomp_param_names <- function(model, include_tparams = TRUE, include_gqs = TRUE) {
   nm <- c(model$params$pars, if (include_tparams) model$params$tps, if (include_gqs) model$params$gqs)
@@ -550,6 +619,10 @@ bayescomp_param_names <- function(model, include_tparams = TRUE, include_gqs = T
 #' Number of unconstrained parameters
 #' @param model A `bayescomp_model`.
 #' @return The number of unconstrained parameters, an integer.
+#' @examples
+#' m <- bayescomp_model("parameters { simplex[3] p; real mu; }
+#'   model { mu ~ normal(0, 1); }")
+#' bayescomp_dim(m)
 #' @export
 bayescomp_dim <- function(model) model$dim
 
@@ -601,16 +674,43 @@ bayescomp_expose_functions <- function(x, ...) {
   lapply(by_name, function(ov) {
     impls <- lapply(ov, function(fd) get(fd$sig$mangled, envir = fenv))
     types <- lapply(ov, function(fd) lapply(fd$args, `[[`, "type"))
+    rets <- lapply(ov, function(fd) fd$sig$ret)
     nm <- ov[[1L]]$name
     function(...) {
       a <- list(...)
-      for (k in seq_along(ov)) {
-        if (length(types[[k]]) == length(a) && all(mapply(r_value_fits, types[[k]], a)))
-          return(do.call(impls[[k]], c(a, list(ctx))))
-      }
-      stop(sprintf("no signature of '%s' takes these arguments", nm), call. = FALSE)
+      # the viable overload with the fewest promotions, as in Stan
+      cost <- vapply(seq_along(ov), function(k) {
+        if (length(types[[k]]) != length(a) || !all(mapply(r_value_fits, types[[k]], a))) return(Inf)
+        sum(mapply(r_value_cost, types[[k]], a))
+      }, 0)
+      if (!any(is.finite(cost))) stop(sprintf("no signature of '%s' takes these arguments", nm), call. = FALSE)
+      k <- which.min(cost)
+      args <- mapply(r_to_stan_value, types[[k]], a, SIMPLIFY = FALSE)
+      out <- do.call(impls[[k]], c(unname(args), list(ctx)))
+      if (is_cx_ty(rets[[k]])) cx_value(out) else out
     }
   })
+}
+
+# Stan type of an R value's elements: int, real or complex
+r_elem_base <- function(v) {
+  if (is.complex(v)) "complex"
+  else if (is.integer(v) || is.logical(v)) "int"
+  else "real"
+}
+# promotions needed to pass an R value as a Stan argument
+r_value_cost <- function(type, v) {
+  if (is.list(v)) return(0)
+  to <- if (is_cx_ty(type)) "complex" else if (type$base == "int") "int" else "real"
+  from <- r_elem_base(v)
+  if (from == "real" && to == "int") return(0.5)
+  promo_cost(ty(to), ty(from))
+}
+# an R complex argument in the package's storage of complex values
+r_to_stan_value <- function(type, v) {
+  if (!is_cx_ty(type) || is.list(v)) return(v)
+  z <- as.complex(v)
+  cx_from_z(z, if (type$nd == 0L && type$base == "complex") integer(0) else z_dims(z))
 }
 
 # does an R value fit a Stan argument type (for overload selection)
@@ -618,8 +718,8 @@ r_value_fits <- function(type, v) {
   nd <- type$nd %||% 0L
   if (nd > 0L) return(is.list(v) || is.numeric(v) || is.complex(v))
   switch(type$base,
-    int = is.numeric(v) && length(v) == 1L && is.null(dim(v)) && v == round(v),
-    real = is.numeric(v) && length(v) == 1L && is.null(dim(v)),
+    int = (is.numeric(v) || is.logical(v)) && length(v) == 1L && is.null(dim(v)) && v == round(v),
+    real = (is.numeric(v) || is.logical(v)) && length(v) == 1L && is.null(dim(v)),
     complex = (is.numeric(v) || is.complex(v)) && length(v) == 1L,
     vector = , row_vector = , complex_vector = , complex_row_vector = (is.numeric(v) || is.complex(v)) && is.null(dim(v)),
     matrix = , complex_matrix = is.matrix(v),
@@ -662,6 +762,9 @@ bayescomp_info <- function(x, include_paths = NULL) {
       f <- n$resolved %||% n$name
       if (grepl("_(lpdf|lupdf|lpmf|lupmf|cdf|lcdf|lccdf)$", f)) dists <<- c(dists, f) else funs <<- c(funs, f)
     }
+    # stanc lists print, reject and fatal_error, and operators called by name
+    if (is.character(n$kind) && n$kind %in% c("print", "reject", "fatal_error")) funs <<- c(funs, n$kind)
+    if (is.character(n$fun_name)) funs <<- c(funs, n$fun_name)
     for (e in n) if (is.list(e) && !is.function(e)) walk(e)
   }
   walk(ir$blocks)
@@ -737,7 +840,20 @@ bayescomp_generate_inits <- function(x, seed = NULL, file = NULL) {
 }
 
 generate_value <- function(info, args, name) {
-  if (identical(info$kind, "tuple")) stop_data(sprintf("cannot generate tuple data '%s'", name))
+  if (identical(info$kind, "tuple")) {
+    # a tuple as bayescomp_read_data() gives it: elements named "1", "2", ...
+    one <- function() {
+      r <- lapply(seq_along(info$elems), function(k) {
+        e <- info$elems[[k]]
+        a <- args[[k]] %||% list()
+        if (!identical(e$kind, "tuple")) a <- lapply(a, function(x) if (length(val(x)) > 1L) val(x) else x)
+        generate_value(e, a, name)
+      })
+      stats::setNames(r, as.character(seq_along(r)))
+    }
+    if (!length(info$adims)) return(one())
+    return(lapply(seq_len(prod(info$adims)), function(i) one()))
+  }
   n_elem <- prod(c(info$adims, info$eshape, 1L))
   if (identical(info$base, "int")) {
     lo <- if (!is.null(args$lower)) val(args$lower) else 1

@@ -25,6 +25,10 @@
 #'   `log_p__` and `log_g__`, and element `vi`: the ELBO trace (`elbo`), the
 #'   step size `eta`, `iterations`, `converged` (whether the relative ELBO
 #'   change fell below `tol_rel_obj`) and a `status` message.
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_variational(m, output_samples = 200, seed = 1)
+#' mean(bayescomp_extract(fit, "mu"))
 #' @export
 bayescomp_variational <- function(model, algorithm = c("meanfield", "fullrank"), iter = 10000L,
                                   grad_samples = 1L, elbo_samples = 100L, eta = NULL, adapt_iter = 50L,
@@ -124,12 +128,17 @@ bayescomp_variational <- function(model, algorithm = c("meanfield", "fullrank"),
     vp <- r$vp
     z <- draw_z(output_samples)
     qs <- transform(vp, z)
-    log_g <- -0.5 * rowSums(z^2) - 0.5 * n * log(2 * pi) - (entropy(vp) - 0.5 * n * (1 + log(2 * pi)))
+    # as CmdStan: log_g__ unnormalized in the standard normal draws, log_p__
+    # with all constants
+    log_g <- -0.5 * rowSums(z^2)
     log_p <- apply(qs, 1L, function(q) lpg(q)$value)
+    log_p <- log_p + propto_shift(model, qs, log_p)
     gq <- chain_write_draws(model, qs, FALSE)
     trace <<- list(elbo = r$trace, eta = eta, iterations = r$iter, converged = r$converged,
                    status = if (r$converged) "converged: relative ELBO change below tol_rel_obj" else "stopped: maximum iterations reached",
                    mean = vp$mu,
+                   # CmdStan's first output row, drawn in this run's RNG stream
+                   mean_draw = chain_write_draws(model, matrix(vp$mu, 1L), FALSE),
                    sd = if (full) sqrt(rowSums(vp$L^2)) else exp(vp$omega), L = if (full) vp$L else NULL)
     dg <- matrix(0, output_samples, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
     list(q = qs, gq = cbind(log_p__ = log_p, log_g__ = log_g, gq), diag = dg, step_size = eta,
@@ -342,6 +351,10 @@ gpd_quantile <- function(p, k, sigma) sigma * expm1(-k * log1p(-p)) / k
 #' @return A `bayescomp_fit` with method `"pathfinder"`, extra columns
 #'   `log_p__` and `log_q__`, and elements `pareto_k`, `elbo` (the best ELBO
 #'   of each path) and `path` (the path of each draw).
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_pathfinder(m, num_paths = 2, num_draws = 200, num_psis_draws = 200, seed = 1)
+#' mean(bayescomp_extract(fit, "mu"))
 #' @export
 bayescomp_pathfinder <- function(model, num_paths = 4L, num_draws = 1000L, num_psis_draws = 1000L, history_size = 5L,
                                  max_lbfgs_iters = 1000L, num_elbo_draws = 25L, psis_resample = TRUE, calculate_lp = TRUE,
@@ -365,12 +378,16 @@ bayescomp_pathfinder <- function(model, num_paths = 4L, num_draws = 1000L, num_p
   })
   q <- do.call(rbind, lapply(paths, `[[`, "q"))
   lp <- unlist(lapply(paths, `[[`, "log_p"))
+  # CmdStan's lp__ has all constants
+  shift <- propto_shift(model, q, lp)
+  lp <- lp + shift
+  for (i in seq_along(paths)) paths[[i]]$log_p <- paths[[i]]$log_p + shift
   lq <- unlist(lapply(paths, `[[`, "log_q"))
   pid <- rep(seq_len(num_paths), vapply(paths, function(p) nrow(p$q), 0L))
   resample <- isTRUE(psis_resample) && ctl$calculate_lp && num_paths > 1L
   k <- NA_real_
   pick <- NULL
-  res <- run_chains(model, 1L, if (is.null(seed)) NULL else seed + 1L, 1L, function(id) {
+  res <- run_chains(model, 1L, next_seed(seed), 1L, function(id) {
     sel <- seq_len(nrow(q))
     if (resample) {
       lw <- ifelse(is.finite(lp), lp - lq, -Inf)

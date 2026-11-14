@@ -44,7 +44,7 @@ bayescomp_format <- function(code = NULL, file = NULL, canonicalize = character(
     lines[inc] <- paste0("//#include", sub("^[[:space:]]*#include", "", lines[inc]))
     src <- paste(lines, collapse = "\n")
   }
-  prog <- stan_parse(src)
+  prog <- stan_parse(src, remap = FALSE)
   stan_check(prog)
   st <- new.env(parent = emptyenv())
   st$comments <- if ("strip-comments" %in% canonicalize) list() else prog$comments %||% list()
@@ -59,7 +59,9 @@ bayescomp_format <- function(code = NULL, file = NULL, canonicalize = character(
     body <- if (b$name == "functions") lapply(b$body, fmt_fundef, st = st, ind = "  ") else fmt_stmts(b$body, st, "  ")
     nxt <- if (k < length(bl)) bl[[k + 1L]]$loc$line else .Machine$integer.max
     tail <- fmt_comments_before(st, nxt, "  ")
-    out <- c(out, paste0(b$name, " {"), unlist(body), tail, "}")
+    body <- unlist(body)
+    if (!length(body) && !length(tail)) body <- "  "
+    out <- c(out, paste0(b$name, " {"), body, tail, "}")
   }
   out <- c(out, fmt_comments_before(st, .Machine$integer.max, ""))
   structure(paste0(paste(out, collapse = "\n"), "\n"), class = "bayescomp_code")
@@ -126,6 +128,8 @@ fmt_last_line <- function(s) {
 }
 
 fmt_stmts <- function(ss, st, ind) {
+  # stanc prints an empty body as one indented blank line
+  if (!length(ss)) return(ind)
   out <- character()
   for (s in fmt_merge_decls(ss)) {
     out <- c(out, fmt_comments_before(st, s$loc$line %||% 0L, ind))
@@ -279,7 +283,7 @@ fmt_e <- function(x, st, col = 0L) {
     cond = paste0(r(x$cond), " ? ", r(x$a), " : ", r(x$b)),
     array_expr = paste0("{", paste(vapply(x$items, r, ""), collapse = ", "), "}"),
     rowvec_expr = paste0("[", paste(vapply(x$items, r, ""), collapse = ", "), "]"),
-    tuple_expr = paste0("(", paste(vapply(x$items, r, ""), collapse = ", "), ")"),
+    tuple_expr = paste0("(", paste(vapply(x$items, r, ""), collapse = ", "), if (length(x$items) == 1L) ",", ")"),
     index = paste0(r(x$x), "[", paste(vapply(x$idx, fmt_index, "", st = st), collapse = ", "), "]"),
     call = {
       a <- vapply(x$args, r, "")

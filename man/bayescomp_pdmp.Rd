@@ -40,6 +40,11 @@ A \code{bayescomp_fit} with method \code{"pdmp"} and element \code{events}
 \description{
 Piecewise deterministic samplers
 }
+\examples{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+fit <- bayescomp_pdmp(m, chains = 1, iter_warmup = 100, iter_sampling = 200, seed = 1)
+mean(bayescomp_extract(fit, "mu"))
+}
 \references{
 Bierkens, J., Fearnhead, P. and Roberts, G. (2019). The
 Zig-Zag process and super efficient sampling for Bayesian analysis of

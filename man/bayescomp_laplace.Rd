@@ -38,3 +38,8 @@ Draws from a normal approximation to the posterior on the unconstrained
 scale, centered at the mode with covariance equal to the inverse negative
 Hessian of the log density (as Stan's \code{laplace} method).
 }
+\examples{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+fit <- bayescomp_laplace(m, draws = 200, seed = 1)
+sd(bayescomp_extract(fit, "mu"))
+}

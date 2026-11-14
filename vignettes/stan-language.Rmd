@@ -239,7 +239,11 @@ by the implicit function theorem for algebraic equations. The non stiff
 ODE solvers use the Dormand and Prince method, `ode_bdf` a Rosenbrock
 method (RODAS3) and the DAE solvers a three stage Radau IIA method, so
 results agree with CmdStan to within the requested tolerances, not to the
-last digit. `map_rect` and `reduce_sum` evaluate in a single process.
+last digit. `ode_adams` and `ode_ckrk` also use the Dormand and Prince
+method, `ode_adjoint_tol_ctl` computes forward sensitivities (its adjoint
+tolerances, checkpointing and solver choices are validated but do not
+change the method), and `integrate_1d` ignores `max_refinements` beyond
+validating it. `map_rect` and `reduce_sum` evaluate in a single process.
 
 ```{r}
 m <- bayescomp_model("

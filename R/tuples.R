@@ -166,6 +166,21 @@ tuple_read_data <- function(x, d) {
       stop_data(sprintf("variable '%s': expected a list of %d tuples", nm, dims[1L]))
     rt_tarr(lapply(v, build, dims = dims[-1L]))
   }
+  # a multidimensional array may also come as one flat list of its tuples in
+  # column major order, as bayescomp_constrain() returns it
+  if (length(d$adims) > 1L && is.list(x) && length(x) == prod(d$adims) && length(x) != d$adims[1L]) {
+    flat <- unclass(x)
+    sub <- arrayInd(seq_along(flat), d$adims)
+    nest <- function(prefix) {
+      k <- length(prefix) + 1L
+      if (k > length(d$adims)) {
+        hit <- which(apply(sub, 1L, function(r) all(r == prefix)))
+        return(flat[[hit]])
+      }
+      lapply(seq_len(d$adims[k]), function(i) nest(c(prefix, i)))
+    }
+    x <- nest(integer(0))
+  }
   build(x, d$adims)
 }
 

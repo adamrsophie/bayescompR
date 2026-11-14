@@ -27,6 +27,10 @@
 #'   big data. *Annals of Statistics* 47, 1288 to 1320. Bouchard-Cote, A.,
 #'   Vollmer, S. J. and Doucet, A. (2018). The bouncy particle sampler.
 #'   *Journal of the American Statistical Association* 113, 855 to 867.
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_pdmp(m, chains = 1, iter_warmup = 100, iter_sampling = 200, seed = 1)
+#' mean(bayescomp_extract(fit, "mu"))
 #' @export
 bayescomp_pdmp <- function(model, method = c("zigzag", "bps"), chains = 4L, iter_warmup = 500L,
                            iter_sampling = 1000L, refresh_rate = NULL, dt = 0.05, init = 2, seed = NULL,

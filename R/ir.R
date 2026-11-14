@@ -105,6 +105,13 @@ to_json <- function(x) {
 #'   columns are ignored.
 #' @param seed Random seed.
 #' @return A `bayescomp_fit` whose draws hold the new quantities.
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }
+#'   generated quantities { real y_rep = normal_rng(mu, 1); }")
+#' fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+#'                         seed = 1, refresh = 0)
+#' gq <- bayescomp_generate_quantities(m, fit, seed = 2)
+#' mean(bayescomp_extract(gq, "y_rep"))
 #' @export
 bayescomp_generate_quantities <- function(model, fit, seed = NULL) {
   check_model(model)
@@ -122,12 +129,18 @@ bayescomp_generate_quantities <- function(model, fit, seed = NULL) {
     })
     if (!identical(sig(model), sig(fit$model)))
       stop("the model's parameter declarations differ from those of the fit (names, order, shapes or constraints)", call. = FALSE)
-    # bounds may depend on data: the same unconstrained draw must map to the
-    # same parameter values under both models
-    pv <- function(m, u) flatten_draw(write_array(m, u, FALSE, FALSE, print = FALSE)[[1L]])
-    for (u in lapply(fit$unconstrained, function(q) q[1L, ])) {
-      if (!isTRUE(all.equal(pv(model, u), pv(fit$model, u), tolerance = 1e-12)))
-        stop("the model's parameter constraints evaluate differently from those of the fit (bounds that depend on changed data)", call. = FALSE)
+    # bounds may depend on data, so the saved parameter values (not the
+    # unconstrained coordinates) are carried over to the new model
+    if (!identical(model, fit$model)) {
+      fit$unconstrained <- lapply(fit$unconstrained, function(q) {
+        if (!nrow(q)) return(q)
+        out <- vapply(seq_len(nrow(q)), function(i) {
+          v <- write_array(fit$model, q[i, ], FALSE, FALSE, print = FALSE)[[1L]]
+          tryCatch(bayescomp_unconstrain(model, v), error = function(e)
+            stop(sprintf("draw %d of the fit is outside the constraints of the model: %s", i, conditionMessage(e)), call. = FALSE))
+        }, numeric(model$dim))
+        matrix(out, nrow(q), model$dim, byrow = TRUE)
+      })
     }
   }
   chains <- length(fit$unconstrained)

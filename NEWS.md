@@ -145,6 +145,24 @@ First release.
   match the fit; impossible infinite bounds and nonpositive multipliers are
   domain errors; slice, Metropolis, ensemble, tempering and PMCMC start and
   run without a gradient.
+* Complex parameters (scalars, vectors, row vectors and matrices) as in
+  stanc 2.40; tuple data can be generated and multidimensional arrays of
+  tuples are read back from CSV files.
+* `#include` directives inside block comments are ignored, and errors in
+  included files name the file and line. Sampling statements must name a
+  distribution stanc knows; `T[ , ]` is no truncation and truncation bounds
+  must be scalars.
+* Transformed data with `CHAIN_ID` is the same in every chain, run and
+  number of cores; seeded calls restore the random number generator.
+* `bayescomp_stansummary()` and `bayescomp_diagnose()` compute MCSE, ESS and
+  R-hat as `bin/stansummary` and `bin/diagnose` do. The density columns of
+  ADVI, Pathfinder and Laplace output (`log_p__`, `log_g__`, `log_q__`)
+  follow CmdStan's conventions, and the CSV header uses CmdStan's layout.
+* `bayescomp_optimize()` gains `refresh`; `bayescomp_format()` keeps the
+  comma of a one element tuple and prints empty blocks as stanc does;
+  `bayescomp_info()` lists `print`, `reject` and operators called by name.
+* `bayescomp_write_csv()` needs an explicit `dir`.
+* `matrix_normal_prec` is removed, as stanc 2.40 rejects it.
 * `bayescomp_compatibility()` returns the machine readable feature matrix
   (implemented, partial, not implemented, not applicable) with the test
   files covering each feature.

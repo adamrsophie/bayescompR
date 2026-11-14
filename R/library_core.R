@@ -503,24 +503,47 @@ def("fma", c("any", "any", "any"), r_bcast_n, function(x, y, z) {
   same_shape(x, y, "fma"); same_shape(x, z, "fma"); same_shape(y, z, "fma")
   as_dbl(x) * as_dbl(y) + as_dbl(z)
 })
+# log(sum(theta * exp(lambda))) with analytic partials (as Stan Math), which
+# stay finite where a weight is 0 or 1
+ad_log_mix <- function(th, lp) {
+  tv <- val(th); lv <- val(lp)
+  ft <- as.vector(tv); fl <- as.vector(lv)
+  m <- max(fl)
+  v <- if (!is.finite(m)) m else m + log(sum(ft * exp(fl - m)))
+  ad_node(v, list(th, lp), function(g) {
+    e <- if (is.finite(v)) exp(fl - v) else numeric(length(fl))
+    gt <- g * e; gl <- g * ft * e
+    if (!is.null(dim(tv))) dim(gt) <- dim(tv)
+    if (!is.null(dim(lv))) dim(gl) <- dim(lv)
+    list(gt, gl)
+  })
+}
 def("log_mix", c("real", "real", "real"), "real", function(th, a, b) {
   th <- as_dbl(th)
   chk_prob("log_mix", "theta", th)
-  ad_log_sum_exp2(log(th) + as_dbl(a), ad_log1m(th) + as_dbl(b))
+  a <- as_dbl(a); b <- as_dbl(b)
+  t <- val(th); va <- val(a); vb <- val(b)
+  m <- max(va, vb)
+  v <- if (!is.finite(m)) m else m + log(t * exp(va - m) + (1 - t) * exp(vb - m))
+  ad_node(v, list(th, a, b), function(g) {
+    ea <- if (is.finite(v)) exp(va - v) else 0
+    eb <- if (is.finite(v)) exp(vb - v) else 0
+    list(g * (ea - eb), g * t * ea, g * (1 - t) * eb)
+  })
 })
 def("log_mix", c("vecs1", "vecs1"), "real", function(th, lp) {
   if (nelem(th) != nelem(lp)) stop_shape("log_mix: theta and lambda must have the same size")
-  ad_log_sum_exp(log(flat(as_dbl(th))) + flat(as_dbl(lp)))
+  ad_log_mix(as_dbl(th), as_dbl(lp))
 })
 # an array of densities: the sum of the mixtures of its elements
 for (lt in c("vector[]", "row_vector[]")) def("log_mix", c("vecs1", lt), "real", function(th, lp) {
   K <- nelem(th)
   vl <- val(lp)
   if (ncol(vl) != K) stop_shape("log_mix: theta and each lambda must have the same size")
-  lth <- log(flat(as_dbl(th)))
+  th <- as_dbl(th)
   lp <- as_dbl(lp)
   out <- 0
-  for (n in seq_len(nrow(vl))) out <- out + ad_log_sum_exp(lth + ad_gather(lp, n + (seq_len(K) - 1L) * nrow(vl)))
+  for (n in seq_len(nrow(vl))) out <- out + ad_log_mix(th, ad_gather(lp, n + (seq_len(K) - 1L) * nrow(vl)))
   out
 })
 def("hypergeometric_2F1", c("real", "real", "real", "real"), "real", function(a, b, c, z) {

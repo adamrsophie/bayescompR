@@ -32,6 +32,10 @@
 #'   Computational Science* 5, 65 to 80. ter Braak, C. J. F. (2006). A Markov
 #'   chain Monte Carlo version of the genetic algorithm differential
 #'   evolution. *Statistics and Computing* 16, 239 to 249.
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_ensemble(m, iter_warmup = 100, iter_sampling = 100, seed = 1)
+#' mean(bayescomp_extract(fit, "mu"))
 #' @export
 bayescomp_ensemble <- function(model, method = c("stretch", "de"), walkers = NULL, iter_warmup = 1000L,
                                iter_sampling = 1000L, thin = 1L, a = 2, gamma = NULL, noise = 1e-4,

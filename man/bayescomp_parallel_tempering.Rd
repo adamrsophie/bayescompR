@@ -49,6 +49,15 @@ barrier) and \code{log_evidence} (stepping stone estimate per chain).
 \description{
 Parallel tempering
 }
+\examples{
+\donttest{
+m <- bayescomp_model("parameters { real x; }
+  model { target += log_mix(0.5, normal_lpdf(x | -3, 1), normal_lpdf(x | 3, 1)); }")
+fit <- bayescomp_parallel_tempering(m, num_temps = 4, chains = 1, iter_warmup = 200,
+                                    iter_sampling = 200, seed = 1)
+mean(bayescomp_extract(fit, "x") > 0)
+}
+}
 \references{
 Syed, S., Bouchard-Cote, A., Deligiannidis, G. and Doucet, A.
 (2022). Non-reversible parallel tempering: a scalable highly parallel

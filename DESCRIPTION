@@ -2,8 +2,10 @@ Package: bayescompR
 Title: Pure R Implementation of the 'Stan' Probabilistic Programming Language
 Version: 0.1.0
 Authors@R:
-    person("Adam R", "Sophie", email = "adamrsophie@gmail.com",
-           role = c("aut", "cre", "cph"))
+    c(person("Adam R", "Sophie", email = "adamrsophie@gmail.com",
+             role = c("aut", "cre", "cph")),
+      person("Stan Development Team", role = "cph",
+             comment = "function signature table and warning texts derived from stanc and CmdStan; see inst/COPYRIGHTS"))
 Description: An independent implementation, written entirely in R, of a large
     subset of the 'Stan' probabilistic programming language (Carpenter et al.
     2017 <doi:10.18637/jss.v076.i01>) and of many inference algorithms.

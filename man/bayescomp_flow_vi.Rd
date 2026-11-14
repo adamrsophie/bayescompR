@@ -44,6 +44,13 @@ A \code{bayescomp_fit} with method \code{"flow"}, \code{elbo} (trace), and
 \description{
 Normalizing flow variational inference
 }
+\examples{
+\donttest{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+fit <- bayescomp_flow_vi(m, layers = 2, iter = 200, seed = 1)
+mean(bayescomp_extract(fit, "mu"))
+}
+}
 \references{
 Rezende, D. and Mohamed, S. (2015). Variational inference
 with normalizing flows. \emph{Proceedings of the 32nd International

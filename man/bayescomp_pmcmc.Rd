@@ -48,6 +48,23 @@ the likelihood, which leaves the exact posterior invariant. \code{"pgibbs"}
 update of the latent path with a Metropolis update of the parameters
 given the path, and needs \code{log_init} and \code{log_transition}.
 }
+\examples{
+\donttest{
+set.seed(1)
+y <- cumsum(rnorm(20, 0, 0.5)) + rnorm(20, 0, 0.7)
+ssm <- bayescomp_ssm(y,
+  init = function(N, th) rnorm(N),
+  transition = function(x, t, th) th[["phi"]] * x + rnorm(length(x), 0, th[["q"]]),
+  log_obs = function(yt, x, t, th) dnorm(yt, x, 0.7, log = TRUE),
+  log_init = function(x, th) dnorm(x, log = TRUE),
+  log_transition = function(xn, xo, t, th) dnorm(xn, th[["phi"]] * xo, th[["q"]], log = TRUE))
+m <- bayescomp_model("parameters { real<lower=-1, upper=1> phi; real<lower=0> q; }
+  model { phi ~ normal(0, 1); q ~ normal(0, 1); }")
+fit <- bayescomp_pmcmc(m, ssm, num_particles = 50, chains = 1, iter_warmup = 100,
+                       iter_sampling = 100, seed = 1)
+mean(bayescomp_extract(fit, "phi"))
+}
+}
 \references{
 Andrieu, C., Doucet, A. and Holenstein, R. (2010). Particle
 Markov chain Monte Carlo methods. \emph{Journal of the Royal Statistical

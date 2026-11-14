@@ -31,3 +31,8 @@ per point for a matrix) with the log density in attribute \code{"log_prob"}.
 \description{
 Log density of a model
 }
+\examples{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+bayescomp_log_prob(m, 0.5)
+bayescomp_grad_log_prob(m, 0.5)
+}

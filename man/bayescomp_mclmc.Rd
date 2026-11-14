@@ -39,6 +39,11 @@ length \code{L} is set to 0.4 times the step size times the mean number of steps
 per effective sample of the second half of warmup. Without a Metropolis correction the draws have
 a small asymptotic bias controlled by the step size.
 }
+\examples{
+m <- bayescomp_model("parameters { vector[2] b; } model { b ~ normal(0, 1); }")
+fit <- bayescomp_mclmc(m, chains = 1, iter_warmup = 200, iter_sampling = 200, seed = 1)
+colMeans(bayescomp_extract(fit, "b"))
+}
 \references{
 Robnik, J., De Luca, G. B., Silverstein, E. and Seljak, U.
 (2023). Microcanonical Hamiltonian Monte Carlo. \emph{Journal of Machine

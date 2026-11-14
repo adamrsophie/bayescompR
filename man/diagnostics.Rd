@@ -37,3 +37,11 @@ A number.
 \description{
 Convergence diagnostics for one quantity
 }
+\examples{
+set.seed(1)
+x <- matrix(rnorm(400), 100, 4)
+bayescomp_rhat(x)
+bayescomp_ess_bulk(x)
+bayescomp_ess_tail(x)
+bayescomp_mcse_mean(x)
+}

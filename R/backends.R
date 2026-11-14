@@ -21,6 +21,15 @@
 #'   jacobian, propto)` returning `list(value, grad)`.
 #' @param description One line description.
 #' @return Invisibly, the backend record.
+#' @examples
+#' # a backend that evaluates the standard normal density in closed form
+#' bayescomp_register_backend("example_normal", c("log_density", "gradient"), ir_versions = "1.0.0",
+#'   compile = function(ir, model) list(log_density_gradient = function(u, jacobian, propto)
+#'     list(value = -0.5 * sum(u^2) - if (propto) 0 else 0.5 * length(u) * log(2 * pi), grad = -u)),
+#'   description = "closed form normal density")
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }",
+#'                      backend = "example_normal", allow_fallback = TRUE)
+#' bayescomp_validate_backend(m, n = 5)
 #' @export
 bayescomp_register_backend <- function(name, capabilities, ir_versions, compile, description = "") {
   stopifnot(is.character(name), length(name) == 1L, is.function(compile))
@@ -32,6 +41,8 @@ bayescomp_register_backend <- function(name, capabilities, ir_versions, compile,
 
 #' List the available execution backends
 #' @return A data frame with one row per backend.
+#' @examples
+#' bayescomp_backends()
 #' @export
 bayescomp_backends <- function() {
   nms <- sort(ls(.backends))
@@ -76,6 +87,10 @@ native_capabilities <- c("log_density", "gradient")
 #' @return A list with `ir` (JSON string), `data` (JSON string mapping each
 #'   name to `dims` and `values`) and `dim` (number of unconstrained
 #'   parameters).
+#' @examples
+#' m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
+#'   model { y ~ normal(mu, 1); }", data = list(N = 2, y = c(0.1, 0.4)))
+#' str(bayescomp_native_inputs(m), max.level = 1)
 #' @export
 bayescomp_native_inputs <- function(model) {
   check_model(model)
@@ -100,6 +115,9 @@ bayescomp_native_inputs <- function(model) {
 #'
 #' @param message Error string such as `"E_REJECT: ..."`.
 #' @return Does not return.
+#' @examples
+#' e <- tryCatch(bayescomp_native_error("the native backend failed"), error = identity)
+#' class(e)
 #' @export
 bayescomp_native_error <- function(message) {
   code <- sub(":.*$", "", message)

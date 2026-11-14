@@ -22,3 +22,9 @@ and tail effective sample sizes (the last three for MCMC fits only).
 \description{
 Posterior summary
 }
+\examples{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+                        seed = 1, refresh = 0)
+summary(fit)
+}

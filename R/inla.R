@@ -27,6 +27,15 @@
 #'   Bayesian inference for latent Gaussian models by using integrated nested
 #'   Laplace approximations. *Journal of the Royal Statistical Society B* 71,
 #'   319 to 392.
+#' @examples
+#' \donttest{
+#' m <- bayescomp_model("data { int J; vector[J] y; vector[J] s; }
+#'   parameters { real mu; real<lower=0> tau; vector[J] theta; }
+#'   model { mu ~ normal(0, 5); tau ~ normal(0, 5); theta ~ normal(mu, tau); y ~ normal(theta, s); }",
+#'   data = list(J = 8, y = c(28, 8, -3, 7, -1, 1, 18, 12), s = c(15, 10, 16, 11, 9, 11, 10, 18)))
+#' fit <- bayescomp_inla(m, latent = c("theta", "mu"), seed = 1)
+#' mean(bayescomp_extract(fit, "tau"))
+#' }
 #' @export
 bayescomp_inla <- function(model, latent, dz = NULL, threshold = 5, output_samples = 2000L, seed = NULL) {
   check_model(model)

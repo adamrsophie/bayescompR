@@ -7,7 +7,7 @@
 \usage{
 bayescomp_write_csv(
   fit,
-  dir = ".",
+  dir,
   basename = "output",
   sig_figs = 8L,
   save_metric = FALSE,
@@ -33,7 +33,9 @@ CmdStan's \code{save_metric}); such a file can be given to
 \code{save_diagnostics = TRUE} also get \verb{<file>_diagnostic.csv} (CmdStan's
 \code{diagnostic_file}). Programs with \code{profile} blocks also get
 \verb{<file>_profile.csv} (CmdStan's \code{profile_file}) from element \code{profile}
-of the fit.}
+of the fit. Profile times are measured while the block runs; the
+reverse pass of the gradient is not attributed to blocks, so
+\code{reverse_time}, \code{chain_stack} and \code{no_chain_stack} are 0.}
 
 \item{save_config}{Also write the run configuration as
 \verb{<basename>_config.json} (CmdStan's \code{save_cmdstan_config}).}

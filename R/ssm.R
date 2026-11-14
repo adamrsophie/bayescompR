@@ -22,6 +22,16 @@
 #'   `function(x, theta)` and `function(x_new, x_old, t, theta)` (vectorized
 #'   over particles), needed by particle Gibbs.
 #' @return A `bayescomp_ssm` object.
+#' @examples
+#' set.seed(1)
+#' y <- cumsum(rnorm(20, 0, 0.5)) + rnorm(20, 0, 0.7)
+#' ssm <- bayescomp_ssm(y,
+#'   init = function(N, th) rnorm(N),
+#'   transition = function(x, t, th) th[["phi"]] * x + rnorm(length(x), 0, th[["q"]]),
+#'   log_obs = function(yt, x, t, th) dnorm(yt, x, 0.7, log = TRUE),
+#'   log_init = function(x, th) dnorm(x, log = TRUE),
+#'   log_transition = function(xn, xo, t, th) dnorm(xn, th[["phi"]] * xo, th[["q"]], log = TRUE))
+#' bayescomp_particle_filter(ssm, c(phi = 0.9, q = 0.4), num_particles = 100)$log_lik
 #' @export
 bayescomp_ssm <- function(y, init, transition, log_obs, log_init = NULL, log_transition = NULL) {
   for (nm in c("init", "transition", "log_obs")) if (!is.function(get(nm))) stop(sprintf("'%s' must be a function", nm), call. = FALSE)
@@ -45,6 +55,16 @@ y_at <- function(ssm, t) { v <- ssm$y[t, ]; if (length(v) == 1L) v[[1L]] else v 
 #' @return A list with `log_lik` (unbiased on the natural scale),
 #'   `filtered_mean` (a `T` by `d` matrix), `ess` (per time) and one
 #'   trajectory `path` drawn from the final particle system.
+#' @examples
+#' set.seed(1)
+#' y <- cumsum(rnorm(20, 0, 0.5)) + rnorm(20, 0, 0.7)
+#' ssm <- bayescomp_ssm(y,
+#'   init = function(N, th) rnorm(N),
+#'   transition = function(x, t, th) th[["phi"]] * x + rnorm(length(x), 0, th[["q"]]),
+#'   log_obs = function(yt, x, t, th) dnorm(yt, x, 0.7, log = TRUE),
+#'   log_init = function(x, th) dnorm(x, log = TRUE),
+#'   log_transition = function(xn, xo, t, th) dnorm(xn, th[["phi"]] * xo, th[["q"]], log = TRUE))
+#' bayescomp_particle_filter(ssm, c(phi = 0.8, q = 0.5), num_particles = 100)$log_lik
 #' @export
 bayescomp_particle_filter <- function(ssm, theta, num_particles = 500L,
                                       resampling = c("systematic", "stratified", "residual", "multinomial"),
@@ -158,6 +178,22 @@ ssm_theta <- function(model, u) {
 #'   Society B* 72, 269 to 342. Lindsten, F., Jordan, M. I. and Schon, T. B.
 #'   (2014). Particle Gibbs with ancestor sampling. *Journal of Machine
 #'   Learning Research* 15, 2145 to 2184.
+#' @examples
+#' \donttest{
+#' set.seed(1)
+#' y <- cumsum(rnorm(20, 0, 0.5)) + rnorm(20, 0, 0.7)
+#' ssm <- bayescomp_ssm(y,
+#'   init = function(N, th) rnorm(N),
+#'   transition = function(x, t, th) th[["phi"]] * x + rnorm(length(x), 0, th[["q"]]),
+#'   log_obs = function(yt, x, t, th) dnorm(yt, x, 0.7, log = TRUE),
+#'   log_init = function(x, th) dnorm(x, log = TRUE),
+#'   log_transition = function(xn, xo, t, th) dnorm(xn, th[["phi"]] * xo, th[["q"]], log = TRUE))
+#' m <- bayescomp_model("parameters { real<lower=-1, upper=1> phi; real<lower=0> q; }
+#'   model { phi ~ normal(0, 1); q ~ normal(0, 1); }")
+#' fit <- bayescomp_pmcmc(m, ssm, num_particles = 50, chains = 1, iter_warmup = 100,
+#'                        iter_sampling = 100, seed = 1)
+#' mean(bayescomp_extract(fit, "phi"))
+#' }
 #' @export
 bayescomp_pmcmc <- function(model, ssm, method = c("pmmh", "pgibbs"), num_particles = 200L, chains = 2L,
                             iter_warmup = 500L, iter_sampling = 1000L, theta_steps = 5L, init = 2,

@@ -34,3 +34,9 @@ generated quantities.}
 \description{
 Map between constrained and unconstrained parameters
 }
+\examples{
+m <- bayescomp_model("parameters { real<lower=0> sigma; } model { sigma ~ exponential(1); }")
+u <- bayescomp_unconstrain(m, list(sigma = 2))
+u
+bayescomp_constrain(m, u)
+}

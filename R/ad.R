@@ -482,6 +482,10 @@ ad_transpose <- function(x) {
 ad_matmul <- function(a, b) {
   va <- val(a)
   vb <- val(b)
+  ka <- if (is.null(dim(va))) length(va) else ncol(va)
+  kb <- if (is.null(dim(vb))) length(vb) else nrow(vb)
+  if (!is.null(dim(va)) && !is.null(dim(vb)) && ka != kb)
+    stop_shape(sprintf("matrix product: %d columns times %d rows", ka, kb))
   y <- va %*% vb
   if (!inherits(a, "bcad") && !inherits(b, "bcad")) return(y)
   ad_node(y, list(a, b), function(g) {
@@ -576,7 +580,8 @@ ad_log1m_Phi <- function(x) {
 ad_inv_Phi <- function(p) {
   ad_unary(p, stats::qnorm, function(x, y) 1 / stats::dnorm(y))
 }
-ad_erf <- function(x) ad_unary(x, function(x) 2 * stats::pnorm(x * sqrt(2)) - 1,
+# erf(x) = sign(x) P(1/2, x^2): accurate near 0, where 2 Phi(x sqrt 2) - 1 cancels
+ad_erf <- function(x) ad_unary(x, function(x) sign(x) * stats::pgamma(x * x, 0.5),
                                function(x, y) 2 / sqrt(pi) * exp(-x^2))
 ad_erfc <- function(x) ad_unary(x, function(x) 2 * stats::pnorm(-x * sqrt(2)),
                                 function(x, y) -2 / sqrt(pi) * exp(-x^2))

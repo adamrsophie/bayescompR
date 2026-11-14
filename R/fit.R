@@ -48,6 +48,13 @@ kept <- function(fit, inc_warmup = FALSE) {
 #'   `.draw`).
 #' @param ... Unused.
 #' @return Draws in the requested format.
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+#'                         seed = 1, refresh = 0)
+#' dim(bayescomp_draws(fit))
+#' head(bayescomp_draws(fit, format = "df"))
+#' head(as.matrix(fit))
 #' @export
 bayescomp_draws <- function(fit, variables = NULL, inc_warmup = FALSE, format = c("array", "matrix", "df")) {
   format <- match.arg(format)
@@ -87,6 +94,12 @@ select_vars <- function(all, variables) {
 #'   generated quantity.
 #' @return An array whose first dimension indexes draws (chains stacked) and
 #'   whose remaining dimensions are the variable's declared dimensions.
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+#'                         seed = 1, refresh = 0)
+#' mu <- bayescomp_extract(fit, "mu")
+#' c(mean(mu), sd(mu))
 #' @export
 bayescomp_extract <- function(fit, variable) {
   m <- bayescomp_draws(fit, variable, format = "matrix")
@@ -104,6 +117,11 @@ bayescomp_extract <- function(fit, variable) {
 #' @param ... Unused.
 #' @return A data frame with mean, median, sd, mad, quantiles, R-hat and bulk
 #'   and tail effective sample sizes (the last three for MCMC fits only).
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+#'                         seed = 1, refresh = 0)
+#' summary(fit)
 #' @export
 summary.bayescomp_fit <- function(object, variables = NULL, probs = c(0.05, 0.95), ...) {
   a <- bayescomp_draws(object, variables)
@@ -186,6 +204,11 @@ print.bayescomp_fit <- function(x, variables = NULL, max_rows = 10L, ...) {
 #'   chain), `ebfmi_all`, `low_ess` and `high_rhat` (parameter names), and
 #'   `problems`
 #'   (`TRUE` when any check failed), invisibly.
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+#'                         seed = 1, refresh = 0)
+#' bayescomp_diagnose(fit)
 #' @export
 bayescomp_diagnose <- function(fit, quiet = FALSE) {
   if (is.character(fit)) fit <- bayescomp_read_csv(fit)
@@ -206,10 +229,11 @@ bayescomp_diagnose <- function(fit, quiet = FALSE) {
   chains <- dim(a)[2L]
   low <- character(0); high <- character(0)
   for (v in vars) {
-    x <- matrix(a[, , v], dim(a)[1L])
-    if (!all(is.finite(x)) || diff(range(x)) == 0) next
-    if (min(bayescomp_ess_bulk(x), bayescomp_ess_tail(x)) / length(x) < 0.001) low <- c(low, v)
-    if (chains > 1L && bayescomp_rhat(x) > 1.01) high <- c(high, v)
+    # CmdStan's definitions; undefined (NaN) values fail no check
+    d <- cmdstan_mcmc_summary(matrix(a[, , v], dim(a)[1L]))
+    n_eff <- if (isTRUE(d[["ess_bulk"]] < d[["ess_tail"]])) d[["ess_bulk"]] else d[["ess_tail"]]
+    if (isTRUE(n_eff / length(a[, , v]) < 0.001)) low <- c(low, v)
+    if (isTRUE(d[["rhat"]] > 1.01)) high <- c(high, v)
   }
   bad_e <- isTRUE(ebfmi_all < 0.3)
   r <- list(num_divergent = as.integer(div), num_max_treedepth = as.integer(hit), ebfmi = ebfmi, ebfmi_all = ebfmi_all,
@@ -234,6 +258,33 @@ bayescomp_diagnose <- function(fit, quiet = FALSE) {
     cat(if (r$problems) "Processing complete.\n" else "Processing complete, no problems detected.\n")
   }
   invisible(r)
+}
+
+# CmdStan 2.40's definitions (stan/analyze/mcmc): MCSE of the mean from the
+# ESS of unsplit chains, tail ESS from x <= q05 and x >= q95 with one used
+# when the other is undefined, and NaN when a chain is constant or all chains
+# start at the same value (is_finite_and_varies)
+cmdstan_varies <- function(m) {
+  if (nrow(m) < 2L || !all(is.finite(m))) return(FALSE)
+  flat <- function(v) diff(range(v)) <= 1e-12 * max(abs(v))
+  if (any(apply(m, 2L, flat))) return(FALSE)
+  !(ncol(m) > 1L && flat(m[1L, ]))
+}
+cmdstan_ess <- function(m) {
+  if (nrow(m) < 4L || na_diag(m)) NaN else ess_raw(m)
+}
+cmdstan_mcmc_summary <- function(m) {
+  out <- c(mcse = NaN, ess_bulk = NaN, ess_tail = NaN, rhat = NaN)
+  if (nrow(m) >= 4L && cmdstan_varies(m)) out[["mcse"]] <- stats::sd(as.vector(m)) / sqrt(cmdstan_ess(m))
+  s <- split_chains(m)
+  if (!cmdstan_varies(s)) return(out)
+  out[["rhat"]] <- max(rhat_raw(z_scale(s)), rhat_raw(z_scale(abs(s - stats::quantile(s, 0.5, names = FALSE)))))
+  if (nrow(s) < 4L) return(out)
+  out[["ess_bulk"]] <- ess_raw(z_scale(s))
+  e <- c(cmdstan_ess((s <= stats::quantile(s, 0.05, names = FALSE)) + 0),
+         cmdstan_ess((s >= stats::quantile(s, 0.95, names = FALSE)) + 0))
+  out[["ess_tail"]] <- if (all(is.nan(e))) NaN else min(e, na.rm = TRUE)
+  out
 }
 
 #' Posterior summary in the style of CmdStan's stansummary
@@ -265,7 +316,6 @@ bayescomp_stansummary <- function(x, percentiles = c(5, 50, 95), sig_figs = 2L, 
   if (!inherits(fit, "bayescomp_fit")) stop("'x' must be a bayescomp_fit or Stan CSV file names", call. = FALSE)
   if (any(percentiles < 0 | percentiles > 100)) stop("'percentiles' must be in [0, 100]", call. = FALSE)
   a <- bayescomp_draws(fit, include_param)
-  if (!is.null(include_param) && !("lp__" %in% dimnames(a)[[3L]])) a <- a
   sd <- if (!is.null(fit$sampler_diagnostics)) fit$sampler_diagnostics[kept(fit), , , drop = FALSE]
   all_vars <- c(if ("lp__" %in% dimnames(a)[[3L]]) "lp__", if (!is.null(sd) && is.null(include_param)) dimnames(sd)[[3L]],
                 setdiff(dimnames(a)[[3L]], "lp__"))
@@ -275,13 +325,11 @@ bayescomp_stansummary <- function(x, percentiles = c(5, 50, 95), sig_figs = 2L, 
   rows <- lapply(all_vars, function(v) {
     m <- get(v)
     xv <- as.vector(m)
-    # constant within every chain (such as stepsize__): no ESS or R-hat
-    const <- !all(is.finite(xv)) || all(apply(m, 2L, function(cc) diff(range(cc)) == 0))
     q <- stats::quantile(xv, percentiles / 100, names = FALSE, na.rm = TRUE)
-    eb <- if (mcmc && !const) bayescomp_ess_bulk(m) else NaN
-    c(Mean = mean(xv), MCSE = if (mcmc && !const) bayescomp_mcse_mean(m) else NaN, StdDev = stats::sd(xv),
-      MAD = stats::mad(xv), q, ESS_bulk = eb, ESS_tail = if (mcmc && !const) bayescomp_ess_tail(m) else NaN,
-      `ESS_bulk/s` = eb / samp_time, R_hat = if (mcmc && !const) bayescomp_rhat(m) else NaN)
+    d <- if (mcmc) cmdstan_mcmc_summary(m) else c(mcse = NaN, ess_bulk = NaN, ess_tail = NaN, rhat = NaN)
+    c(Mean = mean(xv), MCSE = d[["mcse"]], StdDev = stats::sd(xv), MAD = stats::mad(xv), q,
+      ESS_bulk = d[["ess_bulk"]], ESS_tail = d[["ess_tail"]], `ESS_bulk/s` = d[["ess_bulk"]] / samp_time,
+      R_hat = d[["rhat"]])
   })
   tab <- as.data.frame(do.call(rbind, rows), check.names = FALSE)
   names(tab)[4L + seq_along(percentiles)] <- paste0(formatC(percentiles, format = "g"), "%")
@@ -297,7 +345,7 @@ bayescomp_stansummary <- function(x, percentiles = c(5, 50, 95), sig_figs = 2L, 
     cat(sprintf("Sampling took (%s) seconds, %s seconds total\n\n", paste(signif(ts, 2), collapse = ", "), signif(sum(ts), 2)))
   }
   shown <- tab
-  for (j in seq_along(shown)) shown[[j]] <- formatC(signif(tab[[j]], sig_figs), digits = sig_figs, format = "g")
+  for (j in seq_along(shown)) shown[[j]] <- ifelse(is.nan(tab[[j]]), "nan", formatC(signif(tab[[j]], sig_figs), digits = sig_figs, format = "g"))
   for (j in c("ESS_bulk", "ESS_tail")) shown[[j]] <- ifelse(is.finite(tab[[j]]), formatC(round(tab[[j]]), format = "d"), "nan")
   print(shown, right = TRUE, quote = FALSE)
   cat("\nSamples were drawn using", fit$config$algorithm %||% fit$method, "\n")
@@ -334,6 +382,12 @@ as.array.bayescomp_fit <- function(x, ...) bayescomp_draws(x, format = "array")
 #' @param fit A `bayescomp_fit`.
 #' @param inc_warmup Include saved warmup draws.
 #' @return A `draws_array`.
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+#'                         seed = 1, refresh = 0)
+#' d <- bayescomp_as_draws(fit)
+#' str(d)
 #' @export
 bayescomp_as_draws <- function(fit, inc_warmup = FALSE) {
   if (!requireNamespace("posterior", quietly = TRUE)) stop("the posterior package is required", call. = FALSE)
@@ -359,6 +413,12 @@ bayescomp_as_draws <- function(fit, inc_warmup = FALSE) {
 #'   local ESS.
 #' @param ... Passed to the plotting functions.
 #' @return `x`, invisibly.
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+#'                         seed = 1, refresh = 0)
+#' plot(fit)
+#' plot(fit, type = "rank")
 #' @export
 plot.bayescomp_fit <- function(x, variables = NULL, type = c("trace", "density", "rank", "ess_local", "ess_quantile"),
                                bins = 20L, ...) {

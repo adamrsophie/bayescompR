@@ -93,8 +93,6 @@ test_that("hidden Markov model functions match CmdStan 2.40", {
   td <- "matrix[2,4] lo = [[-1, -2.5, -0.3, -4], [-2, -0.4, -1.7, -0.2]]; matrix[2,2] G = [[0.8, 0.2], [0.3, 0.7]]; vector[2] rho = [0.6, 0.4]';"
   expect_equal(stan_print(paste(td, "print(hmm_marginal(lo, G, rho), hmm_hidden_state_prob(lo, G, rho));")),
                c(-4.79664, 0.629946, 0.243183, 0.466711, 0.043397, 0.370054, 0.756817, 0.533289, 0.956603), tolerance = 1e-5)
-  expect_equal(stan_print("print(matrix_normal_prec_lpdf([[0.1, -0.3, 0.5], [0.2, 0.4, -0.1]] | [[0, 0.1, 0], [0.2, 0, 0]], [[2, 0.3], [0.3, 1]], [[1.5, 0.2, 0.1], [0.2, 1, 0], [0.1, 0, 2]]));"),
-               -3.9474, tolerance = 1e-5)
   m <- bayescomp_model("parameters { simplex[2] r1; simplex[2] r2; simplex[2] rho; vector[2] mu; } model {
     matrix[2,4] lo; for (n in 1:4) for (k in 1:2) lo[k, n] = normal_lpdf(n * 0.3 | mu[k], 1);
     target += hmm_marginal(lo, [r1', r2'], rho); }

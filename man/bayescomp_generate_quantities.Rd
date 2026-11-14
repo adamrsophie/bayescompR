@@ -26,3 +26,11 @@ Reruns the transformed parameters and generated quantities blocks for
 every draw of a fit, for example after changing the generated quantities
 or the data of a model with the same parameters.
 }
+\examples{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }
+  generated quantities { real y_rep = normal_rng(mu, 1); }")
+fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+                        seed = 1, refresh = 0)
+gq <- bayescomp_generate_quantities(m, fit, seed = 2)
+mean(bayescomp_extract(gq, "y_rep"))
+}

@@ -24,3 +24,13 @@ each combination of \code{jacobian} and \code{propto}.
 Evaluates the log density and gradient of a model compiled with a native
 backend and of the same model in R at random unconstrained points.
 }
+\examples{
+# a backend that evaluates the standard normal density in closed form
+bayescomp_register_backend("example_normal", c("log_density", "gradient"), ir_versions = "1.0.0",
+  compile = function(ir, model) list(log_density_gradient = function(u, jacobian, propto)
+    list(value = -0.5 * sum(u^2) - if (propto) 0 else 0.5 * length(u) * log(2 * pi), grad = -u)),
+  description = "closed form normal density")
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }",
+                     backend = "example_normal", allow_fallback = TRUE)
+bayescomp_validate_backend(m, n = 5)
+}

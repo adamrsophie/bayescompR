@@ -19,3 +19,10 @@ whose remaining dimensions are the variable's declared dimensions.
 \description{
 Draws of one variable with its declared shape
 }
+\examples{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+                        seed = 1, refresh = 0)
+mu <- bayescomp_extract(fit, "mu")
+c(mean(mu), sd(mu))
+}

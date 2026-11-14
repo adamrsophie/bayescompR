@@ -32,3 +32,13 @@ Invisibly, the backend record.
 \description{
 Used by backend packages such as bayescompRCranelift and bayescompRLLVM.
 }
+\examples{
+# a backend that evaluates the standard normal density in closed form
+bayescomp_register_backend("example_normal", c("log_density", "gradient"), ir_versions = "1.0.0",
+  compile = function(ir, model) list(log_density_gradient = function(u, jacobian, propto)
+    list(value = -0.5 * sum(u^2) - if (propto) 0 else 0.5 * length(u) * log(2 * pi), grad = -u)),
+  description = "closed form normal density")
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }",
+                     backend = "example_normal", allow_fallback = TRUE)
+bayescomp_validate_backend(m, n = 5)
+}

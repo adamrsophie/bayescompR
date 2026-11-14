@@ -56,3 +56,8 @@ Fits a normal approximation on the unconstrained space by stochastic
 gradient ascent on the evidence lower bound (ELBO), with Stan's adaptive
 step size sequence and convergence checks on the relative ELBO change.
 }
+\examples{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+fit <- bayescomp_variational(m, output_samples = 200, seed = 1)
+mean(bayescomp_extract(fit, "mu"))
+}

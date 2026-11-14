@@ -54,6 +54,15 @@ ty_assignable <- function(to, from) {
   is_cx_base(to$base) && !is_cx_base(from$base) && from$base %in% names(real_to_cx) && real_to_cx[[from$base]] == to$base
 }
 
+# number of promotions from type `from` to type `to` (int to real and real
+# to complex count one each, int to complex two; tuples add their elements)
+promo_cost <- function(to, from) {
+  if (is_tuple_ty(to)) return(sum(unlist(mapply(promo_cost, to$elems, from$elems))))
+  if (to$base == from$base) return(0L)
+  if (to$base == "real") return(1L)
+  if (from$base == "int") 2L else 1L
+}
+
 # element type after removing one array dimension, or one vector/matrix index
 ty_index_one <- function(t) {
   if (t$nd > 0L) return(ty_nd(t, t$nd - 1L))

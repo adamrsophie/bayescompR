@@ -27,6 +27,12 @@
 #' @references Huang, X., Dong, H., Hao, Y., Ma, Y. and Zhang, T. (2024).
 #'   Reverse diffusion Monte Carlo. *International Conference on Learning
 #'   Representations*.
+#' @examples
+#' \donttest{
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_diffusion(m, num_samples = 50, steps = 20, inner_samples = 8, seed = 1)
+#' mean(bayescomp_extract(fit, "mu"))
+#' }
 #' @export
 bayescomp_diffusion <- function(model, num_samples = 300L, steps = 40L, horizon = 4, inner_samples = 32L,
                                 reference = c("pathfinder", "standard"), reference_scale = 1.5, seed = NULL,

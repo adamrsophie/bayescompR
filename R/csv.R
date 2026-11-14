@@ -24,7 +24,9 @@
 #'   `save_diagnostics = TRUE` also get `<file>_diagnostic.csv` (CmdStan's
 #'   `diagnostic_file`). Programs with `profile` blocks also get
 #'   `<file>_profile.csv` (CmdStan's `profile_file`) from element `profile`
-#'   of the fit.
+#'   of the fit. Profile times are measured while the block runs; the
+#'   reverse pass of the gradient is not attributed to blocks, so
+#'   `reverse_time`, `chain_stack` and `no_chain_stack` are 0.
 #' @param save_config Also write the run configuration as
 #'   `<basename>_config.json` (CmdStan's `save_cmdstan_config`).
 #' @param sig_figs Significant digits of the values (CmdStan's default is
@@ -41,7 +43,7 @@
 #' fit2 <- bayescomp_read_csv(f, model = m)
 #' all.equal(bayescomp_draws(fit), bayescomp_draws(fit2), tolerance = 1e-7)
 #' @export
-bayescomp_write_csv <- function(fit, dir = ".", basename = "output", sig_figs = 8L, save_metric = FALSE,
+bayescomp_write_csv <- function(fit, dir, basename = "output", sig_figs = 8L, save_metric = FALSE,
                                 save_config = FALSE) {
   if (!inherits(fit, "bayescomp_fit")) stop("'fit' must be a bayescomp_fit", call. = FALSE)
   sig_figs <- as_count(sig_figs, "sig_figs", 1L)
@@ -148,11 +150,21 @@ unflatten_value <- function(v, d) {
       lapply(seq_along(d$elems), function(i) unflatten_value(w[(ends[i] - k[i]) + seq_len(k[i])], d$elems[[i]]))
     }
     if (!length(d$adims)) return(one_tuple(v))
-    if (length(d$adims) > 1L) stop("reading multidimensional arrays of tuple parameters is not supported", call. = FALSE)
-    per <- length(v) / d$adims
-    return(lapply(seq_len(d$adims), function(i) one_tuple(v[(i - 1L) * per + seq_len(per)])))
+    # one flat list of the tuples in column major order (the column order),
+    # as bayescomp_constrain() returns arrays of tuples
+    n <- prod(d$adims)
+    per <- length(v) / n
+    return(lapply(seq_len(n), function(i) one_tuple(v[(i - 1L) * per + seq_len(per)])))
   }
   dims <- c(d$adims, d$eshape)
+  if (startsWith(d$base %||% "", "complex")) {
+    # columns hold (real, imag) pairs of the elements in column major order
+    p <- matrix(v, nrow = 2L)
+    z <- complex(real = p[1L, ], imaginary = p[2L, ])
+    ed <- dims[-length(dims)]
+    if (length(ed) > 1L) dim(z) <- ed
+    return(z)
+  }
   if (length(dims) > 1L) array(v, dims) else v
 }
 unflatten_params <- function(model, r) {
@@ -178,7 +190,8 @@ optim_return_code <- function(msg) {
 csv_header <- function(fit, chain) {
   cfg <- fit$config %||% list()
   m <- fit$method
-  kv <- function(k, v, depth) sprintf("#%s%s = %s", strrep("  ", depth), k, paste(format(v), collapse = ","))
+  # CmdStan's layout: "# " and two spaces per level of nesting
+  kv <- function(k, v, depth) sprintf("# %s%s = %s", strrep("  ", depth), k, paste(format(v), collapse = ","))
   lines <- c("# stan_version_major = 2", "# stan_version_minor = 40", "# stan_version_patch = 0",
              "# model = bayescompR_model", paste0("# start_datetime = ", format(Sys.time(), "%Y-%m-%d %H:%M:%S", tz = "UTC"), " UTC"),
              paste0("# method = ", m), paste0("#   ", m))
@@ -203,7 +216,7 @@ csv_header <- function(fit, chain) {
     for (k in names(cfg)) if (is.atomic(cfg[[k]]) && length(cfg[[k]]) == 1L && !is.na(cfg[[k]]))
       lines <- c(lines, kv(k, if (is.logical(cfg[[k]])) tolower(cfg[[k]]) else cfg[[k]], 2L))
   }
-  c(lines, kv("id", chain, 0L), kv("random", "", 0L), kv("seed", fit$seed %||% 0, 1L),
+  c(lines, kv("id", chain, 0L), "# random", kv("seed", fit$seed %||% 0, 1L),
     "# output", kv("sig_figs", "", 1L), "# stanc_version = bayescompR")
 }
 
@@ -228,14 +241,14 @@ csv_lines <- function(fit, chain, sig_figs) {
     cbind(lp__ = d[, intersect("lp__", vars)]))
   if (m == "variational" && !is.null(fit$vi$mean) && !is.null(fit$model)) {
     # CmdStan's first row is the mean of the approximation
-    mean_row <- chain_write_draws(fit$model, matrix(fit$vi$mean, 1L), FALSE)
+    mean_row <- fit$vi$mean_draw %||% chain_write_draws(fit$model, matrix(fit$vi$mean, 1L), FALSE)
     cols <- rbind(c(lp__ = 0, log_p__ = 0, log_g__ = 0), cols)
     P <- rbind(mean_row[1L, colnames(P)], P)
   }
   X <- cbind(cols, P)
   body <- apply(X, 1L, function(r) paste(csv_num(r, sig_figs), collapse = ","))
   hdr <- csv_header(fit, chain)
-  hdr[hdr == "#   sig_figs = "] <- paste0("#   sig_figs = ", sig_figs)
+  hdr[grepl("^#[[:space:]]*sig_figs = $", hdr)] <- paste0("#   sig_figs = ", sig_figs)
   out <- c(hdr, paste(c(colnames(cols), to_cmdstan_names(colnames(P))), collapse = ","))
   nw <- fit$n_warmup_saved %||% 0L
   if (m == "sample" && isTRUE(fit$config$adapt_engaged) && fit$config$algorithm %in% c("nuts", "hmc")) {

@@ -220,11 +220,6 @@ chk_size <- function(f, n) {
   if (n < 0L) stop_domain(sprintf("%s: size is %d, but must be nonnegative", f, n))
 }
 
-zeros_like <- function(n, shape = NULL) {
-  r <- numeric(n)
-  if (!is.null(shape)) dim(r) <- shape
-  r
-}
 def("zeros_vector", "int", "vector", function(n) { chk_size("zeros_vector", n); numeric(n) })
 def("zeros_row_vector", "int", "row_vector", function(n) { chk_size("zeros_row_vector", n); numeric(n) })
 def("zeros_array", "int", "real[]", function(n) { chk_size("zeros_array", n); numeric(n) })

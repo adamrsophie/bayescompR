@@ -47,6 +47,15 @@ Metropolis whose covariance comes from the live points. The prior must be
 proper; it is the model evaluated on an empty data set, as in
 \code{\link[=bayescomp_sgmcmc]{bayescomp_sgmcmc()}}.
 }
+\examples{
+\donttest{
+m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
+  model { mu ~ normal(0, 10); y ~ normal(mu, 1); }",
+  data = list(N = 20, y = seq(-1, 3, length.out = 20)))
+fit <- bayescomp_nested(m, num_live = 100, seed = 1)
+fit$log_evidence
+}
+}
 \references{
 Skilling, J. (2006). Nested sampling for general Bayesian
 computation. \emph{Bayesian Analysis} 1, 833 to 859.

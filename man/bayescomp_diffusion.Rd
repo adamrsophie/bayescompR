@@ -40,6 +40,13 @@ A \code{bayescomp_fit} with method \code{"diffusion"} and element \code{ess}
 \description{
 Reverse diffusion Monte Carlo
 }
+\examples{
+\donttest{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+fit <- bayescomp_diffusion(m, num_samples = 50, steps = 20, inner_samples = 8, seed = 1)
+mean(bayescomp_extract(fit, "mu"))
+}
+}
 \references{
 Huang, X., Dong, H., Hao, Y., Ma, Y. and Zhang, T. (2024).
 Reverse diffusion Monte Carlo. \emph{International Conference on Learning

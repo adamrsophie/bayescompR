@@ -26,3 +26,9 @@ CmdStan computes it, and per chain), effective sample sizes below 0.001
 per draw, and rank normalized split R-hat above 1.01, and prints
 CmdStan's report.
 }
+\examples{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+                        seed = 1, refresh = 0)
+bayescomp_diagnose(fit)
+}

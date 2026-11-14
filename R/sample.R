@@ -75,12 +75,10 @@
 #' @param show_print Show output of Stan `print()` statements.
 #' @return A `bayescomp_fit` object.
 #' @examples
-#' \donttest{
 #' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(1, 2); }")
 #' fit <- bayescomp_sample(m, chains = 2, iter_warmup = 200, iter_sampling = 200,
 #'                         seed = 1, refresh = 0)
 #' fit
-#' }
 #' @export
 bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampling = 1000L,
                              seed = NULL, init = 2, algorithm = c("nuts", "hmc", "mala", "metropolis", "slice", "elliptical_slice", "fixed_param"),
@@ -237,10 +235,14 @@ bind_chain_id <- function(model, id) {
   d$CHAIN_ID <- as.integer(id)
   inst <- with_seed(model$compiled$seed, instantiate(model$compiled, d))
   for (nm in ls(inst$env, all.names = TRUE)) {
-    v <- tryCatch(get(nm, envir = inst$env), error = function(e) e)
-    # a hoisted expression that fails stays a promise that fails where used
-    if (inherits(v, "error")) eval(call("delayedAssign", nm, call("get", nm, envir = inst$env), model$env, model$env))
-    else assign(nm, v, envir = model$env)
+    if (bindingIsActive(nm, inst$env)) {
+      # a hoisted expression that fails stays a binding that fails where used
+      if (exists(nm, envir = model$env, inherits = FALSE)) rm(list = nm, envir = model$env)
+      makeActiveBinding(nm, local({ e <- inst$env; n <- nm; function() get(n, envir = e) }), model$env)
+    } else {
+      if (exists(nm, envir = model$env, inherits = FALSE) && bindingIsActive(nm, model$env)) rm(list = nm, envir = model$env)
+      assign(nm, get(nm, envir = inst$env), envir = model$env)
+    }
   }
   invisible()
 }
@@ -253,6 +255,7 @@ run_chains <- function(model, chains, seed, cores, f) {
   on.exit({
     RNGkind(old_kind[1L], old_kind[2L], old_kind[3L])
     if (had) assign(".Random.seed", old_seed, envir = globalenv())
+    else if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) rm(".Random.seed", envir = globalenv())
   }, add = TRUE)
   RNGkind("L'Ecuyer-CMRG", "Inversion", "Rejection")
   set.seed(seed)
@@ -307,7 +310,11 @@ find_init <- function(model, init, chain_id, gradient = TRUE) {
   user <- init
   if (is.character(user)) user <- bayescomp_read_data(user[[(chain_id - 1L) %% length(user) + 1L]])
   if (is.function(user)) user <- user()
-  if (is.list(user) && length(user) && is.list(user[[1L]]) && is.null(names(user))) user <- user[[chain_id]]
+  if (is.list(user) && length(user) && is.list(user[[1L]]) && is.null(names(user))) {
+    if (chain_id > length(user))
+      stop(sprintf("'init' is a list of %d initializations; one per chain is needed (chain %d)", length(user), chain_id), call. = FALSE)
+    user <- user[[chain_id]]
+  }
   radius <- 2
   if (is.numeric(user) && length(user) == 1L) {
     radius <- user

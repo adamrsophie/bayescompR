@@ -47,6 +47,13 @@ the prior raised to \code{1 / sites}, is summarized by its Laplace
 approximation, and the site is updated with damping. Partitions can be
 processed in parallel with \code{cores}.
 }
+\examples{
+m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
+  model { mu ~ normal(0, 10); y ~ normal(mu, 1); }",
+  data = list(N = 20, y = seq(-1, 3, length.out = 20)))
+ep <- bayescomp_ep(m, sites = 2, seed = 1)
+ep$mean
+}
 \references{
 Vehtari, A., Gelman, A., Sivula, T. and others (2020).
 Expectation propagation as a way of life. \emph{Journal of Machine Learning

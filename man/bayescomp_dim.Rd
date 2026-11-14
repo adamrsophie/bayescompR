@@ -15,3 +15,8 @@ The number of unconstrained parameters, an integer.
 \description{
 Number of unconstrained parameters
 }
+\examples{
+m <- bayescomp_model("parameters { simplex[3] p; real mu; }
+  model { mu ~ normal(0, 1); }")
+bayescomp_dim(m)
+}

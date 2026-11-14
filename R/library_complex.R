@@ -416,14 +416,14 @@ as_zmat <- function(v, complex_in) {
   }
   v
 }
-square_check <- function(f, z) {
+cx_square_check <- function(f, z) {
   if (nrow(z) != ncol(z)) stop_shape(sprintf("%s: matrix must be square, but has %d rows and %d columns", f, nrow(z), ncol(z)))
   if (length(z) == 0L) stop_shape(sprintf("%s: matrix must not be empty", f))
 }
 
 # eigenvectors scaled to unit norm, as Eigen returns them
 zeig <- function(z, f) {
-  square_check(f, z)
+  cx_square_check(f, z)
   if (any(!is.finite(z))) stop_domain(sprintf("%s: matrix has non finite elements", f))
   e <- eigen(z, symmetric = FALSE)
   # Eigen's complex solver sorts by increasing magnitude (stable for ties)
@@ -437,7 +437,7 @@ zeig <- function(z, f) {
   list(values = e$values, vectors = v)
 }
 zeig_sym <- function(z, f) {
-  square_check(f, z)
+  cx_square_check(f, z)
   if (any(z != t(z))) stop_domain(sprintf("%s: m is not symmetric", f))
   # Stan reads the lower triangle as Hermitian
   h <- z
@@ -447,7 +447,7 @@ zeig_sym <- function(z, f) {
   list(values = complex(real = e$values[o], imaginary = 0), vectors = e$vectors[, o, drop = FALSE])
 }
 zschur <- function(z, f) {
-  square_check(f, z)
+  cx_square_check(f, z)
   n <- nrow(z)
   # complex Schur form from the eigendecomposition: QR of the eigenvectors
   # gives a unitary U with U^H A U upper triangular (distinct eigenvalues)

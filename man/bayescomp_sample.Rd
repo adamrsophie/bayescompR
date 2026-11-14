@@ -138,10 +138,8 @@ reference implementations, for checking results, and for models whose
 log density is not smooth.
 }
 \examples{
-\donttest{
 m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(1, 2); }")
 fit <- bayescomp_sample(m, chains = 2, iter_warmup = 200, iter_sampling = 200,
                         seed = 1, refresh = 0)
 fit
-}
 }

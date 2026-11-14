@@ -63,3 +63,17 @@ draws by elements matrices (chains stacked) of the generated
 quantities \code{variable} (defaults \code{"log_lik"} and \code{"y_rep"}).
 }
 }
+\examples{
+m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
+  model { y ~ normal(mu, 1); }
+  generated quantities {
+    vector[N] log_lik;
+    for (n in 1:N) log_lik[n] = normal_lpdf(y[n] | mu, 1);
+  }",
+  data = list(N = 10, y = seq(-1, 1, length.out = 10)))
+fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+                        seed = 1, refresh = 0)
+if (requireNamespace("posterior", quietly = TRUE))
+  print(posterior::summarise_draws(posterior::as_draws_df(fit, "mu")))
+if (requireNamespace("loo", quietly = TRUE)) print(loo::loo(fit))
+}

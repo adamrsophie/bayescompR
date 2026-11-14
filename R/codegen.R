@@ -195,7 +195,7 @@ cg_call <- function(e) {
 cg_block <- function(stmts, ctx) {
   out <- list(quote(.stmt$loc <- NULL))
   for (st in stmts) {
-    if (!is.null(st$loc$line)) out <- c(out, list(cl(as.name("<-"), quote(.stmt$loc), list(line = st$loc$line, col = st$loc$col))))
+    if (!is.null(st$loc$line)) out <- c(out, list(cl(as.name("<-"), quote(.stmt$loc), st$loc[intersect(c("line", "col", "file"), names(st$loc))])))
     out <- c(out, cg_stmt(st, ctx))
   }
   out
@@ -311,7 +311,10 @@ cg_stmt <- function(st, ctx) {
         # profile("name") { }: time each execution (an early return or break
         # skips the record)
         tv <- as.name(sprintf(".prof_%d", prof_counter()))
-        body <- c(list(cl(as.name("<-"), tv, cl(rt_profile_start))), body, list(cl(rt_profile_end, st$profile, tv)))
+        # the record is written however the block is left (return, break,
+        # continue or an error): tryCatch evaluates the body in this frame
+        body <- list(cl(as.name("<-"), tv, cl(rt_profile_start)),
+                     cl(quote(tryCatch), blk(body), finally = cl(rt_profile_end, st$profile, tv)))
       }
       list(blk(body))
     },
@@ -440,7 +443,10 @@ hoistable <- function(e) {
     if (k == "var" && !((n$origin %||% "") %in% c("data", "transformed data"))) { ok <<- FALSE; return() }
     if (k == "call") {
       s <- n$sig
-      if (isTRUE(s$user) || isTRUE(s$rng) || grepl("_rng$|_lp$", n$name) || n$name %in% names(hof_specs) ||
+      # calls that read the evaluation context (unnormalized densities drop
+      # constants under propto, _jacobian calls depend on jacobian) stay
+      if (isTRUE(s$user) || isTRUE(s$rng) || isTRUE(s$ctx) || grepl("_rng$|_lp$|_lupdf$|_lupmf$|_jacobian$", n$name) ||
+          isTRUE(n$cond_bar && grepl("_lupdf$|_lupmf$", n$resolved %||% "")) || n$name %in% names(hof_specs) ||
           n$name %in% c("target", "get_lp")) { ok <<- FALSE; return() }
     }
     keys <- if (is.null(names(n))) seq_along(n) else setdiff(names(n), c("sig", "type", "loc"))

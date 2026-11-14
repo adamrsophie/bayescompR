@@ -206,6 +206,8 @@ def("quad_form_diag", c("matrix", "vector"), "matrix", function(M, v) diag_post(
 def("quad_form_diag", c("matrix", "row_vector"), "matrix", function(M, v) diag_post(diag_pre(v, M), v))
 def("trace", "matrix", "real", function(A) ad_sum(.lib$diagonal[[1L]]$impl(A)))
 def("trace_quad_form", c("matrix", "matrix"), "real", function(A, B) {
+  square_check("trace_quad_form", A)
+  if (ncol(val(A)) != nrow(val(B))) stop_shape("trace_quad_form: size mismatch")
   B <- as_dbl(B)
   ad_sum(B * ad_matmul(as_dbl(A), B))
 })
@@ -230,6 +232,8 @@ def("symmetrize_from_lower_tri", "matrix", "matrix", function(A) {
   if (is_ad(A)) ad_gather(A, src, d) else { out <- val(A)[src]; dim(out) <- d; out }
 })
 def("trace_gen_quad_form", c("matrix", "matrix", "matrix"), "real", function(D, A, B) {
+  square_check("trace_gen_quad_form", A); square_check("trace_gen_quad_form", D)
+  if (ncol(val(A)) != nrow(val(B)) || nrow(val(D)) != ncol(val(B))) stop_shape("trace_gen_quad_form: size mismatch")
   B <- as_dbl(B)
   ad_sum(.lib$diagonal[[1L]]$impl(ad_matmul(ad_matmul(as_dbl(D), ad_transpose(B)), ad_matmul(as_dbl(A), B))))
 })

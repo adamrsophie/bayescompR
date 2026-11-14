@@ -74,3 +74,8 @@ from the L-BFGS inverse Hessian estimate at every iterate, keeps the one
 with the largest ELBO on each path, and combines the paths by Pareto
 smoothed importance resampling, as CmdStan's \code{pathfinder} method does.
 }
+\examples{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+fit <- bayescomp_pathfinder(m, num_paths = 2, num_draws = 200, num_psis_draws = 200, seed = 1)
+mean(bayescomp_extract(fit, "mu"))
+}

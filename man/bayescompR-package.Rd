@@ -28,5 +28,10 @@ Authors:
   \item Adam R Sophie \email{adamrsophie@gmail.com} [copyright holder]
 }
 
+Other contributors:
+\itemize{
+  \item Stan Development Team (function signature table and warning texts derived from stanc and CmdStan; see inst/COPYRIGHTS) [copyright holder]
+}
+
 }
 \keyword{internal}

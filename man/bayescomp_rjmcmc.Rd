@@ -39,6 +39,15 @@ parameters from an independent Gaussian approximation of its posterior
 (Pathfinder, widened by \code{proposal_scale}), which keeps the reversible
 jump acceptance ratio simple and exact for any dimensions.
 }
+\examples{
+\donttest{
+y <- c(0.5, 1.2, 2, 0.8, 1.6)
+mk <- function(s) bayescomp_model(sprintf("data { int N; vector[N] y; } parameters { real mu; }
+  model { mu ~ normal(0, \%g); y ~ normal(mu, 1); }", s), data = list(N = length(y), y = y))
+r <- bayescomp_rjmcmc(list(narrow = mk(1), wide = mk(10)), iter_sampling = 1000, seed = 1)
+r$model_prob
+}
+}
 \references{
 Green, P. J. (1995). Reversible jump Markov chain Monte Carlo
 computation and Bayesian model determination. \emph{Biometrika} 82, 711 to

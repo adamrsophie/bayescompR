@@ -52,6 +52,14 @@ log likelihood gradient. They have no Metropolis correction, so the draws
 are approximate with a bias that shrinks with the step size; they pay off
 only when the data are large and the per observation cost dominates.
 }
+\examples{
+m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
+  model { mu ~ normal(0, 10); y ~ normal(mu, 1); }",
+  data = list(N = 20, y = seq(-1, 3, length.out = 20)))
+fit <- bayescomp_sgmcmc(m, batch_size = 5, chains = 1, iter_warmup = 200,
+                        iter_sampling = 300, seed = 1)
+mean(bayescomp_extract(fit, "mu"))
+}
 \references{
 Welling, M. and Teh, Y. W. (2011). Bayesian learning via
 stochastic gradient Langevin dynamics. \emph{ICML}. Chen, T., Fox, E. and

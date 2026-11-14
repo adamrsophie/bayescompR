@@ -167,7 +167,6 @@ laplace_builtin_lik <- function(fam, pre, name) {
   list(lik = lik, args = list(m))
 }
 
-ad_log1p_exp <- function(x) ad_unary(x, function(x) ifelse(x > 0, x + log1p(exp(-x)), log1p(exp(x))), function(x, y) stats::plogis(x))
 ad_log_sum_exp_pair <- function(a, b) {
   mx <- pmax(val(a), val(b))
   mx + log(exp(a - mx) + exp(b - mx))

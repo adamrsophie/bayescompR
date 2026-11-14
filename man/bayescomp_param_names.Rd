@@ -18,3 +18,9 @@ Character vector of flattened names in Stan's output order.
 \description{
 Parameter names of a model
 }
+\examples{
+m <- bayescomp_model("parameters { vector[2] b; } model { b ~ normal(0, 1); }
+  generated quantities { real s = sum(b); }")
+bayescomp_param_names(m)
+bayescomp_param_names(m, include_gqs = FALSE)
+}

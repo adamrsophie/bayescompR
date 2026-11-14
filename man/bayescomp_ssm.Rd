@@ -36,3 +36,14 @@ A \code{bayescomp_ssm} object.
 \description{
 Define a state space model
 }
+\examples{
+set.seed(1)
+y <- cumsum(rnorm(20, 0, 0.5)) + rnorm(20, 0, 0.7)
+ssm <- bayescomp_ssm(y,
+  init = function(N, th) rnorm(N),
+  transition = function(x, t, th) th[["phi"]] * x + rnorm(length(x), 0, th[["q"]]),
+  log_obs = function(yt, x, t, th) dnorm(yt, x, 0.7, log = TRUE),
+  log_init = function(x, th) dnorm(x, log = TRUE),
+  log_transition = function(xn, xo, t, th) dnorm(xn, th[["phi"]] * xo, th[["q"]], log = TRUE))
+bayescomp_particle_filter(ssm, c(phi = 0.9, q = 0.4), num_particles = 100)$log_lik
+}

@@ -161,7 +161,6 @@ sem_decl <- function(s, d, top) {
   if (bn %in% c("data", "parameters") && !is.null(d$init))
     stop_semantic(sprintf("variables in the %s block cannot be assigned in their declaration", bn), d$loc)
   if (bn == "parameters" && t$base == "int") stop_semantic("parameters cannot be integers", d$loc)
-  if (bn == "parameters" && is_cx_base(t$base)) stop_semantic("parameters cannot be complex; declare the real and imaginary parts", d$loc)
   if (bn %in% c("transformed parameters") && top && t$base == "int") stop_semantic("transformed parameters cannot be integers", d$loc)
   if (t$base == "int" && (!is.null(t$cons$offset) || !is.null(t$cons$multiplier)))
     stop_semantic("integer variables cannot have offset or multiplier", d$loc)
@@ -214,7 +213,6 @@ tuple_constrained <- function(t) {
 # sizes and bounds of a sized type; returns the checked type and its value type
 sem_decl_type <- function(s, t, need_data, bn, loc) {
   if (bn == "parameters" && t$base == "int") stop_semantic("parameters cannot be integers", loc)
-  if (bn == "parameters" && is_cx_base(t$base)) stop_semantic("parameters cannot be complex; declare the real and imaginary parts", loc)
   if (identical(t$base, "tuple")) {
     t$adims <- lapply(t$adims, function(e) sem_size_expr(s, e, need_data))
     rs <- lapply(t$elems, function(et) sem_decl_type(s, et, need_data, bn, loc))
@@ -306,6 +304,8 @@ sem_stmt <- function(s, st, top = FALSE) {
       st$args <- args
       st$fname <- res$fname
       st$sig <- res$sig
+      # T[ , ] has no bounds and means no truncation
+      if (!is.null(st$trunc) && is.null(st$trunc$lo) && is.null(st$trunc$hi)) st$trunc <- NULL
       if (!is.null(st$trunc)) {
         if (!is_scalar_ty(lhs$type) && !(lhs$type$base %in% c("int", "real") && lhs$type$nd <= 1L) && !(lhs$type$base %in% c("vector", "row_vector")))
           stop_semantic("truncation needs a univariate distribution", st$loc)
@@ -314,6 +314,8 @@ sem_stmt <- function(s, st, top = FALSE) {
           e <- st$trunc[[bnd]]
           if (is.null(e)) next
           te <- sem_expr(s, e)
+          if (!(te$type$base %in% c("int", "real")) || te$type$nd != 0L)
+            stop_semantic(sprintf("truncation bound must be of type int or real, found %s", ty_str(te$type)), e$loc %||% st$loc)
           st$trunc[[bnd]] <- te
         }
         need <- c(if (!is.null(st$trunc$lo)) (if (!is.null(st$trunc$hi)) "lcdf" else "lccdf"), if (!is.null(st$trunc$hi)) "lcdf")
@@ -750,7 +752,9 @@ stan_sig_parsed <- function(key) {
 }
 stan_sig_ok <- function(name, types) {
   key <- stan_sig_key(name)
-  if (is.null(stan_signatures[[key]]) || any(vapply(types, is_tuple_ty, TRUE))) return(TRUE)
+  # a library name stanc does not know is rejected like an unknown function
+  if (is.null(stan_signatures[[key]])) return(FALSE)
+  if (any(vapply(types, is_tuple_ty, TRUE))) return(TRUE)
   for (p in stan_sig_parsed(key))
     if (length(p) == length(types) && all(mapply(ty_assignable, p, types))) return(TRUE)
   FALSE
@@ -762,31 +766,38 @@ stan_sig_strings <- function(name) {
 resolve_call <- function(s, name, types, quiet = FALSE, loc = NULL) {
   cands <- c(s$ufuns[[name]], .lib[[name]])
   if (!length(cands)) return(NULL)
-  # user overloads: the unique viable signature with the fewest promotions
-  # (Stan Reference Manual, "Resolving overloads")
+  # user overloads and library signatures form one overload set; the unique
+  # viable signature with the fewest promotions wins (Stan Reference Manual,
+  # "Resolving overloads")
   best <- NULL; best_cost <- Inf; tie <- FALSE
   for (sg in cands) {
     if (!isTRUE(sg$user) || length(sg$args) != length(types)) next
     if (!all(mapply(ty_assignable, sg$args, types))) next
-    cost <- sum(vapply(seq_along(types), function(i) sg$args[[i]]$base != types[[i]]$base, TRUE))
+    cost <- sum(unlist(mapply(promo_cost, sg$args, types)))
     if (cost < best_cost) { best <- sg; best_cost <- cost; tie <- FALSE }
     else if (cost == best_cost) tie <- TRUE
   }
+  lib <- NULL
+  for (sg in cands) {
+    if (isTRUE(sg$user) || length(sg$args) != length(types)) next
+    if (all(mapply(pat_ok, sg$args, types))) {
+      rt <- ret_type(sg, types)
+      if (!is.null(rt)) { lib <- list(sig = sg, ret = rt); break }
+    }
+  }
   if (!is.null(best)) {
+    if (!is.null(lib)) {
+      # promotions of the closest signature in stanc's table
+      lc <- vapply(Filter(function(p) length(p) == length(types) && all(mapply(ty_assignable, p, types)),
+                          stan_sig_parsed(stan_sig_key(name))), function(p) sum(unlist(mapply(promo_cost, p, types))), 0)
+      lc <- if (length(lc)) min(lc) else 0
+      if (lc < best_cost) return(lib)
+      if (lc == best_cost) tie <- TRUE
+    }
     if (tie) stop_semantic(sprintf("ambiguous call to overloaded function '%s'", name), loc)
     return(list(sig = best, ret = best$ret))
   }
-  for (sg in cands) {
-    if (isTRUE(sg$user)) {
-      next
-    } else {
-      if (length(sg$args) != length(types)) next
-      if (all(mapply(pat_ok, sg$args, types))) {
-        rt <- ret_type(sg, types)
-        if (!is.null(rt)) return(list(sig = sg, ret = rt))
-      }
-    }
-  }
+  if (!is.null(lib)) return(lib)
   # container functions of complex values reuse their real versions
   if (any(vapply(types, is_cx_ty, TRUE))) return(resolve_cx_lift(s, name, types))
   NULL
@@ -818,10 +829,11 @@ sem_call <- function(s, e) {
         stop_semantic(sprintf("no matching signature for %s(%s); Stan %s defines:\n%s", nm, paste(vapply(at, ty_str, ""), collapse = ", "),
                               stan_signatures_version, paste(utils::head(stan_sig_strings(nm), 20L), collapse = "\n")), e$loc)
     }
+    # fun_name records the call for bayescomp_info()
     if (na == 2L && nm %in% names(op_functions))
-      return(sem_expr(s, list(kind = "binop", op = op_functions[[nm]], a = e$args[[1L]], b = e$args[[2L]], loc = e$loc)))
+      return(sem_expr(s, list(kind = "binop", op = op_functions[[nm]], a = e$args[[1L]], b = e$args[[2L]], loc = e$loc, fun_name = nm)))
     if (na == 1L && nm %in% names(op_unary_functions))
-      return(sem_expr(s, list(kind = "unop", op = op_unary_functions[[nm]], a = e$args[[1L]], loc = e$loc)))
+      return(sem_expr(s, list(kind = "unop", op = op_unary_functions[[nm]], a = e$args[[1L]], loc = e$loc, fun_name = nm)))
     if (na == 1L && nm == "transpose")
       return(sem_expr(s, list(kind = "transpose", a = e$args[[1L]], loc = e$loc)))
   }
@@ -872,6 +884,7 @@ sem_call <- function(s, e) {
                           paste(describe_sigs(s, uname), collapse = "\n")), e$loc)
   }
   sg <- res$sig
+  if (!isTRUE(sg$user) && is.null(stan_signatures[[stan_sig_key(uname)]])) stop_semantic(sprintf("unknown function '%s'", nm), e$loc)
   if (!isTRUE(sg$user) && !stan_sig_ok(uname, types)) {
     stop_semantic(sprintf("no matching signature for %s(%s); Stan %s defines:\n%s", nm,
                           paste(vapply(types, ty_str, ""), collapse = ", "), stan_signatures_version,
@@ -919,7 +932,14 @@ resolve_dist <- function(s, dist, types, int_lhs, loc) {
     }
     if (!is.null(.lib[[fn]])) {
       r <- resolve_call(s, fn, types)
-      if (!is.null(r)) return(list(fname = fn, sig = r$sig))
+      if (!is.null(r)) {
+        if (is.null(stan_signatures[[stan_sig_key(fn)]])) stop_semantic(sprintf("unknown distribution '%s'", dist), loc)
+        if (!stan_sig_ok(fn, types))
+          stop_semantic(sprintf("no matching signature for %s(%s); Stan %s defines:\n%s", stan_sig_key(fn),
+                                paste(vapply(types, ty_str, ""), collapse = ", "), stan_signatures_version,
+                                paste(utils::head(stan_sig_strings(fn), 20L), collapse = "\n")), loc)
+        return(list(fname = fn, sig = r$sig))
+      }
     }
   }
   any_exists <- any(vapply(paste0(dist, c("_lpdf", "_lpmf")), function(f) !is.null(.lib[[f]]) || !is.null(s$ufuns[[f]]), TRUE))

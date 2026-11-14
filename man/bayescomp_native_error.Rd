@@ -17,3 +17,7 @@ Native runtimes report errors as strings with a code prefix. This turns
 them into the condition classes the R backend uses, so samplers treat a
 rejection the same way whichever backend raised it.
 }
+\examples{
+e <- tryCatch(bayescomp_native_error("the native backend failed"), error = identity)
+class(e)
+}

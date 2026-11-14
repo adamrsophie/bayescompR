@@ -21,3 +21,8 @@ and the values of every data and transformed data variable, already
 computed by the R implementation. Values are flattened in Stan order
 (array elements in row major order, each element column major).
 }
+\examples{
+m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
+  model { y ~ normal(mu, 1); }", data = list(N = 2, y = c(0.1, 0.4)))
+str(bayescomp_native_inputs(m), max.level = 1)
+}

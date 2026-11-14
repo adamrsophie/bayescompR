@@ -1,6 +1,16 @@
 # Optimization (posterior mode or maximum likelihood) and the Laplace
 # approximation around the mode.
 
+# CmdStan reports log densities with all constants (log_prob<false, true>)
+# in ADVI's log_p__ and Pathfinder's lp__. Dropped constants do not depend on
+# the parameters, so one evaluation gives the shift for every draw.
+propto_shift <- function(model, qs, lp) {
+  i <- which(is.finite(lp))[1L]
+  if (is.na(i)) return(0)
+  full <- attr(safe_lp(model, jacobian = TRUE, propto = FALSE), "value")(qs[i, ])
+  if (is.finite(full)) full - lp[i] else 0
+}
+
 safe_lp <- function(model, jacobian, propto = TRUE) {
   lpg <- model_lpg(model, jacobian, propto)
   lp <- model_lp(model, jacobian, propto)
@@ -52,6 +62,9 @@ num_hessian <- function(lpg, u, h = 1e-5) {
 #' @param init_alpha Initial step size of the first line search.
 #' @param save_iterations Return every iterate as a draw (the initial point
 #'   first, the optimum last), as CmdStan's `save_iterations`.
+#' @param refresh Report the iteration, log density, step length, gradient
+#'   norm and line search step every `refresh` iterations of L-BFGS or BFGS
+#'   (0, the default, is quiet).
 #' @return A `bayescomp_fit` with one draw holding the optimum, and elements
 #'   `par` (named constrained values), `value` (the objective), `code` (0
 #'   converged, 1 iteration limit, 2 line search failure), `message` and
@@ -64,7 +77,7 @@ num_hessian <- function(lpg, u, h = 1e-5) {
 bayescomp_optimize <- function(model, algorithm = c("lbfgs", "bfgs", "newton"), jacobian = FALSE,
                                init = 2, seed = NULL, iter = 2000L, tol_obj = 1e-12, tol_rel_obj = 1e4,
                                tol_grad = 1e-8, tol_rel_grad = 1e7, tol_param = 1e-8, history_size = 5L,
-                               init_alpha = 1e-3, save_iterations = FALSE) {
+                               init_alpha = 1e-3, save_iterations = FALSE, refresh = 0L) {
   check_model(model)
   algorithm <- match.arg(algorithm)
   t0 <- proc.time()[["elapsed"]]
@@ -74,7 +87,7 @@ bayescomp_optimize <- function(model, algorithm = c("lbfgs", "bfgs", "newton"), 
     r <- optimize_u(lpg, u0, algorithm, list(iter = as_count(iter, "iter", 1L), tol_obj = tol_obj, tol_rel_obj = tol_rel_obj,
                                              tol_grad = tol_grad, tol_rel_grad = tol_rel_grad, tol_param = tol_param,
                                              history_size = as_count(history_size, "history_size", 1L), init_alpha = init_alpha,
-                                             save_iterations = isTRUE(save_iterations)))
+                                             save_iterations = isTRUE(save_iterations), refresh = as.integer(refresh)))
     # with save_iterations every iterate is a draw, the optimum last
     r$qs <- if (!is.null(r$path)) r$path[, -1L, drop = FALSE] else matrix(r$u, 1L)
     r$lps <- if (!is.null(r$path)) r$path[, 1L] else r$value
@@ -84,8 +97,13 @@ bayescomp_optimize <- function(model, algorithm = c("lbfgs", "bfgs", "newton"), 
   k <- nrow(res$qs)
   out <- list(list(q = res$qs, gq = res$gq,
                    diag = cbind(lp__ = res$lps, matrix(0, k, 6L, dimnames = list(NULL, c("accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))),
-                   step_size = NA_real_, inv_metric = NULL, n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0)))
-  fit <- make_fit(model, out, list(algorithm = algorithm, jacobian = jacobian), "optimize", seed, proc.time()[["elapsed"]] - t0)
+                   step_size = NA_real_, inv_metric = NULL, n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0),
+                   profile = res$profile))
+  cfg <- list(algorithm = algorithm, jacobian = jacobian, iter = iter, save_iterations = isTRUE(save_iterations))
+  if (algorithm != "newton")
+    cfg <- c(cfg, list(init_alpha = init_alpha, tol_obj = tol_obj, tol_rel_obj = tol_rel_obj, tol_grad = tol_grad,
+                       tol_rel_grad = tol_rel_grad, tol_param = tol_param, history_size = history_size))
+  fit <- make_fit(model, out, cfg, "optimize", seed, proc.time()[["elapsed"]] - t0)
   fit$par <- fit$draws[k, 1L, -1L]
   fit$value <- res$value
   fit$code <- res$code
@@ -157,6 +175,8 @@ qn_opt <- function(lpg, x, dense, ctl) {
     df <- abs(nxt$f - cur$f)
     x <- xn; prev <- cur; cur <- nxt
     if (!is.null(path)) path[[length(path) + 1L]] <- c(-cur$f, x)
+    if ((ctl$refresh %||% 0L) > 0L && k %% ctl$refresh == 0L)
+      message(sprintf("%6d %14.6g %12.4g %12.4g %10.4g", k, -cur$f, sqrt(sum(s^2)), sqrt(sum(cur$g^2)), ls$a))
     p <- dir(cur$g)
     if (df < ctl$tol_obj) { msg <- "absolute change in objective below tol_obj"; code <- 0L; break }
     if (df / max(abs(cur$f), abs(prev$f), 1) < ctl$tol_rel_obj * eps) { msg <- "relative change in objective below tol_rel_obj"; code <- 0L; break }
@@ -250,6 +270,10 @@ newton_opt <- function(lpg, u, iter, save_iterations = FALSE) {
 #' @param calculate_lp Evaluate the log density of the draws (`log_p__`);
 #'   with `FALSE` it is `NaN`, as in CmdStan.
 #' @return A `bayescomp_fit` with extra columns `log_p__` and `log_g__`.
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_laplace(m, draws = 200, seed = 1)
+#' sd(bayescomp_extract(fit, "mu"))
 #' @export
 bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L, seed = NULL, calculate_lp = TRUE) {
   check_model(model)
@@ -276,7 +300,8 @@ bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L
     n <- length(u)
     z <- matrix(stats::rnorm(draws * n), draws, n)
     qs <- sweep(z %*% t(L), 2L, u, "+")
-    log_g <- -0.5 * rowSums(z^2) - 0.5 * n * log(2 * pi) - sum(log(diag(L)))
+    # CmdStan's log_q__: the unnormalized Gaussian density, 0 at the mode
+    log_g <- -0.5 * rowSums(z^2)
     log_p <- if (isTRUE(calculate_lp)) apply(qs, 1L, function(q) lpg(q)$value) else rep(NaN, draws)
     gq <- chain_write_draws(model, qs, FALSE)
     dg <- matrix(0, draws, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))

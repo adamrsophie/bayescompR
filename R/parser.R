@@ -15,12 +15,23 @@ basic_types <- c("int", "real", "complex", "vector", "row_vector", "matrix",
                  "row_stochastic_matrix", "complex_vector", "complex_row_vector",
                  "complex_matrix", "tuple", "sum_to_zero_matrix")
 
-stan_parse <- function(src) {
-  toks <- stan_lex(src)
+stan_parse <- function(src, remap = TRUE) {
+  map <- if (remap) attr(src, "linemap")
+  if (is.null(map)) toks <- stan_lex(src)
+  else {
+    # report lines of the source files, not of the text with includes expanded
+    toks <- remap_errors(stan_lex(src), map)
+    for (i in seq_along(toks)) {
+      l <- toks[[i]]$line
+      if (is.null(l) || is.na(l) || l > length(map$line)) next
+      toks[[i]]$file <- map$file[l]
+      toks[[i]]$line <- map$line[l]
+    }
+  }
   p <- new.env(parent = emptyenv())
   p$toks <- toks
   p$pos <- 1L
-  prog <- parse_program(p)
+  prog <- if (is.null(map)) parse_program(p) else remap_errors(parse_program(p), map, FALSE)
   prog$comments <- attr(toks, "comments")
   prog
 }
@@ -28,7 +39,21 @@ stan_parse <- function(src) {
 # --- token helpers -----------------------------------------------------------
 
 tk <- function(p, k = 0L) p$toks[[min(p$pos + k, length(p$toks))]]
-tk_loc <- function(t) list(line = t$line, col = t$col)
+tk_loc <- function(t) if (is.null(t$file) || is.na(t$file)) list(line = t$line, col = t$col) else list(line = t$line, col = t$col, file = t$file)
+
+# re-signal an error located in the expanded text at its file and line
+remap_errors <- function(expr, map, lines = TRUE) {
+  withCallingHandlers(expr, bayescomp_error = function(e) {
+    loc <- e$loc
+    if (!lines || is.null(loc$line) || !is.null(loc$file) || loc$line > length(map$line)) return()
+    base <- sub(" \\(line [0-9]+, column [0-9]+\\)$", "", conditionMessage(e))
+    loc$file <- map$file[loc$line]
+    loc$line <- map$line[loc$line]
+    e2 <- bc_condition(class(e)[1L], base, loc)
+    class(e2) <- class(e)
+    stop(e2)
+  })
+}
 tk_is <- function(p, value, type = NULL, k = 0L) {
   t <- tk(p, k)
   t$value == value && (is.null(type) || t$type == type) && t$type %in% c("op", "ident")

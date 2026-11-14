@@ -60,6 +60,12 @@ softabs <- function(H, alpha) {
 #'   Statistical Society B* 73, 123 to 214. Betancourt, M. (2013). A general
 #'   metric for Riemannian manifold Hamiltonian Monte Carlo. *Geometric
 #'   Science of Information*, 327 to 334.
+#' @examples
+#' \donttest{
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_riemannian(m, chains = 1, iter_warmup = 100, iter_sampling = 100, seed = 1)
+#' mean(bayescomp_extract(fit, "mu"))
+#' }
 #' @export
 bayescomp_riemannian <- function(model, method = c("smmala", "rmhmc"), chains = 4L, iter_warmup = 500L,
                                  iter_sampling = 500L, step_size = 0.5, int_time = 1.5, alpha = 1e6,
@@ -235,6 +241,10 @@ rmhmc_step <- function(q, gq, eps, L, geom, gradV, fp, tol = 1e-6) {
 #' @references Robnik, J., De Luca, G. B., Silverstein, E. and Seljak, U.
 #'   (2023). Microcanonical Hamiltonian Monte Carlo. *Journal of Machine
 #'   Learning Research* 24, 1 to 34.
+#' @examples
+#' m <- bayescomp_model("parameters { vector[2] b; } model { b ~ normal(0, 1); }")
+#' fit <- bayescomp_mclmc(m, chains = 1, iter_warmup = 200, iter_sampling = 200, seed = 1)
+#' colMeans(bayescomp_extract(fit, "b"))
 #' @export
 bayescomp_mclmc <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampling = 1000L,
                             energy_var = 5e-4, init = 2, seed = NULL, cores = getOption("mc.cores", 1L), refresh = 0L) {

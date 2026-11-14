@@ -55,6 +55,11 @@ reliable convergence check.
 \description{
 Ensemble Markov chain Monte Carlo
 }
+\examples{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+fit <- bayescomp_ensemble(m, iter_warmup = 100, iter_sampling = 100, seed = 1)
+mean(bayescomp_extract(fit, "mu"))
+}
 \references{
 Goodman, J. and Weare, J. (2010). Ensemble samplers with
 affine invariance. \emph{Communications in Applied Mathematics and

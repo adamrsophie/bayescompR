@@ -75,6 +75,13 @@ split_setup <- function(model, n_name, subset) {
 #'   stochastic gradient Langevin dynamics. *ICML*. Chen, T., Fox, E. and
 #'   Guestrin, C. (2014). Stochastic gradient Hamiltonian Monte Carlo.
 #'   *ICML*.
+#' @examples
+#' m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
+#'   model { mu ~ normal(0, 10); y ~ normal(mu, 1); }",
+#'   data = list(N = 20, y = seq(-1, 3, length.out = 20)))
+#' fit <- bayescomp_sgmcmc(m, batch_size = 5, chains = 1, iter_warmup = 200,
+#'                         iter_sampling = 300, seed = 1)
+#' mean(bayescomp_extract(fit, "mu"))
 #' @export
 bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32L, step_size = NULL,
                              friction = 0.1, n_name = "N", subset = NULL, chains = 4L, iter_warmup = 500L,
@@ -172,6 +179,12 @@ bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32
 #' @references Vehtari, A., Gelman, A., Sivula, T. and others (2020).
 #'   Expectation propagation as a way of life. *Journal of Machine Learning
 #'   Research* 21, 1 to 53.
+#' @examples
+#' m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
+#'   model { mu ~ normal(0, 10); y ~ normal(mu, 1); }",
+#'   data = list(N = 20, y = seq(-1, 3, length.out = 20)))
+#' ep <- bayescomp_ep(m, sites = 2, seed = 1)
+#' ep$mean
 #' @export
 bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-3, n_name = "N", subset = NULL,
                          output_samples = 1000L, seed = NULL, cores = getOption("mc.cores", 1L)) {

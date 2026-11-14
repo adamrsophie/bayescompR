@@ -282,6 +282,22 @@ hof_call <- function(f, ctx) function(t, y, a) do.call(f, c(list(t, y), a, list(
 rt_ode <- function(f, fixed, va, ctx, opts) {
   name <- opts$name
   if (opts$method == "adjoint") {
+    # Stan's argument checks; the solution and its gradient come from forward
+    # sensitivities with the forward tolerances, which give the same values
+    # as the adjoint method up to the tolerances
+    N <- length(val(fixed[[1L]]))
+    pos <- function(k, what) {
+      v <- val(fixed[[k]])
+      if (!all(is.finite(v)) || any(v <= 0)) stop_domain(sprintf("%s: %s must be positive and finite", name, what))
+    }
+    pos(4L, "relative_tolerance_forward"); pos(5L, "absolute_tolerance_forward")
+    pos(6L, "relative_tolerance_backward"); pos(7L, "absolute_tolerance_backward")
+    pos(8L, "relative_tolerance_quadrature"); pos(9L, "absolute_tolerance_quadrature")
+    pos(10L, "max_num_steps"); pos(11L, "num_steps_between_checkpoints")
+    for (k in c(5L, 7L)) if (length(val(fixed[[k]])) != N)
+      stop_shape(sprintf("%s: the absolute tolerance vectors must have the size of the initial state (%d)", name, N))
+    for (k in 12:14) if (!(val(fixed[[k]]) %in% c(1, 2)))
+      stop_domain(sprintf("%s: %s must be 1 or 2", name, c("interpolation_polynomial", "solver_forward", "solver_backward")[k - 11L]))
     rtol <- fixed[[4L]]; atol <- val(fixed[[5L]]); maxsteps <- fixed[[10L]]
   } else if (opts$tol) {
     rtol <- fixed[[4L]]; atol <- fixed[[5L]]; maxsteps <- fixed[[6L]]

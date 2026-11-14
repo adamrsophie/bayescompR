@@ -12,3 +12,6 @@ A data frame with one row per backend.
 \description{
 List the available execution backends
 }
+\examples{
+bayescomp_backends()
+}

@@ -23,6 +23,12 @@
 #' @references Rezende, D. and Mohamed, S. (2015). Variational inference
 #'   with normalizing flows. *Proceedings of the 32nd International
 #'   Conference on Machine Learning*, 1530 to 1538.
+#' @examples
+#' \donttest{
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_flow_vi(m, layers = 2, iter = 200, seed = 1)
+#' mean(bayescomp_extract(fit, "mu"))
+#' }
 #' @export
 bayescomp_flow_vi <- function(model, layers = 6L, iter = 2000L, grad_samples = 8L, learning_rate = 0.02,
                               output_samples = 1000L, psis_resample = TRUE, init = 2, seed = NULL, refresh = 0L) {

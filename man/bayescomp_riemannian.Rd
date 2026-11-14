@@ -62,6 +62,13 @@ possible. Hessians are computed by finite differences of gradients, so
 each iteration costs on the order of \code{dim} (smMALA) or \code{dim^2} (RMHMC)
 gradients: these methods suit models with few parameters.
 }
+\examples{
+\donttest{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+fit <- bayescomp_riemannian(m, chains = 1, iter_warmup = 100, iter_sampling = 100, seed = 1)
+mean(bayescomp_extract(fit, "mu"))
+}
+}
 \references{
 Girolami, M. and Calderhead, B. (2011). Riemann manifold
 Langevin and Hamiltonian Monte Carlo methods. \emph{Journal of the Royal

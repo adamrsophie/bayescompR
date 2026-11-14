@@ -16,7 +16,8 @@
 
 bc_condition <- function(class, message, loc = NULL, call = NULL) {
   if (!is.null(loc) && !is.null(loc$line)) {
-    message <- sprintf("%s (line %d, column %d)", message, loc$line, loc$col)
+    message <- if (is.null(loc$file) || is.na(loc$file)) sprintf("%s (line %d, column %d)", message, loc$line, loc$col)
+               else sprintf("%s (in '%s', line %d, column %d)", message, loc$file, loc$line, loc$col)
   }
   structure(
     class = c(class, "bayescomp_error", "error", "condition"),
@@ -33,7 +34,8 @@ stop_data <- function(message) stop(bc_condition("bayescomp_data_error", paste("
 stop_reject <- function(message, fatal = FALSE) {
   cls <- if (fatal) c("bayescomp_fatal_error", "bayescomp_reject_error") else "bayescomp_reject_error"
   loc <- .stmt$loc
-  if (!is.null(loc)) message <- sprintf("%s (line %d, column %d)", message, loc$line, loc$col)
+  if (!is.null(loc)) message <- if (is.null(loc$file) || is.na(loc$file)) sprintf("%s (line %d, column %d)", message, loc$line, loc$col)
+                                 else sprintf("%s (in '%s', line %d, column %d)", message, loc$file, loc$line, loc$col)
   stop(structure(class = c(cls, "bayescomp_error", "error", "condition"),
                  list(message = message, call = NULL, loc = loc)))
 }

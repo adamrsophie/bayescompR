@@ -14,3 +14,5 @@ Rplots.pdf
 vignettes/*.html
 vignettes/*.R
 figure/
+receipts/
+review-receipts/

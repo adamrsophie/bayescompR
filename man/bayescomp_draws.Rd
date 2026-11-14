@@ -42,3 +42,11 @@ Draws in the requested format.
 \description{
 Draws from a fit
 }
+\examples{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+                        seed = 1, refresh = 0)
+dim(bayescomp_draws(fit))
+head(bayescomp_draws(fit, format = "df"))
+head(as.matrix(fit))
+}

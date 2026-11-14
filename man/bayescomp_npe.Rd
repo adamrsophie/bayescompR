@@ -51,6 +51,14 @@ the training and validation trace.
 \description{
 Neural posterior estimation
 }
+\examples{
+\donttest{
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+sim <- function(th) mean(rnorm(10, th[["mu"]], 1))
+fit <- bayescomp_npe(m, sim, observed = 1, num_simulations = 500, epochs = 50, seed = 1)
+mean(bayescomp_extract(fit, "mu"))
+}
+}
 \references{
 Papamakarios, G. and Murray, I. (2016). Fast epsilon free
 inference of simulation models with Bayesian conditional density

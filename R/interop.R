@@ -26,6 +26,19 @@
 #'   the chains, or a vector of them.
 #' @param ... Passed on (to [loo::loo.array()] for `loo()`).
 #' @return Objects of the classes the generics document.
+#' @examples
+#' m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
+#'   model { y ~ normal(mu, 1); }
+#'   generated quantities {
+#'     vector[N] log_lik;
+#'     for (n in 1:N) log_lik[n] = normal_lpdf(y[n] | mu, 1);
+#'   }",
+#'   data = list(N = 10, y = seq(-1, 1, length.out = 10)))
+#' fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+#'                         seed = 1, refresh = 0)
+#' if (requireNamespace("posterior", quietly = TRUE))
+#'   print(posterior::summarise_draws(posterior::as_draws_df(fit, "mu")))
+#' if (requireNamespace("loo", quietly = TRUE)) print(loo::loo(fit))
 #' @name bayescomp_interop
 NULL
 

@@ -2002,21 +2002,3 @@ def("hmm_latent_rng", c("matrix", "matrix", "vector"), "int[]", function(lo, G, 
   z
 }, rng = TRUE)
 
-# matrix normal with precision matrices Sigma (rows) and D (columns); the
-# log determinant weights follow Stan Math
-lp_matrix_normal_prec <- function(y, Mu, Sigma, D, propto) {
-  f <- "matrix_normal_prec_lpdf"
-  sym_check(f, Sigma); sym_check(f, D)
-  chk_finite(f, "Random variable", y); chk_finite(f, "Location parameter", Mu)
-  N <- nrow(val(y)); P <- ncol(val(y))
-  if (any(dim(val(Mu)) != c(N, P)) || any(dim(val(Sigma)) != N) || any(dim(val(D)) != P)) stop_shape(sprintf("%s: size mismatch", f))
-  lp <- if (propto) 0 else -0.5 * log(2 * pi) * N * P
-  if (inc(propto, Sigma)) lp <- lp + 0.5 * N * ad_log_det(as_dbl(Sigma))
-  if (inc(propto, D)) lp <- lp + 0.5 * P * ad_log_det(as_dbl(D))
-  if (inc(propto, y, Mu, Sigma, D)) {
-    E <- as_dbl(y) - as_dbl(Mu)
-    lp <- lp - 0.5 * ad_sum(as_dbl(D) * ad_matmul(ad_matmul(ad_transpose(E), as_dbl(Sigma)), E))
-  }
-  lp
-}
-defdist("matrix_normal_prec", c("matrix", "matrix", "matrix", "matrix"), lp_matrix_normal_prec)
