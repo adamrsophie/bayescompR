@@ -215,32 +215,83 @@ bayescomp_as_draws <- function(fit, inc_warmup = FALSE) {
   posterior::as_draws_array(bayescomp_draws(fit, inc_warmup = inc_warmup))
 }
 
-#' Trace and density plots
+#' Diagnostic plots
+#'
+#' `"trace"` and `"density"` show the draws per chain. `"rank"` shows rank
+#' histograms: the pooled draws are ranked and each chain's ranks are
+#' binned, so well mixed chains give flat histograms (Vehtari et al. 2021).
+#' `"ess_local"` shows the effective sample size of the indicators of small
+#' quantile intervals and `"ess_quantile"` the effective sample size of
+#' quantile estimates, both against the probability; dashed lines mark the
+#' bulk ESS, tail ESS and the ESS of the folded draws |x - median|, which
+#' measures the efficiency for scale.
 #'
 #' @param x A `bayescomp_fit`.
 #' @param variables Variables to plot (default: up to four parameters).
-#' @param type `"trace"` or `"density"`.
+#' @param type `"trace"`, `"density"`, `"rank"`, `"ess_local"` or
+#'   `"ess_quantile"`.
+#' @param bins Number of bins for rank histograms and of intervals for the
+#'   local ESS.
 #' @param ... Passed to the plotting functions.
 #' @return `x`, invisibly.
 #' @export
-plot.bayescomp_fit <- function(x, variables = NULL, type = c("trace", "density"), ...) {
+plot.bayescomp_fit <- function(x, variables = NULL, type = c("trace", "density", "rank", "ess_local", "ess_quantile"),
+                               bins = 20L, ...) {
   type <- match.arg(type)
-  if (is.null(variables)) variables <- utils::head(setdiff(dimnames(x$draws)[[3L]], "lp__"), 4L)
+  if (is.null(variables)) variables <- utils::head(setdiff(dimnames(x$draws)[[3L]], c("lp__", "log_p__", "log_g__")), 4L)
   a <- bayescomp_draws(x, variables)
   vars <- dimnames(a)[[3L]]
-  op <- graphics::par(mfrow = c(length(vars), 1L), mar = c(3, 4, 1.5, 1))
+  nc <- dim(a)[2L]
+  if (type == "rank") {
+    op <- graphics::par(mfrow = c(length(vars), nc), mar = c(2, 2, 1.5, 0.5))
+  } else {
+    op <- graphics::par(mfrow = c(length(vars), 1L), mar = c(3, 4, 1.5, 1))
+  }
   on.exit(graphics::par(op))
-  cols <- grDevices::hcl.colors(max(2L, dim(a)[2L]), "Dark 3")
+  cols <- grDevices::hcl.colors(max(2L, nc), "Dark 3")
   for (v in vars) {
     xm <- matrix(a[, , v], dim(a)[1L])
     if (type == "trace") {
       graphics::matplot(xm, type = "l", lty = 1, col = cols, ylab = v, xlab = "", main = "", ...)
-    } else {
+    } else if (type == "density") {
       ds <- apply(xm, 2L, function(col) stats::density(col))
       yl <- range(unlist(lapply(ds, `[[`, "y")))
       xl <- range(unlist(lapply(ds, `[[`, "x")))
       plot(ds[[1L]], col = cols[1L], main = "", xlab = v, xlim = xl, ylim = yl, ...)
       for (k in seq_along(ds)[-1L]) graphics::lines(ds[[k]], col = cols[k])
+    } else if (type == "rank") {
+      r <- matrix(rank(xm, ties.method = "average"), nrow(xm))
+      br <- seq(0, length(r), length.out = bins + 1L)
+      cnt <- apply(r, 2L, function(rc) graphics::hist(rc, breaks = br, plot = FALSE)$counts)
+      yl <- c(0, max(cnt) * 1.1)
+      for (k in seq_len(nc)) {
+        graphics::barplot(cnt[, k], space = 0, col = cols[k], border = NA, ylim = yl,
+                          main = sprintf("%s, chain %d", v, k), cex.main = 0.8, ...)
+        graphics::abline(h = nrow(xm) / bins, lty = 2)
+      }
+    } else {
+      ref <- c(bulk = bayescomp_ess_bulk(xm), tail = bayescomp_ess_tail(xm),
+               folded = bayescomp_ess_basic(abs(xm - stats::median(xm))))
+      if (type == "ess_local") {
+        pr <- seq(0, 1, length.out = bins + 1L)
+        qs <- stats::quantile(xm, pr, names = FALSE)
+        e <- vapply(seq_len(bins), function(k) {
+          ind <- (xm > qs[k] & xm <= qs[k + 1L]) + 0
+          if (k == 1L) ind <- (xm <= qs[2L]) + 0
+          bayescomp_ess_basic(ind)
+        }, 0)
+        px <- pr[-1L] - 0.5 / bins
+      } else {
+        px <- seq(0.025, 0.975, by = 0.025)
+        e <- bayescomp_ess_quantile(xm, px)
+      }
+      yl <- c(0, max(c(e, ref), na.rm = TRUE) * 1.1)
+      plot(px, e, type = "b", pch = 19, cex = 0.6, ylim = yl, xlim = c(0, 1), xlab = "probability",
+           ylab = sprintf("ESS (%s)", v), main = "", ...)
+      graphics::abline(h = ref, lty = 2, col = c("grey30", "firebrick", "steelblue"))
+      graphics::abline(h = 400, lty = 3, col = "grey60")
+      graphics::legend("bottomright", c(sprintf("%s %.0f", names(ref), ref), "400"), lty = c(2, 2, 2, 3),
+                       col = c("grey30", "firebrick", "steelblue", "grey60"), bty = "n", cex = 0.7)
     }
   }
   invisible(x)

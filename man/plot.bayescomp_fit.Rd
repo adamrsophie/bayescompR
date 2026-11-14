@@ -2,16 +2,26 @@
 % Please edit documentation in R/fit.R
 \name{plot.bayescomp_fit}
 \alias{plot.bayescomp_fit}
-\title{Trace and density plots}
+\title{Diagnostic plots}
 \usage{
-\method{plot}{bayescomp_fit}(x, variables = NULL, type = c("trace", "density"), ...)
+\method{plot}{bayescomp_fit}(
+  x,
+  variables = NULL,
+  type = c("trace", "density", "rank", "ess_local", "ess_quantile"),
+  bins = 20L,
+  ...
+)
 }
 \arguments{
 \item{x}{A \code{bayescomp_fit}.}
 
 \item{variables}{Variables to plot (default: up to four parameters).}
 
-\item{type}{\code{"trace"} or \code{"density"}.}
+\item{type}{\code{"trace"}, \code{"density"}, \code{"rank"}, \code{"ess_local"} or
+\code{"ess_quantile"}.}
+
+\item{bins}{Number of bins for rank histograms and of intervals for the
+local ESS.}
 
 \item{...}{Passed to the plotting functions.}
 }
@@ -19,5 +29,12 @@
 \code{x}, invisibly.
 }
 \description{
-Trace and density plots
+\code{"trace"} and \code{"density"} show the draws per chain. \code{"rank"} shows rank
+histograms: the pooled draws are ranked and each chain's ranks are
+binned, so well mixed chains give flat histograms (Vehtari et al. 2021).
+\code{"ess_local"} shows the effective sample size of the indicators of small
+quantile intervals and \code{"ess_quantile"} the effective sample size of
+quantile estimates, both against the probability; dashed lines mark the
+bulk ESS, tail ESS and the ESS of the folded draws |x - median|, which
+measures the efficiency for scale.
 }

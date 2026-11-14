@@ -89,3 +89,11 @@ test_that("normalizing flow VI fits a correlated Gaussian", {
   expect_lt(fit$pareto_k, 0.7)
   expect_lt(abs(mean(utils::tail(fit$elbo, 50))), 0.2)
 })
+
+test_that("diagnostic plots draw for every type", {
+  m <- bayescomp_model("parameters { real x; } model { x ~ normal(0, 1); }")
+  fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 200, seed = 1, refresh = 0)
+  grDevices::pdf(NULL)
+  on.exit(grDevices::dev.off())
+  for (ty in c("trace", "density", "rank", "ess_local", "ess_quantile")) expect_identical(plot(fit, type = ty), fit)
+})
