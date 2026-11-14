@@ -124,7 +124,8 @@ bayescomp_ess_bulk <- function(x) {
 bayescomp_ess_tail <- function(x) {
   x <- as_draws_matrix_chains(x)
   if (na_diag(x)) return(NA_real_)
-  min(bayescomp_ess_quantile(x, c(0.05, 0.95)))
+  e <- bayescomp_ess_quantile(x, c(0.05, 0.95))
+  if (anyNA(e)) NA_real_ else min(e)
 }
 
 #' @rdname diagnostics
@@ -135,10 +136,10 @@ bayescomp_ess_basic <- function(x) ess_raw(split_chains(as_draws_matrix_chains(x
 #' @export
 bayescomp_ess_quantile <- function(x, probs = c(0.05, 0.95)) {
   x <- as_draws_matrix_chains(x)
-  # upper quantiles use the upper indicator, which matters for tied draws
+  # as posterior 1.7.1: the indicator x <= q for every quantile
   vapply(probs, function(p) {
     q <- stats::quantile(x, p, names = FALSE)
-    ind <- if (p > 0.5) x >= q else x <= q
+    ind <- x <= q
     if (na_diag(ind + 0)) return(NA_real_)
     ess_raw(split_chains(ind + 0))
   }, 0)

@@ -40,15 +40,18 @@ test_that("CDFs check their parameters and impossible bounds are rejected", {
   expect_error(bayescomp_log_prob(ib, 0), class = "bayescomp_domain_error")
 })
 
-test_that("diagnostics match the posterior package conventions", {
+test_that("diagnostics match the posterior package", {
   expect_equal(bayescomp_ess_basic(rep(c(-1, 1), 10)), 10)
   set.seed(3)
   y <- matrix(stats::rnorm(2000), 500)
   expect_equal(bayescomp_rhat(y * 1e-20), bayescomp_rhat(y))
-  z <- matrix(stats::rbinom(2000, 1, 0.5), 500)
-  expect_false(is.na(bayescomp_ess_quantile(z, 0.95)))
-  x2 <- (y - mean(y))^2
-  expect_equal(bayescomp_mcse_sd(y), sqrt(mean((x2 - mean(x2))^2) / 4 / mean(x2) / bayescomp_ess_basic(x2)))
+  skip_if_not_installed("posterior")
+  x <- y + matrix(rep(cumsum(stats::rnorm(500)) * 0.05, 4), 500)
+  z <- matrix(stats::rbinom(2000, 1, 0.3), 500)
+  a <- matrix(rep(c(-1, 1), 1000), 500)
+  for (f in c("rhat", "ess_bulk", "ess_tail", "ess_basic", "mcse_mean", "mcse_sd"))
+    for (m in list(x, z, a))
+      expect_equal(get(paste0("bayescomp_", f))(m), get(f, asNamespace("posterior"))(m), label = f)
 })
 
 test_that("unequal minibatches give an unbiased stochastic gradient", {
@@ -91,7 +94,25 @@ test_that("Gibbs slice kernel leaves a bounded uniform invariant", {
 })
 
 test_that("gradient free samplers initialize without gradients", {
-  m <- bayescomp_model("parameters { real x; } model { x ~ normal(0, 1); }")
+  # svd_U of a parameter dependent matrix has a value but no gradient
+  m <- bayescomp_model("parameters { real x; } model { matrix[2, 2] A = [[x, 1], [0, 2]];
+                        target += -0.5 * square(x) + 0 * svd_U(A)[1, 1]; }")
+  expect_error(bayescomp_sample(m, chains = 1, iter_warmup = 5, iter_sampling = 5, seed = 1, refresh = 0),
+               class = "bayescomp_unsupported_error")
   f <- bayescomp_sample(m, algorithm = "slice", chains = 1, iter_warmup = 20, iter_sampling = 20, seed = 1, refresh = 0)
   expect_equal(dim(f$draws)[1:2], c(20L, 1L))
+})
+
+test_that("state space parameter names line up with the values", {
+  m <- bayescomp_model("parameters { matrix[2, 2] M; real s; } model { to_vector(M) ~ normal(0, 1); s ~ normal(0, 1); }")
+  u <- c(1, 2, 3, 4, 5)
+  v <- ssm_theta(m, u)
+  expect_equal(unname(v[c("M[2,1]", "M[1,2]", "s")]), c(2, 3, 5))
+})
+
+test_that("the compatibility matrix is well formed and its test files exist", {
+  cm <- bayescomp_compatibility()
+  expect_true(all(cm$status %in% c("implemented", "partial", "not_implemented", "not_applicable")))
+  files <- unique(unlist(strsplit(cm$tests[nzchar(cm$tests)], ";")))
+  expect_true(all(file.exists(test_path(files))))
 })

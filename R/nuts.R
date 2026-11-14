@@ -263,8 +263,12 @@ est_value <- function(e) {
 # ---- one chain ----------------------------------------------------------------------
 
 run_hmc_chain <- function(model, q0, cfg, chain_id) {
-  pot <- hmc_potential(model, print = cfg$print)
   n <- length(q0)
+  lp_full <- lp_value_fun(model, print = cfg$print)
+  # Metropolis and the slice samplers need only log density values
+  pot <- if (cfg$algorithm %in% c("metropolis", "slice", "elliptical_slice")) {
+    function(q) list(V = -lp_full(q), g = numeric(n))
+  } else hmc_potential(model, print = cfg$print)
   dense <- cfg$metric == "dense_e"
   inv <- cfg$inv_metric %||% (if (dense) diag(n) else rep(1, n))
   st <- new.env(parent = emptyenv())
@@ -274,7 +278,6 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   st$max_depth <- cfg$max_treedepth
   st$max_deltaH <- 1000
   st$int_time <- cfg$int_time
-  lp_full <- lp_value_fun(model, print = cfg$print)
   lp_off <- lp_full(q0) + pot(q0)$V
   if (!is.finite(lp_off)) lp_off <- 0
   st$lp <- function(q) lp_full(q) - lp_off

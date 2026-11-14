@@ -113,3 +113,19 @@ bayescomp_native_error <- function(message) {
     E_SHAPE = stop_shape(body),
     stop(sprintf("native backend error: %s", body), call. = FALSE))
 }
+
+#' Compatibility matrix
+#'
+#' A machine readable list of Stan 2.40 features and their status in this
+#' version: `"implemented"`, `"partial"`, `"not_implemented"` or
+#' `"not_applicable"`, with the test files that cover each feature.
+#'
+#' @return A data frame with columns `area`, `feature`, `status`, `tests`
+#'   and `notes`.
+#' @export
+#' @examples
+#' cm <- bayescomp_compatibility()
+#' table(cm$status)
+bayescomp_compatibility <- function() {
+  utils::read.csv(system.file("compatibility.csv", package = "bayescompR"), stringsAsFactors = FALSE)
+}

@@ -52,21 +52,30 @@ zmul <- function(c, x) {
 defdist <- function(name, args, lpdf = NULL, discrete = FALSE, cdf = NULL, lcdf = NULL,
                     lccdf = NULL, rng = NULL, rng_ret = NULL, ret = "real") {
   suf <- if (discrete) c("_lpmf", "_lupmf") else c("_lpdf", "_lupdf")
-  # the cumulative functions share the density's argument checks (values
-  # only, no AD); a discrete variable below its support is allowed there
+  # the cumulative functions share the density's parameter checks (values
+  # only, no AD); the variable itself is left to the cumulative function,
+  # whose support handling differs from the density's
   if (!is.null(lpdf)) {
     dens_name <- paste0(name, suf[1L])
     checked <- function(fun, fname) {
       force(fun)
-      function(...) {
+      structure(function(...) {
         a <- lapply(list(...), val)
-        tryCatch(do.call(lpdf, c(a, list(propto = TRUE))), bayescomp_domain_error = function(e) {
-          msg <- conditionMessage(e)
-          if (discrete && grepl("Random variable", msg, fixed = TRUE)) return(NULL)
-          stop_domain(sub("^Domain error: ", "", gsub(dens_name, fname, msg, fixed = TRUE)))
-        })
+        ok <- function(y) tryCatch({ do.call(lpdf, c(list(y), a[-1L], list(propto = TRUE))); TRUE },
+                                   bayescomp_domain_error = function(e) e)
+        r <- ok(a[[1L]])
+        if (!isTRUE(r)) {
+          # the parameters are valid if the density accepts some variable
+          # in its support (the variable itself is the cumulative function's
+          # business: it may lie outside the support)
+          pv <- unlist(lapply(a[-1L], function(x) as.vector(x)[1L]))
+          cand <- c(0.5, 1, 0, 2, -0.5, pv, if (length(pv) >= 2L) mean(pv[1:2]))
+          if (discrete) cand <- unique(as.integer(round(c(0, 1, pv))))
+          if (!any(vapply(cand, function(y) isTRUE(ok(y)), TRUE)))
+            stop_domain(sub("^Domain error: ", "", gsub(dens_name, fname, conditionMessage(r), fixed = TRUE)))
+        }
         fun(...)
-      }
+      }, unchecked = fun)
     }
     if (!is.null(lcdf)) lcdf <- checked(lcdf, paste0(name, "_lcdf"))
     if (!is.null(cdf)) cdf <- checked(cdf, paste0(name, "_cdf"))

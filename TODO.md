@@ -80,8 +80,8 @@ Diagnostics
 * Approximation diagnostics for INLA, nested sampling, flows, SBI, PDMP,
   SG-MCMC and diffusion.
 * A reproducible differential test corpus against Stan 2.40 for densities,
-  gradients, transforms and generated quantities, and a generated
-  compatibility matrix of signatures and tests.
+  gradients, transforms and generated quantities; extend the compatibility
+  matrix to individual signatures.
 * Native backend ABI for transforms, generated quantities and RNG.
 * Missing cumulative functions such as `bernoulli_lccdf` and the skew
   normal family.

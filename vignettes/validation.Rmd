@@ -26,7 +26,8 @@ full set runs in the package tests on every push, and the slow ones
    independent R implementation (`stats::dnorm` and friends, or direct
    formulas), and their gradients with central finite differences. This
    covers the common distributions and the elementwise math functions, not
-   every signature; TODO.md lists the known gaps.
+   every signature; `bayescomp_compatibility()` lists each feature's status
+   and tests, and TODO.md the known gaps.
 3. **Transforms.** Constraining and unconstraining round trip, and the log
    Jacobians match the log absolute determinants of numerical Jacobians.
 4. **Automatic differentiation.** Gradients of whole models match finite

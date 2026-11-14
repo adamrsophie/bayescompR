@@ -258,7 +258,8 @@ cg_stmt <- function(st, ctx) {
         mkfun <- function(sig) {
           if (is.null(sig)) return(NULL)
           if (isTRUE(sig$user)) return(as.name(sig$mangled))
-          sig$impl
+          # the sampling statement has already checked the parameters
+          attr(sig$impl, "unchecked") %||% sig$impl
         }
         lcdf_f <- mkfun(tr$lcdf_sig)
         lccdf_f <- mkfun(tr$lccdf_sig)

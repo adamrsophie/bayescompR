@@ -65,19 +65,23 @@ First release.
   densities; truncation at the edge of the support and extreme tail CDF
   gradients are finite; `log_diff_exp(a, negative_infinity())` is `a`.
 * Repeated indices in an assignment give the adjoint to the last write.
-* ESS at lag zero, upper quantile indicators and MCSE of the SD follow the
-  posterior package; the constant check is relative to the draws' scale.
+* R-hat, bulk and tail ESS, basic ESS and MCSE of the mean and SD equal
+  those of posterior 1.7.1 (tested when posterior is installed), including
+  ESS at lag zero; the constant check is relative to the draws' scale.
 * Nested sampling reports `converged` and computes the information from the
   dead and live points; incomplete SMC sets `complete = FALSE` and
   `log_evidence = NA`; a failed Newton line search is not reported as
   converged, and Laplace warns when the optimizer did not converge.
 * Diffusion time grids end at a positive time and diffusion fails rather
   than return draws outside the support; MCLMC keeps its step size fixed
-  while sampling; ADVI counts zero density draws in the ELBO.
+  while sampling; ADVI drops draws with zero density from the ELBO as Stan does.
 * Zig-Zag and BPS compare refresh and bounce times; particle filter
   increments ignore zero weight particles; vector parameters work in PMCMC
   and neural posterior estimation.
 * `bayescomp_generate_quantities()` checks that the parameter declarations
   match the fit; impossible infinite bounds and nonpositive multipliers are
-  domain errors; slice, Metropolis, ensemble, tempering and PMCMC start
-  without a gradient.
+  domain errors; slice, Metropolis, ensemble, tempering and PMCMC start and
+  run without a gradient.
+* `bayescomp_compatibility()` returns the machine readable feature matrix
+  (implemented, partial, not implemented, not applicable) with the test
+  files covering each feature.

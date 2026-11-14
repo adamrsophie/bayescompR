@@ -4,6 +4,7 @@ moments_ok <- function(fit, tol = 0.25) {
   x <- bayescomp_extract(fit, "x")
   expect_equal(colMeans(x), c(1, -1), tolerance = tol)
   expect_equal(apply(x, 2, sd), c(1, 1), tolerance = tol)
+  expect_equal(stats::cor(x)[1, 2], 0.7, tolerance = tol)
 }
 
 test_that("elliptical slice sampling targets the posterior", {

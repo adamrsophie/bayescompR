@@ -49,9 +49,10 @@ bayescomp_variational <- function(model, algorithm = c("meanfield", "fullrank"),
     elbo <- function(vp) {
       th <- transform(vp, draw_z(elbo_samples))
       lp <- apply(th, 1L, function(q) lpg(q)$value)
-      # a draw with zero density makes the ELBO minus infinity
-      if (!all(is.finite(lp))) return(-Inf)
-      mean(lp) + entropy(vp)
+      # as Stan's calc_ELBO: draws whose log density is not finite are
+      # dropped, and the ELBO fails only when every draw is dropped
+      if (!any(is.finite(lp))) return(-Inf)
+      mean(lp[is.finite(lp)]) + entropy(vp)
     }
     grad <- function(vp) {
       z <- draw_z(grad_samples)
