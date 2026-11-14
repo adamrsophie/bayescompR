@@ -77,7 +77,10 @@ pf_run <- function(ssm, theta, N, scheme, ess_threshold, ref = NULL) {
       w <- exp(lw - m); w <- w / sum(w)
       e <- 1 / sum(w^2)
       if (!is.null(ref) || e < ess_threshold * N) {
-        a <- resample_idx(w, scheme)
+        # conditional SMC resamples the free particles multinomially, which
+        # keeps the conditional update exact; the pinned particle's
+        # ancestor is drawn by ancestor sampling
+        a <- if (is.null(ref)) resample_idx(w, scheme) else c(sample.int(N, N - 1L, TRUE, prob = w), NA_integer_)
         if (!is.null(ref)) {
           la <- log(w) + ssm$log_transition(matrix(ref[t, ], N, d, byrow = TRUE) |> drop_d(), drop_d(X), t, theta)
           la[!is.finite(la)] <- -Inf

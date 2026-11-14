@@ -36,7 +36,7 @@ quantities.
 | Parallel tempering | log density | yes | tempering.R |
 | DE MCMC, stretch move | log density | yes | ensemble.R |
 | Blocked Gibbs, conjugate detection | log density (gradient for MALA blocks) | yes | gibbs.R |
-| smMALA, RMHMC | gradient, Hessian by differences | yes (RMHMC up to finite differences) | geometric.R |
+| smMALA, RMHMC | gradient, Hessian by differences | smMALA yes; RMHMC approximately (finite difference metric derivatives, fixed point iterations) | geometric.R |
 | MCLMC | gradient | approximate (unadjusted) | geometric.R |
 | Zig-Zag, BPS | gradient | approximate (numerical event times) | pdmp.R |
 | Planar flow VI | gradient | approximate | flow.R |

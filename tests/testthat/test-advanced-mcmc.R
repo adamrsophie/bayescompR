@@ -32,6 +32,9 @@ test_that("parallel tempering mixes between modes and estimates the evidence", {
   b <- fit$betas[[1L]]
   expect_equal(range(b), c(0, 1))
   expect_true(all(diff(b) > 0))
+  two <- bayescomp_parallel_tempering(bayescomp_model(target2), num_temps = 2, chains = 1, iter_warmup = 50,
+                                      iter_sampling = 100, seed = 1)
+  expect_equal(fit_dims <- dim(two$draws)[1:2], c(100L, 1L))
   s <- pt_update_schedule(seq(0, 1, length.out = 5), c(0.8, 0.1, 0.1, 0.1))
   expect_lt(s[2], 0.25)
 })

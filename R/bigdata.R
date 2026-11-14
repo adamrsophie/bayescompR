@@ -7,10 +7,18 @@
 # layout. Supply `subset` for anything else.
 
 model_with_data <- function(model, data) {
-  inst <- instantiate(model$compiled, data)
-  out <- model
-  out$env <- inst$env; out$decls <- inst$decls; out$data <- data
-  out$native <- NULL; out$backend <- "r"
+  if (!identical(model$backend, "r")) {
+    # recompile through the same backend so implementations never mix
+    out <- bayescomp_model(model$code, data = data, backend = model$backend,
+                           allow_fallback = any(unlist(model$provenance) == "r"))
+  } else {
+    inst <- instantiate(model$compiled, data)
+    out <- model
+    out$env <- inst$env; out$decls <- inst$decls; out$data <- data; out$params <- inst$params; out$dim <- inst$dim
+  }
+  if (out$dim != model$dim)
+    stop("the parameter dimension changes with the data subset; supply 'subset' or use a model whose parameter sizes do not depend on N",
+         call. = FALSE)
   out
 }
 
@@ -115,13 +123,15 @@ bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32
       pos <- pos + 1L
       if (pos > length(order_k)) { order_k <- sample.int(length(batches)); pos <- 1L }
       g <- grad_est(u, order_k[pos])
-      if (any(!is.finite(g))) next
-      if (method == "sgld") {
-        u <- u + 0.5 * eps * g + sqrt(eps) * stats::rnorm(n)
-      } else {
-        # Chen et al. (2014), equation 15, with learning rate eta = eps
-        v <- (1 - friction) * v + eps * g + sqrt(2 * friction * eps) * stats::rnorm(n)
-        u <- u + v
+      # a non finite minibatch gradient skips the move but keeps the draw
+      if (all(is.finite(g))) {
+        if (method == "sgld") {
+          u <- u + 0.5 * eps * g + sqrt(eps) * stats::rnorm(n)
+        } else {
+          # Chen et al. (2014), equation 15, with learning rate eta = eps
+          v <- (1 - friction) * v + eps * g + sqrt(2 * friction * eps) * stats::rnorm(n)
+          u <- u + v
+        }
       }
       if (it > nw && ((it - nw - 1L) %% thin == 0L)) {
         row <- row + 1L

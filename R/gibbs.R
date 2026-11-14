@@ -15,9 +15,12 @@
 #       gamma variances, Poisson and exponential rates);
 #     - Beta for unit interval scalars x = inv_logit(u) whose log density is
 #       A log x + B log(1 - x) (binomial and Bernoulli probabilities).
-#   The proposal is fitted at the current state and the reverse proposal
-#   at the proposed state, so the step stays exact even when the detection
-#   is wrong; the acceptance rate then drops below one.
+#   During warmup the proposal is fitted at the current state and the
+#   reverse proposal at the proposed state, so each step is exact even when
+#   the detection is wrong (the acceptance rate then drops below one). A
+#   block whose warmup draws were all accepted with probability one is
+#   treated as exact after warmup and drawn directly, which skips the
+#   reverse fit.
 # * "slice": univariate slice sampling for each coordinate, widths adapted
 #   during warmup.
 # * "metropolis": random walk Metropolis on the block, covariance and scale

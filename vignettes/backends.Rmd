@@ -179,7 +179,9 @@ one model by hand:
 bayescomp_register_backend("toy", c("log_density", "gradient"), "1.0.0",
   compile = function(ir, model) list(
     log_density_gradient = function(u, jacobian, propto) {
-      list(value = dnorm(u, 1, 2, log = TRUE), grad = -(u - 1) / 4)
+      # propto = TRUE drops the constant terms, as the R backend does
+      list(value = if (propto) -(u - 1)^2 / 8 else dnorm(u, 1, 2, log = TRUE),
+           grad = -(u - 1) / 4)
     }))
 m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(1, 2); }",
                      backend = "toy", allow_fallback = TRUE)

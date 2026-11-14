@@ -123,10 +123,11 @@ mean(de$acceptance)
 Gaussian (log density quadratic), Gamma (positive scalar with log density
 $a \log x - b x^k$) or Beta (unit interval scalar), by fitting the family
 at several random states and checking its predictions. A detected block is
-drawn exactly from its conditional; the others use slice sampling. The draw
-is an independence Metropolis step whose acceptance is one when the
-detection is right, so the sampler stays exact even when it is not. Needs:
-log density. Exact.
+drawn exactly from its conditional; the others use slice sampling. During
+warmup each draw is an independence Metropolis step whose acceptance is one
+when the detection is right, so a wrong detection shows up as acceptance
+below one; blocks accepted every time are drawn directly after warmup.
+Needs: log density. Exact when the detection is right.
 
 ```{r}
 y <- c(1, 2, 0.5, 1.5, 2.5)

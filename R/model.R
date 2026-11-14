@@ -103,23 +103,27 @@ model_lpg <- function(model, jacobian, propto, print = FALSE) {
 #' @param n Number of points.
 #' @param radius Points are uniform on `(-radius, radius)`.
 #' @param seed Random seed.
-#' @return A data frame with the largest absolute and relative differences
-#'   of the log density and the gradient at each point.
+#' @return A data frame with the absolute and relative differences of the
+#'   log density and the largest ones of the gradient at each point, for
+#'   each combination of `jacobian` and `propto`.
 #' @export
 bayescomp_validate_backend <- function(model, n = 20L, radius = 2, seed = 1L) {
   check_model(model)
   if (is.null(model$native)) stop("the model uses the R backend; nothing to compare", call. = FALSE)
   ref <- model
   ref$native <- NULL
-  set.seed(seed)
-  rows <- lapply(seq_len(n), function(i) {
-    u <- stats::runif(model$dim, -radius, radius)
-    a <- model_lpg(model, TRUE, FALSE)(u)
-    b <- model_lpg(ref, TRUE, FALSE)(u)
-    data.frame(point = i, lp_abs = abs(a$value - b$value),
-               lp_rel = abs(a$value - b$value) / max(1, abs(b$value)),
-               grad_abs = max(abs(a$grad - b$grad), 0),
-               grad_rel = max(abs(a$grad - b$grad) / pmax(1, abs(b$grad)), 0))
+  U <- with_seed(seed, matrix(stats::runif(n * model$dim, -radius, radius), n, model$dim))
+  combos <- expand.grid(jacobian = c(TRUE, FALSE), propto = c(FALSE, TRUE))
+  rows <- lapply(seq_len(nrow(combos)), function(k) {
+    jac <- combos$jacobian[k]; pro <- combos$propto[k]
+    fa <- model_lpg(model, jac, pro); fb <- model_lpg(ref, jac, pro)
+    do.call(rbind, lapply(seq_len(n), function(i) {
+      a <- fa(U[i, ]); b <- fb(U[i, ])
+      data.frame(point = i, jacobian = jac, propto = pro, lp_abs = abs(a$value - b$value),
+                 lp_rel = abs(a$value - b$value) / max(1, abs(b$value)),
+                 grad_abs = max(abs(a$grad - b$grad), 0),
+                 grad_rel = max(abs(a$grad - b$grad) / pmax(1, abs(b$grad)), 0))
+    }))
   })
   do.call(rbind, rows)
 }

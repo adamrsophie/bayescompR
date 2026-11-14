@@ -16,8 +16,9 @@ bayescomp_validate_backend(model, n = 20L, radius = 2, seed = 1L)
 \item{seed}{Random seed.}
 }
 \value{
-A data frame with the largest absolute and relative differences
-of the log density and the gradient at each point.
+A data frame with the absolute and relative differences of the
+log density and the largest ones of the gradient at each point, for
+each combination of \code{jacobian} and \code{propto}.
 }
 \description{
 Evaluates the log density and gradient of a model compiled with a native

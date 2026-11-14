@@ -7,7 +7,7 @@ test_that("native backends are used, validated and never mixed silently", {
       expect_equal(ir$ir_version, "1.0.0")
       list(log_density_gradient = function(u, jacobian, propto) {
         calls$n <- calls$n + 1L
-        list(value = stats::dnorm(u, 1, 2, log = TRUE), grad = -(u - 1) / 4)
+        list(value = if (propto) -(u - 1)^2 / 8 else stats::dnorm(u, 1, 2, log = TRUE), grad = -(u - 1) / 4)
       })
     }, description = "test backend")
   on.exit(rm("fake", envir = .backends))

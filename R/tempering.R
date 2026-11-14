@@ -88,7 +88,10 @@ bayescomp_parallel_tempering <- function(model, num_temps = 10L, chains = 2L, it
       }
       # swaps
       d <- lp - lg
-      pairs <- if (swap == "nonreversible") seq(if (it %% 2L == 0L) 1L else 2L, K - 1L, by = 2L) else sample.int(K - 1L, 1L)
+      if (swap == "nonreversible") {
+        first <- if (it %% 2L == 0L) 1L else 2L
+        pairs <- if (first <= K - 1L) seq(first, K - 1L, by = 2L) else integer(0)
+      } else pairs <- sample.int(K - 1L, 1L)
       for (k in pairs) {
         la <- (betas[k + 1L] - betas[k]) * (d[k] - d[k + 1L])
         a <- if (is.finite(la)) min(1, exp(la)) else if (is.nan(la)) 0 else if (la > 0) 1 else 0
