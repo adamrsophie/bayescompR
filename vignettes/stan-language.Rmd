@@ -1,0 +1,221 @@
+---
+title: "The Stan language in bayescompR"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{The Stan language in bayescompR}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(bayescompR)
+```
+
+bayescompR implements the Stan 2.40 language: the seven program blocks,
+the type system, user defined functions, statements and the standard
+library. This vignette describes what is supported, how data map to R
+objects, and the few differences from Stan.
+
+## Program blocks
+
+| Block | Runs | Purpose |
+|-------|------|---------|
+| `functions` | at compile time | user defined functions |
+| `data` | once | declarations checked against the supplied data |
+| `transformed data` | once | derived data, may use `_rng` functions |
+| `parameters` | every evaluation | unconstrained to constrained mapping |
+| `transformed parameters` | every evaluation | derived quantities, constraints checked |
+| `model` | every evaluation | adds to `target` |
+| `generated quantities` | once per draw | posterior predictions, may use `_rng` |
+
+## Types
+
+Scalars are `int` and `real`; containers are `vector`, `row_vector`,
+`matrix` and `array[...]` of any type. All constrained types of Stan 2.40
+are available for parameters:
+
+```{r}
+code <- "
+parameters {
+  real<lower=0> sigma;
+  real<lower=-1, upper=1> rho;
+  real<offset=2, multiplier=3> z;
+  simplex[3] theta;
+  ordered[2] cut;
+  positive_ordered[2] rates;
+  unit_vector[2] dir;
+  sum_to_zero_vector[3] effects;
+  cholesky_factor_corr[3] L;
+  corr_matrix[2] R;
+  cov_matrix[2] S;
+  column_stochastic_matrix[2, 2] P;
+}
+model {
+  sigma ~ exponential(1);
+  z ~ normal(2, 3);
+  theta ~ dirichlet(rep_vector(2, 3));
+  cut ~ normal(0, 2);
+  rates ~ gamma(2, 1);
+  effects ~ normal(0, 1);
+  L ~ lkj_corr_cholesky(2);
+  R ~ lkj_corr(2);
+  S ~ wishart(4, identity_matrix(2));
+}
+"
+m <- bayescomp_model(code)
+bayescomp_dim(m)               # number of unconstrained parameters
+head(bayescomp_param_names(m), 12)
+```
+
+Each constrained type has Stan's transform and Jacobian adjustment, for
+example `exp` for lower bounds, the softmax of an isometric log ratio
+vector for `simplex`, and an orthonormal basis for `sum_to_zero_vector`.
+`vignette("autodiff-and-transforms")` lists them.
+
+## Data in R
+
+| Stan declaration | R value |
+|------------------|---------|
+| `int`, `real` | length one numeric |
+| `vector[N]`, `row_vector[N]` | numeric of length `N` |
+| `matrix[N, K]` | `N` by `K` matrix |
+| `array[N] real` | numeric of length `N` |
+| `array[N, M] int` | `N` by `M` integer matrix or array |
+| `array[N] vector[K]` | `N` by `K` matrix (array dimensions first) |
+| `array[N] matrix[K, L]` | `N` by `K` by `L` array |
+
+Integers must be whole numbers, sizes must match the declarations and
+constraints are checked:
+
+```{r, error = TRUE}
+bayescomp_model("data { int<lower=1> N; vector[N] y; } model { }",
+                data = list(N = 3, y = c(1, 2)))
+```
+
+## Statements
+
+Assignments (including compound `+=`, `.*=` and so on), `for` loops over
+ranges and containers, `while`, `if` and `else`, `break`, `continue`,
+blocks with local variables, `print`, `reject` and `fatal_error` all
+behave as in Stan.
+
+```{r}
+m <- bayescomp_model("
+transformed data {
+  array[5] int fib;
+  fib[1] = 1; fib[2] = 1;
+  for (i in 3:5) fib[i] = fib[i - 1] + fib[i - 2];
+  int total = 0;
+  for (f in fib) {
+    if (f == 2) continue;
+    total += f;
+  }
+  print(\"fib = \", fib, \", total = \", total);
+}
+generated quantities { int t = total; }")
+```
+
+Indexing supports single indexes, ranges (`a:b`, `:b`, `a:`, `:`), and
+multiple indexes with integer arrays, on the left and right of
+assignments.
+
+## Sampling statements and truncation
+
+`y ~ dist(...)` adds `dist_lupdf(y | ...)` to `target`, dropping constant
+terms during sampling. Truncation uses `T[lower, upper]` with either bound
+optional:
+
+```{r}
+m <- bayescomp_model("
+data { real L; }
+parameters { real<lower=L> y; }
+model { y ~ normal(0, 1) T[L, ]; }", data = list(L = 1))
+fit <- bayescomp_sample(m, chains = 1, iter_warmup = 200, iter_sampling = 400,
+                        seed = 1, refresh = 0)
+mean(bayescomp_extract(fit, "y"))   # exact: dnorm(1) / pnorm(-1) = 1.525
+```
+
+## User defined functions
+
+Functions may be recursive, overloaded and declared before they are
+defined. Suffixes have their Stan meaning: `_lpdf` and `_lpmf` define
+densities usable with `~`, `_lp` functions may add to `target`, `_rng`
+functions may draw random numbers, and `_jacobian` functions may call
+`jacobian +=`. Arguments marked `data` must not depend on parameters.
+
+```{r}
+m <- bayescomp_model("
+functions {
+  real my_normal_lpdf(real y, real mu, real s) {
+    return -0.5 * square((y - mu) / s) - log(s);
+  }
+  real ub_jacobian(real x, real ub) {
+    jacobian += x;
+    return ub - exp(x);
+  }
+}
+parameters { real x_raw; }
+transformed parameters { real x = ub_jacobian(x_raw, 3); }
+model { x ~ my_normal(0, 1); }")
+bayescomp_log_prob(m, 0.2)
+```
+
+## The standard library
+
+All of Stan's elementwise math functions, container operations
+(`sum`, `cumulative_sum`, `rep_*`, `append_*`, `sort_*`, `rank`,
+`segment`, `head`, `tail`, `to_vector`, `to_matrix` and so on), linear
+algebra (`cholesky_decompose`, `mdivide_left_tri_low`, `inverse`,
+`log_determinant`, `eigenvalues_sym`, `matrix_exp`, `qr_thin_Q`, quadratic
+forms and more) and the distributions are available. Every distribution has
+its `_lpdf` or `_lpmf`, and where Stan defines them `_cdf`, `_lcdf`,
+`_lccdf` and `_rng`.
+
+```{r}
+m <- bayescomp_model("
+generated quantities {
+  real a = log_sum_exp([1, 2, 3]');
+  real b = binomial_logit_lpmf(3 | 10, 0.2);
+  real c = student_t_lcdf(1 | 3, 0, 1);
+  matrix[2, 2] L = cholesky_decompose([[2, 1], [1, 2]]);
+}")
+str(bayescomp_constrain(m, numeric(0)))
+```
+
+## Errors
+
+Errors have classes, so programs can catch them selectively:
+
+| Class | Raised when |
+|-------|-------------|
+| `bayescomp_syntax_error` | the program does not parse |
+| `bayescomp_semantic_error` | types or placement rules are violated |
+| `bayescomp_unsupported_error` | the program uses an unsupported feature |
+| `bayescomp_data_error` | data do not match the declarations |
+| `bayescomp_domain_error` | a function argument is out of its domain |
+| `bayescomp_reject_error` | the program calls `reject()` |
+| `bayescomp_fatal_error` | the program calls `fatal_error()` |
+
+```{r, error = TRUE}
+bayescomp_check("parameters { real x; } model { x ~ normal(0); }")
+```
+
+During sampling, domain and reject errors reject the proposal, as in
+Stan.
+
+## Not supported
+
+The following Stan features raise `bayescomp_unsupported_error`:
+
+* complex numbers and tuples;
+* ODE, DAE and algebraic solvers, 1D integrators;
+* `map_rect`, `reduce_sum` and `reduce_sum_static`;
+* HMM functions and the embedded Laplace approximation functions;
+* sparse CSR functions, FFT, SVD and non symmetric eigendecomposition;
+* the `wiener`, `gaussian_dlm_obs`, `multi_gp`, `multi_gp_cholesky` and
+  `beta_neg_binomial` distributions.
+
+```{r, error = TRUE}
+bayescomp_check("parameters { complex z; } model { }")
+```

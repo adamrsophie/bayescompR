@@ -22,6 +22,8 @@ test_that("log density, gradient and transforms agree with direct computation", 
   expect_equal(p$theta, mu + tau * eta)
   expect_length(p$y_rep, 8)
   expect_equal(bayescomp_unconstrain(m, p[c("mu", "tau", "eta")]), u)
+  bad <- p[c("mu", "tau", "eta")]; bad$tau <- -1
+  expect_error(bayescomp_unconstrain(m, bad), "tau", class = "bayescomp_data_error")
   expect_equal(bayescomp_param_names(m)[1:4], c("mu", "tau", "eta[1]", "eta[2]"))
 })
 

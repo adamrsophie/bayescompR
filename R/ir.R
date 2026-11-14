@@ -12,8 +12,9 @@
 #'
 #' @param x A `bayescomp_model`, or Stan code as a string.
 #' @param json Return a JSON string instead of a list.
-#' @return A list with `ir_version`, `stan_version`, `blocks` and
-#'   `functions`, or its JSON serialization.
+#' @return A list with `ir_version`, `stan_version` and `blocks` (one
+#'   entry per program block present, including `functions`), or its JSON
+#'   serialization.
 #' @examples
 #' ir <- bayescomp_ir("parameters { real y; } model { y ~ std_normal(); }")
 #' ir$ir_version

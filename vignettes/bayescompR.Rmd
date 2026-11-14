@@ -1,0 +1,169 @@
+---
+title: "Getting started with bayescompR"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting started with bayescompR}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 7, fig.height = 4)
+```
+
+bayescompR runs Stan programs in R. This vignette walks through the full
+workflow on the eight schools model: writing the program, binding data,
+sampling, checking convergence and using the draws.
+
+```{r}
+library(bayescompR)
+```
+
+## A Stan program
+
+The model is the non centered eight schools model of Rubin (1981) and
+Gelman et al. (2013). Each school has an estimated treatment effect `y` with
+standard error `sigma`; the true effects `theta` share a normal population
+distribution.
+
+```{r}
+code <- "
+data {
+  int<lower=0> J;
+  array[J] real y;
+  array[J] real<lower=0> sigma;
+}
+parameters {
+  real mu;
+  real<lower=0> tau;
+  vector[J] eta;
+}
+transformed parameters {
+  vector[J] theta = mu + tau * eta;
+}
+model {
+  mu ~ normal(0, 5);
+  tau ~ cauchy(0, 5);
+  eta ~ std_normal();
+  y ~ normal(theta, sigma);
+}
+generated quantities {
+  array[J] real y_rep = normal_rng(theta, sigma);
+}
+"
+schools <- list(J = 8, y = c(28, 8, -3, 7, -1, 1, 18, 12),
+                sigma = c(15, 10, 16, 11, 9, 11, 10, 18))
+```
+
+`bayescomp_check()` parses and type checks a program without data, which is
+useful while writing a model.
+
+```{r}
+bayescomp_check(code)
+```
+
+## Compiling and binding data
+
+`bayescomp_model()` compiles the program into R closures, reads and
+validates the data against the `data` block, and runs `transformed data`.
+
+```{r}
+model <- bayescomp_model(code, data = schools)
+model
+```
+
+Data are checked against their declarations, and the error names the
+offending variable:
+
+```{r, error = TRUE}
+bad <- schools
+bad$sigma[3] <- -1
+bayescomp_model(code, data = bad)
+```
+
+## Sampling
+
+`bayescomp_sample()` runs the No-U-Turn sampler with Stan's adaptation.
+Each chain gets its own random number stream derived from `seed`, so the
+results are reproducible and do not depend on `cores`. Short chains keep
+this vignette fast; use the defaults (1000 warmup and 1000 sampling
+iterations) for real analyses.
+
+```{r}
+fit <- bayescomp_sample(model, chains = 4, iter_warmup = 300, iter_sampling = 300,
+                        seed = 2024, refresh = 0)
+fit
+```
+
+The summary reports the posterior mean, median, standard deviation, median
+absolute deviation, 5% and 95% quantiles, rank normalized R-hat, and bulk
+and tail effective sample sizes.
+
+```{r}
+summary(fit, c("mu", "tau", "theta"))
+```
+
+## Diagnostics
+
+```{r}
+bayescomp_diagnose(fit)
+```
+
+R-hat below 1.01 and effective sample sizes above about 400 indicate that
+the chains agree and the estimates are precise enough for most purposes.
+Divergent transitions suggest geometry the sampler cannot explore reliably;
+see `vignette("diagnostics")`.
+
+```{r}
+plot(fit, c("mu", "tau"))
+```
+
+## Using the draws
+
+```{r}
+draws <- bayescomp_draws(fit, c("mu", "tau"), format = "matrix")
+dim(draws)
+theta <- bayescomp_extract(fit, "theta")  # draws by schools
+dim(theta)
+colMeans(theta)
+```
+
+Posterior predictive checks use the generated quantities:
+
+```{r}
+y_rep <- bayescomp_extract(fit, "y_rep")
+mean(apply(y_rep, 1, max) >= max(schools$y))
+```
+
+With the posterior package installed, `bayescomp_as_draws()` converts a fit
+to a `draws_array` for use with posterior, bayesplot and loo.
+
+## Faster approximations
+
+Optimization, Laplace approximation, Pathfinder and ADVI are much cheaper
+than sampling. Pathfinder is also a good way to initialize chains.
+
+```{r}
+pf <- bayescomp_pathfinder(model, seed = 1)
+summary(pf, c("mu", "tau"))
+fit2 <- bayescomp_sample(model, chains = 2, iter_warmup = 200, iter_sampling = 200,
+                         init = pf, seed = 3, refresh = 0)
+```
+
+Pathfinder warns when the Pareto k diagnostic of its importance weights
+exceeds 0.7. Hierarchical models such as this one often trigger it: the
+normal approximation is then not reliable as a posterior, but its draws are
+still useful starting points for MCMC. `vignette("inference")` compares
+all the algorithms.
+
+## The model interface
+
+The log density, its gradient and the parameter transforms are available
+directly, for use with other software:
+
+```{r}
+u <- rep(0.1, bayescomp_dim(model))
+bayescomp_log_prob(model, u)
+head(bayescomp_grad_log_prob(model, u))
+str(bayescomp_constrain(model, u)[c("mu", "tau")])
+```

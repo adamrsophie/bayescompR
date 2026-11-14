@@ -1,0 +1,200 @@
+---
+title: "Backends and the intermediate representation"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Backends and the intermediate representation}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(bayescompR)
+```
+
+The parser and semantic analyzer of bayescompR do not depend on how a
+model is executed. They produce a typed, versioned intermediate
+representation (IR). A backend turns the IR into the functions the
+inference algorithms call. The R backend in this package is always
+available; native backends in separate packages compile the same IR to
+machine code:
+
+| Backend | Package | Requires |
+|---------|---------|----------|
+| `"r"` | bayescompR | nothing beyond R |
+| `"cranelift"` | bayescompRCranelift | a prebuilt binary or a Rust toolchain |
+| `"llvm"` | bayescompRLLVM | a prebuilt binary or LLVM |
+
+bayescompR itself has no native dependencies. Installing a backend package
+registers its backend when the package is loaded.
+
+```{r}
+bayescomp_backends()
+```
+
+## The IR
+
+`bayescomp_ir()` returns the IR as R lists or as JSON:
+
+```{r}
+code <- "
+functions { real twice(real x) { return 2 * x; } }
+data { int N; vector[N] y; }
+parameters { real<lower=0> sigma; }
+model { y ~ normal(twice(0.5), sigma); }"
+ir <- bayescomp_ir(code)
+ir$ir_version
+names(ir$blocks)
+```
+
+### Schema, version 1.0.0
+
+The document is an object with three members:
+
+* `ir_version`: the schema version, a semantic version string.
+* `stan_version`: the language version implemented, `"2.40.0"`.
+* `blocks`: an object with one member per program block that is present,
+  named `functions`, `data`, `transformed data`, `parameters`,
+  `transformed parameters`, `model` and `generated quantities`.
+
+Every node is an object with a `kind` and a source location `loc`
+(`line`, `col`). Blocks have `kind = "block"`, a `name` and a `body` (array
+of statements).
+
+**Types.** Declared types (`type` of a `decl`) have `base` (`int`, `real`,
+`vector`, `row_vector`, `matrix`, or a constrained type such as `simplex`
+or `cholesky_factor_corr`), `adims` (array size expressions), `sizes`
+(vector or matrix size expressions) and `cons` (constraint arguments:
+`lower`, `upper`, `offset`, `multiplier`). Value types of expressions
+(`type` of an expression) have `base` (`int`, `real`, `vector`,
+`row_vector`, `matrix`) and `nd`, the number of array dimensions.
+
+**Declarations.** `kind = "decl"` with `name`, `type`, `block`, `top`
+(declared at block level) and optional `init`.
+
+**Expressions.** Every expression has `type` and `data_only` (`true` when
+it depends only on data, so a backend can hoist it). Kinds:
+
+| kind | members |
+|------|---------|
+| `int`, `real` | `value` |
+| `string` | `value` (only in `print`, `reject`, `fatal_error`) |
+| `var` | `name`, `origin` (the block, or `argument`, `local`, `loop`) |
+| `binop` | `op` (`+ - * / %/% % \ .* ./ ^ .^ == != < <= > >= && ||`), `a`, `b` |
+| `unop` | `op` (`-`, `!`, `+`), `a` |
+| `transpose` | `a` (postfix `'`) |
+| `paren` | `a` |
+| `cond` | `cond`, `a`, `b` (the `?:` operator) |
+| `call` | `name`, `args`, `cond_bar`, `sig`, `resolved` |
+| `index` | `x`, `idx`; each index has `kind` `single` (`e`, an int), `intarray` (`e`, an int array), `range` (`lo`, `hi`, either may be null) or `omni` |
+| `array_expr`, `rowvec_expr` | `items` (`{...}` and `[...]` literals) |
+
+**Resolved signatures.** Calls and sampling statements carry `sig`: the
+function `name`, whether it is `user` defined, the `mangled` name of a user
+function overload, the argument types `args` and the return type `ret`.
+Library signatures use Stan's argument patterns (`reals`, `ints`,
+`vectors` and so on), which tells a backend which vectorized kernel to use.
+
+**Statements.** `assign` (`lhs`, `op` such as `=` or `+=`, `rhs`),
+`tilde` (`lhs`, `dist`, `args`, `trunc` with `lo` and `hi`, `fname` naming
+the `_lupdf` or `_lupmf` implementation, `sig`), `target_add` and
+`jacobian_add` (`value`), `for` (`var`, `lo`, `hi`, `body`), `foreach`
+(`var`, `iter`, `body`), `while` (`cond`, `body`), `if` (`cond`, `then`,
+`els`), `block_stmt` (`body`), `break`, `continue`, `return` (`value`),
+`print`, `reject` and `fatal_error` (`items`), `call_stmt` (`call`) and
+`empty`. Function definitions have `kind = "fundef"`, `name`, `rtype`,
+`args` (each with `name`, `type`, `data_only`), `body` and `sig`.
+
+```{r}
+cat(substr(bayescomp_ir(code, json = TRUE), 1, 400), "...\n")
+```
+
+### Versioning
+
+The IR follows semantic versioning. Adding optional members raises the
+minor version; renaming or removing members, or changing their meaning,
+raises the major version. A backend declares the IR versions it accepts and
+bayescompR refuses to use a backend that does not accept the current one.
+
+## The backend interface
+
+A backend package calls `bayescomp_register_backend()` in its `.onLoad()`:
+
+```{r, eval = FALSE}
+bayescomp_register_backend(
+  name = "mybackend",
+  capabilities = c("log_density", "gradient"),
+  ir_versions = "1.0.0",
+  compile = function(ir, model) {
+    # ir: the list returned by bayescomp_ir(); model: the data bound model,
+    # whose element `data` holds the data and whose transformed data have
+    # already been computed by the R backend.
+    list(
+      log_density_gradient = function(u, jacobian, propto) {
+        list(value = 0, grad = numeric(length(u)))
+      },
+      log_density = function(u, jacobian, propto) 0   # optional
+    )
+  },
+  description = "An example backend")
+```
+
+`log_density_gradient(u, jacobian, propto)` receives the unconstrained
+parameter vector and returns the log density and its gradient with the same
+conventions as `bayescomp_log_prob()`: the Jacobian of the constraining
+transforms is included when `jacobian` is `TRUE`, and constant terms of
+sampling statements are dropped when `propto` is `TRUE`. Points outside the
+support return `-Inf`; a `reject()` in the program raises a condition of
+class `bayescomp_reject_error`.
+
+### Capability negotiation
+
+The capabilities are `log_density`, `gradient`, `constrain` (the
+constraining transforms and transformed parameters for output),
+`generated_quantities` and `rng`. `log_density` and `gradient` are
+required. When a backend lacks one of the others, the R implementation can
+provide it, but only when the user asks:
+
+```{r, eval = FALSE}
+m <- bayescomp_model(code, data, backend = "cranelift")
+#> Error: backend 'cranelift' does not provide generated_quantities, rng;
+#>   set allow_fallback = TRUE to use the R implementation for them
+m <- bayescomp_model(code, data, backend = "cranelift", allow_fallback = TRUE)
+m$provenance   # which backend provides each capability
+```
+
+Implementations are never mixed silently.
+
+### Validation
+
+`bayescomp_validate_backend()` evaluates the log density and gradient of a
+native model and of the R implementation at random points and reports the
+differences. Every backend package runs it in its tests on a corpus of
+models, and the benchmark scripts compare total inference time.
+
+Here is the whole interface exercised with a toy backend that implements
+one model by hand:
+
+```{r}
+bayescomp_register_backend("toy", c("log_density", "gradient"), "1.0.0",
+  compile = function(ir, model) list(
+    log_density_gradient = function(u, jacobian, propto) {
+      list(value = dnorm(u, 1, 2, log = TRUE), grad = -(u - 1) / 4)
+    }))
+m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(1, 2); }",
+                     backend = "toy", allow_fallback = TRUE)
+unlist(m$provenance)
+v <- bayescomp_validate_backend(m, n = 5)
+max(v$lp_abs, v$grad_abs)
+```
+
+```{r, include = FALSE}
+rm("toy", envir = bayescompR:::.backends)
+```
+
+## Accelerators
+
+GPU, TPU and NPU execution is planned for version 0.2.0 through a backend
+that lowers the IR to jaxR (StableHLO compiled by XLA through PJRT, which
+covers CUDA, ROCm, TPU, Metal and vendor NPU plugins). The IR already
+carries the static types and shapes that such a lowering needs.

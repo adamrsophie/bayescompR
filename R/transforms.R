@@ -704,6 +704,8 @@ bound_to_element_order <- function(b, adims, eshape) {
 }
 
 unconstrain_variable <- function(x, decl, args) {
+  msg <- check_variable(x, decl, args)
+  if (!is.null(msg)) stop_data(sprintf("parameter '%s' %s", decl$name %||% "", msg))
   tf <- transform_for(decl$kind)
   adims <- decl$adims
   eshape <- decl$eshape

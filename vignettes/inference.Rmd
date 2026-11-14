@@ -1,0 +1,238 @@
+---
+title: "Inference algorithms"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Inference algorithms}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 7, fig.height = 4)
+library(bayescompR)
+```
+
+bayescompR offers several inference engines that fail in different ways.
+All of them work on the same unconstrained log density, so any model can be
+fitted with any of them. This vignette describes each method, its
+assumptions and its tuning parameters, and compares them on one model.
+
+| Function | Method | Needs gradients | Target |
+|----------|--------|-----------------|--------|
+| `bayescomp_sample(algorithm = "nuts")` | No-U-Turn sampler | yes | exact |
+| `bayescomp_sample(algorithm = "hmc")` | static HMC | yes | exact |
+| `bayescomp_sample(algorithm = "mala")` | Metropolis adjusted Langevin | yes | exact |
+| `bayescomp_sample(algorithm = "metropolis")` | adaptive random walk Metropolis | no | exact |
+| `bayescomp_sample(algorithm = "slice")` | slice sampling | no | exact |
+| `bayescomp_smc()` | tempered sequential Monte Carlo | no | consistent |
+| `bayescomp_optimize()` | L-BFGS, BFGS, Newton | yes | mode |
+| `bayescomp_laplace()` | normal approximation at the mode | yes | approximate |
+| `bayescomp_variational()` | ADVI, mean field or full rank | yes | approximate |
+| `bayescomp_pathfinder()` | Pathfinder | yes | approximate |
+
+"Exact" means the Markov chain has the posterior as its stationary
+distribution, so estimates converge to the right answer as the chains get
+longer. Approximate methods converge to an approximation that can be
+biased.
+
+## A test model
+
+Logistic regression on simulated data has a smooth, slightly correlated
+posterior:
+
+```{r}
+set.seed(1)
+N <- 100
+X <- cbind(1, rnorm(N), rnorm(N))
+beta_true <- c(-0.5, 1, -1.5)
+y <- rbinom(N, 1, plogis(X %*% beta_true))
+code <- "
+data { int N; int K; matrix[N, K] X; array[N] int<lower=0, upper=1> y; }
+parameters { vector[K] beta; }
+model {
+  beta ~ normal(0, 2.5);
+  y ~ bernoulli_logit_glm(X, 0, beta);
+}"
+model <- bayescomp_model(code, data = list(N = N, K = 3, X = X, y = y))
+```
+
+## NUTS
+
+The No-U-Turn sampler (Hoffman and Gelman 2014) in the form used by Stan
+(Betancourt 2017): trajectories are built by doubling in both directions
+until the generalized no U turn criterion holds or `max_treedepth` is
+reached, and the next state is drawn from the whole trajectory with biased
+progressive multinomial sampling. During warmup the step size is tuned by
+dual averaging so that the mean acceptance statistic reaches `adapt_delta`
+(default 0.8), and the inverse metric is estimated from the draws in a
+sequence of doubling windows.
+
+```{r}
+nuts <- bayescomp_sample(model, chains = 2, iter_warmup = 300, iter_sampling = 300,
+                         seed = 1, refresh = 0)
+summary(nuts)
+```
+
+Raise `adapt_delta` (for example to 0.95) when there are divergent
+transitions, and use `metric = "dense_e"` for strongly correlated
+posteriors.
+
+## Static HMC
+
+Fixed integration time `int_time`; the number of leapfrog steps is
+`int_time / step_size`. Useful for teaching and when a good trajectory
+length is known.
+
+```{r}
+hmc <- bayescomp_sample(model, chains = 2, iter_warmup = 300, iter_sampling = 300,
+                        algorithm = "hmc", int_time = 2, seed = 1, refresh = 0)
+```
+
+## MALA
+
+One Langevin step with a Metropolis correction (Roberts and Tweedie 1996):
+the proposal is
+
+$$\theta' = \theta + \tfrac{\epsilon^2}{2} M^{-1} \nabla \log p(\theta) + \epsilon M^{-1/2} z, \qquad z \sim N(0, I),$$
+
+where $M^{-1}$ is the adapted inverse metric. MALA uses one gradient per
+iteration, but it moves diffusively and can mix poorly for heavy tailed
+targets. The default acceptance target is 0.574.
+
+```{r}
+mala <- bayescomp_sample(model, chains = 2, iter_warmup = 300, iter_sampling = 600,
+                         algorithm = "mala", seed = 1, refresh = 0)
+```
+
+## Random walk Metropolis
+
+Gaussian proposals with covariance $\epsilon^2 M^{-1}$. Because the inverse
+metric is estimated from warmup draws, this is the adaptive Metropolis
+algorithm of Haario, Saksman and Tamminen (2001), with adaptation confined
+to warmup. `block = TRUE` (default) proposes all coordinates at once with
+target acceptance 0.234; `block = FALSE` updates one coordinate at a time
+with target 0.44. Metropolis needs no gradient, so each iteration is cheap,
+but many more iterations are needed.
+
+```{r}
+rwm <- bayescomp_sample(model, chains = 2, iter_warmup = 1000, iter_sampling = 2000,
+                        algorithm = "metropolis", metric = "dense_e", seed = 1, refresh = 0)
+```
+
+## Slice sampling
+
+Univariate slice sampling with stepping out and shrinkage (Neal 2003)
+along each direction of the Cholesky factor of the inverse metric. The
+bracket width `step_size` (default 2) is in units of the metric scale. It
+has no acceptance rate to tune and needs no gradient.
+
+```{r}
+slice <- bayescomp_sample(model, chains = 2, iter_warmup = 300, iter_sampling = 300,
+                          algorithm = "slice", seed = 1, refresh = 0)
+```
+
+## Tempered SMC
+
+Sequential Monte Carlo samplers (Del Moral, Doucet and Jasra 2006) move a
+population of particles through the distributions
+$\pi_\beta \propto g^{1 - \beta} p^\beta$ from a normalized Gaussian
+reference $g$ to the posterior $p$. Each temperature is chosen so the
+effective sample size of the weights stays at `ess_threshold`; particles
+are then resampled and moved with random walk Metropolis steps. SMC
+explores multimodal posteriors well and returns an estimate of the log
+normalizing constant, the marginal likelihood for a fully generative model.
+
+```{r}
+smc <- bayescomp_smc(model, num_particles = 300, seed = 1)
+smc$log_evidence
+length(smc$betas) - 1   # number of temperatures
+```
+
+On a mixture of two well separated normals, NUTS chains stay in the mode
+where they start, while SMC finds both:
+
+```{r}
+mix <- bayescomp_model("parameters { real x; }
+model { target += log_mix(0.3, normal_lpdf(x | -5, 0.5), normal_lpdf(x | 5, 0.5)); }")
+s <- bayescomp_smc(mix, num_particles = 400, reference = "standard",
+                   reference_scale = 8, seed = 2)
+mean(bayescomp_extract(s, "x") < 0)   # exact 0.3
+```
+
+## Optimization and Laplace
+
+`bayescomp_optimize()` finds the posterior mode (`jacobian = TRUE`, on the
+unconstrained scale) or the penalized maximum likelihood estimate
+(`jacobian = FALSE`, default, as in Stan). `bayescomp_laplace()` draws
+from the normal approximation centered at the mode with covariance equal to
+the inverse negative Hessian.
+
+```{r}
+opt <- bayescomp_optimize(model, seed = 1)
+opt$par
+lap <- bayescomp_laplace(model, draws = 1000, seed = 1)
+```
+
+The extra columns `log_p__` and `log_g__` hold the log density of the
+model and of the approximation at each draw, for importance sampling
+corrections.
+
+## ADVI
+
+Automatic differentiation variational inference (Kucukelbir et al. 2017)
+fits a normal distribution on the unconstrained space by stochastic
+gradient ascent on the evidence lower bound, with Stan's adaptive step size
+sequence and convergence test on the relative change of the ELBO. Mean
+field uses a diagonal covariance; full rank a dense one.
+
+```{r}
+vi <- bayescomp_variational(model, algorithm = "fullrank", seed = 1)
+```
+
+ADVI's convergence criterion says the optimizer stopped, not that the
+approximation is accurate: a variational family can converge perfectly to
+a poor approximation. Check against MCMC.
+
+## Pathfinder
+
+Pathfinder (Zhang et al. 2022) runs L-BFGS, forms a normal approximation
+from the L-BFGS inverse Hessian at each iterate, keeps the one with the
+largest ELBO, and combines several paths by Pareto smoothed importance
+resampling. It typically needs far fewer gradient evaluations than ADVI or
+MCMC warmup. A Pareto $\hat k$ above 0.7 means the importance weights are
+unreliable; the draws are then still good initial values.
+
+```{r}
+pf <- bayescomp_pathfinder(model, num_paths = 4, seed = 1)
+pf$pareto_k
+```
+
+## Comparison
+
+```{r}
+fits <- list(NUTS = nuts, HMC = hmc, MALA = mala, Metropolis = rwm, Slice = slice,
+             SMC = smc, Laplace = lap, ADVI = vi, Pathfinder = pf)
+tab <- t(vapply(fits, function(f) {
+  b <- bayescomp_draws(f, "beta", format = "matrix")
+  c(colMeans(b), apply(b, 2, sd), time = f$time$total)
+}, numeric(7)))
+colnames(tab) <- c(paste0("mean[", 1:3, "]"), paste0("sd[", 1:3, "]"), "seconds")
+round(tab, 3)
+```
+
+The exact methods and SMC agree to within Monte Carlo error. Laplace is
+centered at the mode rather than the mean, so its means are pulled toward
+zero, and ADVI gets the means right but misstates the standard deviations,
+the typical failure of a variational fit. The differences grow for
+hierarchical, multimodal or heavy tailed posteriors, where only the exact
+methods (and SMC as the number of particles grows) remain reliable.
+
+## Choosing a method
+
+* Start with NUTS for any differentiable model.
+* Use Pathfinder or Laplace for a quick look and for initial values.
+* Use SMC for multimodal posteriors and for marginal likelihoods.
+* Use Metropolis or slice sampling as independent checks, or when the log
+  density is not differentiable.
+* Treat ADVI and Laplace as approximations; compare with MCMC before
+  relying on them.

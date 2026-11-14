@@ -1,0 +1,114 @@
+---
+title: "Convergence diagnostics"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Convergence diagnostics}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.width = 7, fig.height = 4)
+library(bayescompR)
+```
+
+MCMC estimates are only trustworthy when the chains have mixed. bayescompR
+computes the diagnostics recommended by Vehtari et al. (2021), with results
+identical to the posterior package, and the sampler diagnostics of Stan.
+
+## R-hat and effective sample size
+
+`bayescomp_rhat()` is the maximum of the rank normalized split R-hat and
+the folded split R-hat. Splitting each chain in half detects trends within
+chains, rank normalization makes it robust to heavy tails, and folding
+($|x - \text{median}|$) detects chains that differ in scale. Values below
+1.01 indicate convergence.
+
+`bayescomp_ess_bulk()` estimates the effective sample size of the rank
+normalized draws, relevant for means and medians; `bayescomp_ess_tail()`
+is the smaller of the effective sample sizes of the 5% and 95% quantile
+indicators, relevant for intervals. Both use Geyer's initial monotone
+sequence estimator. Aim for at least 100 per chain.
+
+```{r}
+set.seed(1)
+good <- matrix(rnorm(4000), 1000, 4)
+stuck <- good
+stuck[, 4] <- stuck[, 4] + 2           # one chain in a different place
+ar <- apply(good, 2, function(z) stats::filter(z, 0.95, method = "recursive"))
+c(rhat_good = bayescomp_rhat(good), rhat_stuck = bayescomp_rhat(stuck))
+c(ess_good = bayescomp_ess_bulk(good), ess_autocorrelated = bayescomp_ess_bulk(ar))
+c(mcse_mean = bayescomp_mcse_mean(good), mcse_sd = bayescomp_mcse_sd(good))
+```
+
+Inputs are iterations by chains matrices. `summary()` applies these to
+every variable of a fit.
+
+## Sampler diagnostics
+
+`bayescomp_diagnose()` reports three Hamiltonian Monte Carlo diagnostics:
+
+* **Divergent transitions.** The leapfrog integrator became unstable, the
+  energy error exceeded 1000, usually in regions of high curvature. Even a
+  few divergences can mean that part of the posterior is not explored.
+* **Maximum tree depth.** NUTS stopped doubling before the trajectory
+  turned around. This is an efficiency warning, not a validity one.
+* **E-BFMI.** The energy Bayesian fraction of missing information; values
+  below 0.3 mean the momentum resampling explores the energy distribution
+  poorly, often for heavy tailed posteriors.
+
+The per draw values are in `fit$sampler_diagnostics`: `accept_stat__`,
+`stepsize__`, `treedepth__`, `n_leapfrog__`, `divergent__` and
+`energy__`.
+
+## Divergences in a funnel
+
+Neal's funnel is the classic example of a geometry that defeats HMC. The
+centered parameterization has a narrow neck where the step size adapted
+for the wide region is far too large:
+
+```{r}
+centered <- bayescomp_model("
+parameters { real v; vector[5] x; }
+model { v ~ normal(0, 3); x ~ normal(0, exp(v / 2)); }")
+fit_c <- bayescomp_sample(centered, chains = 2, iter_warmup = 300, iter_sampling = 300,
+                          seed = 4, refresh = 0)
+bayescomp_diagnose(fit_c)
+summary(fit_c, "v")
+```
+
+The divergences flag that the neck (large negative `v`) is not explored,
+and the posterior of `v` is biased (the true distribution is normal with
+mean 0 and sd 3). The non centered parameterization samples a standard
+normal and scales it, removing the funnel:
+
+```{r}
+noncentered <- bayescomp_model("
+parameters { real v; vector[5] x_raw; }
+transformed parameters { vector[5] x = exp(v / 2) * x_raw; }
+model { v ~ normal(0, 3); x_raw ~ std_normal(); }")
+fit_n <- bayescomp_sample(noncentered, chains = 2, iter_warmup = 300, iter_sampling = 300,
+                          seed = 4, refresh = 0)
+bayescomp_diagnose(fit_n)
+summary(fit_n, "v")
+```
+
+Where divergences are located can be seen by plotting them:
+
+```{r}
+d <- bayescomp_draws(fit_c, c("v", "x[1]"), format = "matrix")
+div <- as.vector(fit_c$sampler_diagnostics[, , "divergent__"]) == 1
+plot(d[, "x[1]"], d[, "v"], pch = 16, cex = 0.5, col = ifelse(div, "red", "grey50"),
+     xlab = "x[1]", ylab = "v", main = "Centered funnel (divergences in red)")
+```
+
+## Approximate methods
+
+R-hat and ESS do not apply to Laplace, ADVI or Pathfinder draws, which are
+independent draws from an approximation. Their reliability is assessed
+differently: Pathfinder reports the Pareto $\hat k$ of its importance
+weights (`fit$pareto_k`, above 0.7 is unreliable), and the `log_p__` and
+`log_g__` columns of Laplace and ADVI fits give the importance ratios for a
+Pareto smoothed importance sampling check with the loo package. SMC reports
+the temperatures and per stage Metropolis acceptance rates in
+`fit$betas` and `fit$acceptance`.

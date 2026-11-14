@@ -1,0 +1,144 @@
+---
+title: "Automatic differentiation and constraining transforms"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Automatic differentiation and constraining transforms}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(bayescompR)
+```
+
+Gradient based inference needs the gradient of the log density with
+respect to the unconstrained parameters. bayescompR computes it with
+reverse mode automatic differentiation written in R, and maps between
+constrained and unconstrained parameters with Stan's transforms. This
+vignette explains both and shows how to check them.
+
+## The log density
+
+For parameters $\theta$ with constraints, bayescompR works with
+unconstrained values $u$ and $\theta = T(u)$. The density sampled is
+
+$$\log p(u) = \text{target}(T(u)) + \log \left| \det J_T(u) \right|,$$
+
+where `target` is accumulated by the model block. With
+`jacobian = FALSE` the second term is dropped (maximum likelihood style
+optimization); with `propto = TRUE` constant terms of `~` statements are
+dropped, as during sampling.
+
+```{r}
+m <- bayescomp_model("
+parameters { real<lower=0> sigma; }
+model { sigma ~ exponential(2); }")
+u <- log(0.7)
+c(full = bayescomp_log_prob(m, u),
+  by_hand = dexp(0.7, 2, log = TRUE) + u,
+  no_jacobian = bayescomp_log_prob(m, u, jacobian = FALSE))
+```
+
+## Reverse mode AD
+
+During a gradient evaluation every operation on a parameter dependent value
+creates a node on a tape recording its inputs and local partial
+derivatives. The backward pass visits the nodes in reverse order and
+accumulates adjoints, so the cost of the full gradient is a small multiple
+of the cost of the log density, whatever the number of parameters.
+
+Values on the tape have class `bcad`. Operations are vectorized: a node
+holds a whole vector or matrix, not a scalar, so `y ~ normal(mu, sigma)`
+over a vector of a million elements is one node. Densities and most
+library functions are fused: a single node with analytic partial
+derivatives rather than a chain of elementary operations, which keeps the
+tape short in the R interpreter. Linear algebra uses matrix adjoint rules,
+for example $\bar A = -A^{-T} \bar C A^{-T}$ for $C = A^{-1}$ and the
+Cholesky adjoint of Murray (2016).
+
+`bayescomp_grad_log_prob()` returns the gradient; comparing it with finite
+differences is the basic check of any implementation:
+
+```{r}
+m <- bayescomp_model("
+data { int N; vector[N] y; matrix[N, 2] X; }
+parameters { vector[2] beta; real<lower=0> sigma; cholesky_factor_corr[2] L; }
+model {
+  beta ~ multi_normal_cholesky(rep_vector(0, 2), diag_pre_multiply([1, 2]', L));
+  sigma ~ student_t(3, 0, 1);
+  L ~ lkj_corr_cholesky(2);
+  y ~ normal(X * beta, sigma);
+}", data = list(N = 4, y = c(1, 2, 0.5, 3), X = cbind(1, 1:4)))
+u <- c(0.2, -0.1, 0.3, 0.4)
+g <- bayescomp_grad_log_prob(m, u)
+fd <- vapply(seq_along(u), function(i) {
+  e <- replace(numeric(4), i, 1e-6)
+  (bayescomp_log_prob(m, u + e) - bayescomp_log_prob(m, u - e)) / 2e-6
+}, 0)
+rbind(ad = as.vector(g), finite_difference = fd)
+max(abs(g - fd))
+```
+
+The test suite runs this comparison for every elementwise function, every
+distribution and the linear algebra functions.
+
+## Transforms
+
+Each constrained type uses the transform of the Stan Reference Manual
+(version 2.40, "Constraint Transforms"), with the same log Jacobian, so
+`lp__` values agree with Stan's.
+
+| Type | Unconstrained size | Transform |
+|------|-------------------|-----------|
+| `real<lower=a>` | 1 | $a + e^u$ |
+| `real<upper=b>` | 1 | $b - e^u$ |
+| `real<lower=a, upper=b>` | 1 | $a + (b - a)\,\text{logit}^{-1}(u)$ |
+| `real<offset=m, multiplier=s>` | 1 | $m + s u$ |
+| `ordered[K]` | K | $x_1 = u_1$, $x_k = x_{k-1} + e^{u_k}$ |
+| `positive_ordered[K]` | K | as ordered with $x_1 = e^{u_1}$ |
+| `simplex[K]` | K - 1 | softmax of the isometric sum to zero vector |
+| `sum_to_zero_vector[K]` | K - 1 | orthonormal basis of the sum to zero subspace |
+| `sum_to_zero_matrix[N, M]` | (N - 1)(M - 1) | the vector transform on both margins |
+| `unit_vector[K]` | K | $u / \lVert u \rVert$ with a standard normal term on $\lVert u \rVert$ |
+| `cholesky_factor_corr[K]` | K(K - 1)/2 | canonical partial correlations via `tanh` |
+| `corr_matrix[K]` | K(K - 1)/2 | $L L^T$ with the Lewandowski, Kurowicka and Joe Jacobian |
+| `cholesky_factor_cov[M, N]` | N(N + 1)/2 + (M - N)N | lower triangle with log diagonal |
+| `cov_matrix[K]` | K(K + 1)/2 | $L L^T$ with log diagonal of $L$ |
+| `column_stochastic_matrix[N, M]` | (N - 1)M | simplex transform on each column |
+| `row_stochastic_matrix[N, M]` | N(M - 1) | simplex transform on each row |
+
+Arrays of constrained types transform each element. Unconstrained values
+are ordered as in Stan: array elements in row major order, the elements of
+each vector or matrix in column major order.
+
+```{r}
+m <- bayescomp_model("parameters { simplex[3] theta; cov_matrix[2] S; } model { }")
+p <- bayescomp_constrain(m, c(0.3, -0.2, 0.1, 0.5, 0.2))
+p
+bayescomp_unconstrain(m, p)
+```
+
+Constraints are checked when values are read: data and initial values that
+violate them are rejected, and transformed parameters are validated after
+every evaluation.
+
+```{r, error = TRUE}
+bayescomp_unconstrain(m, list(theta = c(0.5, 0.6, -0.1), S = diag(2)))
+```
+
+## Checking a Jacobian
+
+The log Jacobian is the log absolute determinant of the derivative of the
+transform with respect to the free coordinates. For an ordered vector:
+
+```{r}
+m <- bayescomp_model("parameters { ordered[3] x; } model { }")
+u <- c(0.4, -0.3, 0.8)
+f <- function(u) bayescomp_constrain(m, u)$x
+J <- vapply(1:3, function(i) {
+  e <- replace(numeric(3), i, 1e-6)
+  (f(u + e) - f(u - e)) / 2e-6
+}, numeric(3))
+c(numeric = log(abs(det(J))), bayescompR = bayescomp_log_prob(m, u))
+```

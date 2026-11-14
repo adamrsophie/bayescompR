@@ -12,8 +12,9 @@ bayescomp_ir(x, json = FALSE)
 \item{json}{Return a JSON string instead of a list.}
 }
 \value{
-A list with \code{ir_version}, \code{stan_version}, \code{blocks} and
-\code{functions}, or its JSON serialization.
+A list with \code{ir_version}, \code{stan_version} and \code{blocks} (one
+entry per program block present, including \code{functions}), or its JSON
+serialization.
 }
 \description{
 Typed intermediate representation of a Stan program

@@ -1,0 +1,121 @@
+---
+title: "Performance"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Performance}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(bayescompR)
+```
+
+bayescompR runs entirely in the R interpreter. Its cost model differs from
+compiled Stan: every operation on a tape node has a fixed overhead of a few
+microseconds, while the arithmetic inside a vectorized node runs at the
+speed of R's compiled internals. Fast models therefore do a few large
+operations rather than many small ones. This vignette shows how to measure
+the cost of a model and how to write models that run fast.
+
+## Measuring
+
+The cost of inference is the number of gradient evaluations times the cost
+of one gradient. NUTS reports the leapfrog steps per iteration in
+`n_leapfrog__`.
+
+```{r}
+time_grad <- function(model, reps = 200) {
+  u <- rep(0.1, bayescomp_dim(model))
+  t <- system.time(for (i in seq_len(reps)) bayescomp_grad_log_prob(model, u))[["elapsed"]]
+  1e6 * t / reps   # microseconds per gradient
+}
+```
+
+## Vectorize
+
+The same regression written with a loop and vectorized:
+
+```{r}
+set.seed(1)
+N <- 500
+x <- rnorm(N)
+y <- 1 + 2 * x + rnorm(N)
+d <- list(N = N, x = x, y = y)
+loop <- bayescomp_model("
+data { int N; vector[N] x; vector[N] y; }
+parameters { real a; real b; real<lower=0> s; }
+model { for (n in 1:N) y[n] ~ normal(a + b * x[n], s); }", data = d)
+vec <- bayescomp_model("
+data { int N; vector[N] x; vector[N] y; }
+parameters { real a; real b; real<lower=0> s; }
+model { y ~ normal(a + b * x, s); }", data = d)
+glm <- bayescomp_model("
+data { int N; vector[N] x; vector[N] y; }
+parameters { real a; real b; real<lower=0> s; }
+model { y ~ normal_id_glm(to_matrix(x), a, [b]', s); }", data = d)
+c(loop = time_grad(loop, 10), vectorized = time_grad(vec), glm = time_grad(glm))
+```
+
+The loop creates thousands of tape nodes per gradient; the vectorized
+statement creates a handful. In compiled Stan the difference is small; in
+bayescompR it is two orders of magnitude.
+
+Guidelines:
+
+* Use vectorized sampling statements and functions (`y ~ normal(mu, s)`
+  with vector `mu`), not loops over observations.
+* Use the GLM densities (`normal_id_glm`, `bernoulli_logit_glm`,
+  `poisson_log_glm`, `neg_binomial_2_log_glm`, `categorical_logit_glm`,
+  `ordered_logistic_glm`) for regressions.
+* Index with integer arrays (`theta[group]`) instead of looping over
+  groups.
+* Compute data only quantities in `transformed data`; they are evaluated
+  once.
+* Prefer `*_cholesky` parameterizations (`multi_normal_cholesky`,
+  `lkj_corr_cholesky`) to avoid decompositions at every evaluation.
+* Loops over parameters are fine when their count is small; the overhead
+  is per operation, not per element.
+
+## Gradient free kernels
+
+Metropolis and slice sampling evaluate the log density without the tape,
+which is cheaper than a gradient. They need many more evaluations, but on
+small models with expensive gradients they can be competitive.
+
+## Parallel chains
+
+`cores` runs chains in forked processes (not on Windows). Results are
+identical to sequential runs with the same `seed`.
+
+```{r, eval = FALSE}
+fit <- bayescomp_sample(model, chains = 4, cores = 4, seed = 1)
+```
+
+`bayescomp_smc()` also takes `cores` for the particle moves.
+
+## Native backends
+
+For large models the interpreter overhead dominates. The native backends
+compile the IR to machine code and are typically one to three orders of
+magnitude faster per gradient:
+
+```{r, eval = FALSE}
+library(bayescompRCranelift)
+m <- bayescomp_model(code, data, backend = "cranelift", allow_fallback = TRUE)
+bayescomp_validate_backend(m)
+```
+
+## How the AD tape is kept fast
+
+For developers, the implementation choices that matter most:
+
+* Tape lists in the `.ad` environment are detached before element
+  assignment and reattached afterward, so R modifies them in place instead
+  of copying the whole tape at each node (which made gradients quadratic in
+  the number of nodes).
+* Densities are fused nodes with analytic partial derivatives, one node per
+  sampling statement.
+* The constraining transforms of lower and upper bounds are single nodes.
+* Value only evaluations disable the tape entirely.
