@@ -372,6 +372,10 @@ ad_scatter <- function(x, idx, y) {
   if (!inherits(x, "bcad") && !inherits(y, "bcad")) return(out)
   ly <- length(vy)
   dy <- dim(vy)
+  # with repeated indices only the last write survives, so only it gets
+  # the adjoint
+  dup <- anyDuplicated(idx) > 0L
+  if (dup) overwritten <- duplicated(idx, fromLast = TRUE)
   ad_node(out, list(x, y), function(g) {
     gx <- NULL
     gy <- NULL
@@ -382,6 +386,7 @@ ad_scatter <- function(x, idx, y) {
     }
     if (inherits(y, "bcad")) {
       gy <- as.vector(g)[idx]
+      if (dup) gy[overwritten] <- 0
       if (ly == 1L) gy <- sum(gy) else if (!is.null(dy)) dim(gy) <- dy
     }
     list(gx, gy)
@@ -511,7 +516,13 @@ ad_log_sum_exp2 <- function(a, b) {
 
 ad_log_diff_exp <- function(a, b) {
   ad_binary(a, b,
-    function(x, z) { r <- x + log1m_exp_v(z - x); zi <- (z + 0 * x) == -Inf; r[zi] <- (x + 0 * z)[zi]; r },
+    function(x, z) {
+      r <- x + log1m_exp_v(z - x)
+      # log(exp(x) - 0) = x; broadcast without 0 * Inf
+      zi <- rep_len(z, length(r)) == -Inf
+      r[zi] <- rep_len(x, length(r))[zi]
+      r
+    },
     function(x, z, y) -1 / expm1(z - x),
     function(x, z, y) -1 / expm1(x - z))
 }

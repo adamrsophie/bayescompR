@@ -75,18 +75,23 @@ bayescomp_pdmp <- function(model, method = c("zigzag", "bps"), chains = 4L, iter
         }
         lam1 <- rates(rn$g, v)
         inc <- 0.5 * s * (lam0 + lam1)
-        Er <- Er - s
-        if (Er <= 0) {
-          x <- xn; r <- rn; v <- newv(); lam0 <- rates(r$g, v)
-          E <- stats::rexp(length(lam0)); Er <- stats::rexp(1) / refresh_rate
-          t_left <- t_left - s
+        # the earliest of the bounce and refresh clocks within this step
+        bounce <- any(inc >= E)
+        frac <- if (bounce) min(E / pmax(inc, 1e-300)) else Inf
+        if (Er <= s && Er < frac * s) {
+          # refresh first: move to the refresh time and draw a new velocity
+          x <- x + Er * v; r <- pot(x); evals <- evals + 1L
+          E <- E - (Er / s) * inc
+          t_left <- t_left - Er
+          v <- newv(); lam0 <- rates(r$g, v)
+          Er <- stats::rexp(1) / refresh_rate
           next
         }
-        if (any(inc >= E)) {
+        if (bounce) {
           # event inside the step: locate it linearly within the step
-          frac <- min(E / pmax(inc, 1e-300))
           j <- which.min(E / pmax(inc, 1e-300))
           s2 <- frac * s
+          Er <- Er - s2
           x <- x + s2 * v
           r <- pot(x)
           evals <- evals + 1L
@@ -106,6 +111,7 @@ bayescomp_pdmp <- function(model, method = c("zigzag", "bps"), chains = 4L, iter
           t_left <- t_left - s2
         } else {
           E <- E - inc
+          Er <- Er - s
           x <- xn; r <- rn; lam0 <- lam1
           t_left <- t_left - s
         }

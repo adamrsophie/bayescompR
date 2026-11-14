@@ -32,7 +32,7 @@ mcmc_methods <- c("sample", "parallel_tempering", "ensemble", "gibbs", "rmhmc", 
 kept <- function(fit, inc_warmup = FALSE) {
   nw <- fit$n_warmup_saved %||% 0L
   n <- dim(fit$draws)[1L]
-  if (inc_warmup || nw == 0L) seq_len(n) else (nw + 1L):n
+  if (inc_warmup || nw == 0L) seq_len(n) else if (nw >= n) integer(0) else (nw + 1L):n
 }
 
 #' Draws from a fit

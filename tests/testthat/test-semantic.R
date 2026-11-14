@@ -40,3 +40,23 @@ test_that("rng and lp functions respect their contexts", {
   expect_error(bayescomp_check("functions { void f_lp() { target += 1; } } generated quantities { f_lp(); }"), class = "bayescomp_semantic_error")
   expect_error(bayescomp_check("parameters { real x; } generated quantities { real y = x; y ~ normal(0, 1); }"), class = "bayescomp_semantic_error")
 })
+
+test_that("overloads resolve to the fewest promotions and ties are errors", {
+  m <- bayescomp_model("functions { real f(real x) { return 1; } real f(int x) { return 2; } }
+                        generated quantities { real a = f(1); real b = f(1.5); }")
+  v <- bayescomp_constrain(m, numeric(0))
+  expect_equal(c(v$a, v$b), c(2, 1))
+  expect_error(bayescomp_model("functions { real g(real x, int y) { return 1; } real g(int x, real y) { return 2; } }
+                                generated quantities { real a = g(1, 1); }"), "ambiguous", class = "bayescomp_semantic_error")
+})
+
+test_that("data only library arguments and model block scope are enforced", {
+  expect_error(bayescomp_model("parameters { real a; } model { vector[3] v = linspaced_vector(3, a, 1); a ~ normal(0, 1); }"),
+               "data only", class = "bayescomp_semantic_error")
+  expect_error(bayescomp_model("parameters { vector[3] v; } model { real q = quantile(v, 0.5); v ~ normal(0, 1); }"),
+               "data only", class = "bayescomp_semantic_error")
+  expect_error(bayescomp_model("parameters { real a; } model { real x = 1; a ~ normal(0, 1); } generated quantities { real y = x; }"),
+               "not in scope", class = "bayescomp_semantic_error")
+  m <- bayescomp_model("parameters { vector[3] v; } model { v ~ normal(0, 1); } generated quantities { real q = quantile(v, 0.5); }")
+  expect_equal(bayescomp_constrain(m, c(1, 2, 3))$q, 2)
+})

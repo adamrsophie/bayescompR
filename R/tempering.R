@@ -51,7 +51,7 @@ bayescomp_parallel_tempering <- function(model, num_temps = 10L, chains = 2L, it
     ref <- gaussian_reference(model, reference, reference_scale)
     betas <- seq(0, 1, length.out = K)
     X <- sweep(matrix(stats::rnorm(K * n), K, n) %*% t(ref$L), 2L, ref$mu, "+")
-    X[K, ] <- find_init(model, init, id)
+    X[K, ] <- find_init(model, init, id, gradient = FALSE)
     lp <- vapply(seq_len(K), function(k) lp_full(X[k, ]), 0)
     lg <- ref$log_g(X)
     Ls <- rep(list(ref$L), K)

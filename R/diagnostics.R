@@ -19,7 +19,8 @@ split_chains <- function(x) {
   cbind(a, b)
 }
 
-na_diag <- function(x) any(!is.finite(x)) || (max(x) - min(x)) < .Machine$double.eps * max(1, abs(max(x)))
+# constant up to rounding, relative to the scale of the draws
+na_diag <- function(x) any(!is.finite(x)) || (max(x) - min(x)) <= .Machine$double.eps * max(abs(x))
 
 z_scale <- function(x) {
   d <- dim(x)
@@ -75,7 +76,8 @@ ess_raw <- function(sims) {
     }
   }
   ess <- chains * n
-  tau <- -1 + 2 * sum(rho[seq_len(max_t)]) + rho[max_t + 1L]
+  # posterior keeps rho[1] when max_t is 0 (R's 1:0)
+  tau <- -1 + 2 * sum(rho[seq_len(max(max_t, 1L))]) + rho[max_t + 1L]
   tau <- max(tau, 1 / log10(ess))
   ess / tau
 }
@@ -122,8 +124,7 @@ bayescomp_ess_bulk <- function(x) {
 bayescomp_ess_tail <- function(x) {
   x <- as_draws_matrix_chains(x)
   if (na_diag(x)) return(NA_real_)
-  q <- stats::quantile(x, c(0.05, 0.95), names = FALSE)
-  min(ess_raw(split_chains((x <= q[1L]) + 0)), ess_raw(split_chains((x <= q[2L]) + 0)))
+  min(bayescomp_ess_quantile(x, c(0.05, 0.95)))
 }
 
 #' @rdname diagnostics
@@ -134,7 +135,13 @@ bayescomp_ess_basic <- function(x) ess_raw(split_chains(as_draws_matrix_chains(x
 #' @export
 bayescomp_ess_quantile <- function(x, probs = c(0.05, 0.95)) {
   x <- as_draws_matrix_chains(x)
-  vapply(probs, function(p) ess_raw(split_chains((x <= stats::quantile(x, p, names = FALSE)) + 0)), 0)
+  # upper quantiles use the upper indicator, which matters for tied draws
+  vapply(probs, function(p) {
+    q <- stats::quantile(x, p, names = FALSE)
+    ind <- if (p > 0.5) x >= q else x <= q
+    if (na_diag(ind + 0)) return(NA_real_)
+    ess_raw(split_chains(ind + 0))
+  }, 0)
 }
 
 #' @rdname diagnostics
@@ -153,5 +160,5 @@ bayescomp_mcse_sd <- function(x) {
   x2 <- xc^2
   ess <- bayescomp_ess_basic(x2)
   ev <- mean(x2)
-  sqrt(stats::var(as.vector(x2)) / 4 / ev / ess)
+  sqrt(mean((x2 - ev)^2) / 4 / ev / ess)
 }

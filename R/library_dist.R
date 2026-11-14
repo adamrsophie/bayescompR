@@ -52,6 +52,26 @@ zmul <- function(c, x) {
 defdist <- function(name, args, lpdf = NULL, discrete = FALSE, cdf = NULL, lcdf = NULL,
                     lccdf = NULL, rng = NULL, rng_ret = NULL, ret = "real") {
   suf <- if (discrete) c("_lpmf", "_lupmf") else c("_lpdf", "_lupdf")
+  # the cumulative functions share the density's argument checks (values
+  # only, no AD); a discrete variable below its support is allowed there
+  if (!is.null(lpdf)) {
+    dens_name <- paste0(name, suf[1L])
+    checked <- function(fun, fname) {
+      force(fun)
+      function(...) {
+        a <- lapply(list(...), val)
+        tryCatch(do.call(lpdf, c(a, list(propto = TRUE))), bayescomp_domain_error = function(e) {
+          msg <- conditionMessage(e)
+          if (discrete && grepl("Random variable", msg, fixed = TRUE)) return(NULL)
+          stop_domain(sub("^Domain error: ", "", gsub(dens_name, fname, msg, fixed = TRUE)))
+        })
+        fun(...)
+      }
+    }
+    if (!is.null(lcdf)) lcdf <- checked(lcdf, paste0(name, "_lcdf"))
+    if (!is.null(cdf)) cdf <- checked(cdf, paste0(name, "_cdf"))
+    if (!is.null(lccdf)) lccdf <- checked(lccdf, paste0(name, "_lccdf"))
+  }
   if (!is.null(lpdf)) {
     f1 <- lpdf
     def(paste0(name, suf[1L]), args, ret, function(...) f1(..., propto = FALSE), density = TRUE, dist = name)
@@ -801,7 +821,8 @@ binom_cdf_ad <- function(n, Ntr, theta, lower) {
   out <- sum(lp)
   if (!is_ad(theta)) return(out)
   # d/dtheta P(X <= n) = -N * dbinom(n, N - 1, theta)
-  d <- -NN * stats::dbinom(nn, NN - 1, vt) / exp(lp) * (if (lower) 1 else -1)
+  # the ratio on the log scale, so extreme tails do not underflow to 0 / 0
+  d <- -NN * exp(suppressWarnings(stats::dbinom(nn, NN - 1, vt, log = TRUE)) - lp) * (if (lower) 1 else -1)
   d[!is.finite(d)] <- 0
   ad_node(out, list(theta), function(g) list(unbroadcast(g * d, val(theta))))
 }
@@ -1078,7 +1099,7 @@ pois_cdf_ad <- function(n, lambda, lower) {
   lp <- stats::ppois(nn, vl, lower.tail = lower, log.p = TRUE)
   out <- sum(lp)
   if (!is_ad(lambda)) return(out)
-  d <- -stats::dpois(nn, vl) / exp(lp) * (if (lower) 1 else -1)
+  d <- -exp(stats::dpois(nn, vl, log = TRUE) - lp) * (if (lower) 1 else -1)
   d[!is.finite(d)] <- 0
   ad_node(out, list(lambda), function(g) list(unbroadcast(g * d, val(lambda))))
 }

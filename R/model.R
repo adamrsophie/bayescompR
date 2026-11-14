@@ -162,8 +162,8 @@ compile_r <- function(ir) {
   ctxl <- function(b) list(block = b)
   funs <- lapply(Filter(function(fd) !is.null(fd$body), ir$blocks$functions$body %||% list()), cg_fundef)
   # transformed data: statements, then validation of the declared variables
-  td <- c(cg_stmts(block_body(ir, "transformed data"), ctxl("transformed data")),
-          check_calls(top_decls(ir, "transformed data"), "transformed data"))
+  td <- cg_stmts(block_body(ir, "transformed data"), ctxl("transformed data"))
+  td_checks <- check_calls(top_decls(ir, "transformed data"), "transformed data")
   pars <- top_decls(ir, "parameters")
   par_code <- lapply(pars, function(d) {
     cl(as.name("<-"), vsym(d$name), cl(rt_param, quote(.u), cl(as.name("[["), quote(.decls), d$name),
@@ -192,7 +192,7 @@ compile_r <- function(ir) {
             cl(as.name("lapply"), cg_cons_args(d$type), as.name("val"))))))
   })
   unc_body <- blk(c(list(quote(.parts <- vector("list", 0L))), unc_code, list(quote(unlist(.parts)))))
-  list(ir = ir, funs = funs, tdata = td, log_prob = log_prob_body, write = write_body,
+  list(ir = ir, funs = funs, tdata = td, tdata_checks = td_checks, log_prob = log_prob_body, write = write_body,
        unconstrain = unc_body, pars = pars, tps = tps, gqs = gqs,
        data_decls = top_decls(ir, "data"), td_decls = top_decls(ir, "transformed data"))
 }
@@ -232,9 +232,12 @@ instantiate <- function(m, data) {
   }
   extra <- setdiff(names(data), vapply(m$data_decls, `[[`, "", "name"))
   # transformed data
+  # sizes of transformed data variables may depend on earlier transformed
+  # data, so their metadata is built after the statements run
+  if (length(m$tdata)) eval(blk(m$tdata), env)
   for (d in m$td_decls) decls[[d$name]] <- decl_info(d, env)
   env$.decls <- decls
-  if (length(m$tdata)) eval(blk(m$tdata), env)
+  if (length(m$tdata_checks)) eval(blk(m$tdata_checks), env)
   # parameters, transformed parameters, generated quantities
   off <- 0L
   for (d in m$pars) {
@@ -299,7 +302,7 @@ simplify_data_list <- function(x) {
 rt_read_value <- function(vals, info) {
   nm <- info$name
   if (!(nm %in% names(vals))) stop_data(sprintf("value for parameter '%s' is missing", nm))
-  v <- read_data_value(vals, modifyList(info, list(base = "real")))
+  v <- read_data_value(vals, utils::modifyList(info, list(base = "real")))
   v
 }
 

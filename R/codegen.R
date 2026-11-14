@@ -53,7 +53,8 @@ cg_expr <- function(e) {
     index = cg_index(e),
     array_expr = {
       items <- lapply(e$items, function(it) promote_to(cg_expr(it), it$type, e$elem_type))
-      cl(rt_array, cl_list(as.name("list"), items), e$elem_type$base == "int")
+      cl(rt_array, cl_list(as.name("list"), items), e$elem_type$base == "int",
+         e$elem_type$base %in% c("int", "real") && (e$elem_type$nd %||% 0L) == 0L)
     },
     rowvec_expr = {
       items <- lapply(e$items, cg_expr)
@@ -88,9 +89,11 @@ cg_binop <- function(e) {
   both_int <- is_int_ty(ta) && is_int_ty(tb)
   sca <- is_scalar_ty(ta)
   scb <- is_scalar_ty(tb)
+  # two containers: sizes must agree even when one has a single element
+  ew <- function(f, what) if (sca || scb) cl(f, a, b) else cl(rt_elementwise, f, a, b, what)
   switch(e$op,
-    "+" = if (both_int) cl(op_int_add, a, b) else cl(op_add, a, b),
-    "-" = if (both_int) cl(op_int_sub, a, b) else cl(op_sub, a, b),
+    "+" = if (both_int) cl(op_int_add, a, b) else ew(op_add, "addition"),
+    "-" = if (both_int) cl(op_int_sub, a, b) else ew(op_sub, "subtraction"),
     "*" = {
       if (both_int) return(cl(op_int_mul, a, b))
       if (sca || scb) return(cl(op_scale, a, b))
@@ -109,8 +112,8 @@ cg_binop <- function(e) {
     "%" = cl(op_int_mod, a, b),
     "%/%" = cl(op_int_div, a, b),
     "\\" = cl(lib_impl("mdivide_left", list(ta, tb)), a, b),
-    ".*" = if (sca || scb) cl(op_scale, a, b) else cl(op_elt_mul, a, b),
-    "./" = if (sca || scb) cl(op_div_scalar, a, b) else cl(op_elt_div, a, b),
+    ".*" = if (sca || scb) cl(op_scale, a, b) else ew(op_elt_mul, "elementwise multiplication"),
+    "./" = if (sca || scb) cl(op_div_scalar, a, b) else ew(op_elt_div, "elementwise division"),
     "^" = , ".^" = cl(op_pow, a, b),
     "==" = , "!=" = , "<" = , "<=" = , ">" = , ">=" = cl(op_cmp, e$op, a, b),
     "&&" = cl(as.name("as.integer"), cl(as.name("&&"), cl(truthy, a), cl(truthy, b))),

@@ -49,7 +49,7 @@ bayescomp_ensemble <- function(model, method = c("stretch", "de"), walkers = NUL
   t0 <- proc.time()[["elapsed"]]
   out <- run_chains(model, 1L, seed, 1L, function(id) {
     lpf <- lp_value_fun(model)
-    X <- t(vapply(seq_len(W), function(w) find_init(model, init, w), numeric(n)))
+    X <- t(vapply(seq_len(W), function(w) find_init(model, init, w, gradient = FALSE), numeric(n)))
     if (n == 1L) X <- matrix(X, ncol = 1L)
     lp <- vapply(seq_len(W), function(w) lpf(X[w, ]), 0)
     keep <- seq_len(ns)[(seq_len(ns) - 1L) %% thin == 0L]

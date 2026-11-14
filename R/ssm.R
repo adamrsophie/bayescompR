@@ -123,16 +123,11 @@ drop_d <- function(X) if (ncol(X) == 1L) X[, 1L] else X
 
 # log of sum_i W_{t-1,i} g_t(x_i), with W the normalized previous weights
 # (all equal after resampling)
-pf_increment <- function(lw, lw_prev) {
-  lo <- lw - lw_prev
-  a <- lw_prev + lo
-  m <- max(a)
-  b <- max(lw_prev)
-  (m + log(sum(exp(a - m)))) - (b + log(sum(exp(lw_prev - b))))
-}
+# computed directly so particles with zero weight cannot produce Inf - Inf
+pf_increment <- function(lw, lw_prev) log_sum_exp_v(lw) - log_sum_exp_v(lw_prev)
 
 ssm_theta <- function(model, u) {
-  v <- bayescomp_constrain(model, u, include_tparams = TRUE, include_gqs = FALSE)
+  v <- unlist(lapply(bayescomp_constrain(model, u, include_tparams = TRUE, include_gqs = FALSE), as.vector), use.names = FALSE)
   names(v) <- bayescomp_param_names(model, include_gqs = FALSE)
   v
 }
@@ -180,7 +175,7 @@ bayescomp_pmcmc <- function(model, ssm, method = c("pmmh", "pgibbs"), num_partic
   t0 <- proc.time()[["elapsed"]]
   res <- run_chains(model, chains, seed, cores, function(id) {
     lprior <- lp_value_fun(model)
-    u <- find_init(model, init, id)
+    u <- find_init(model, init, id, gradient = FALSE)
     th <- ssm_theta(model, u)
     pf <- pf_run(ssm, th, N, "systematic", 1)
     path <- pf$path

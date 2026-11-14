@@ -255,8 +255,9 @@ bayescomp_mclmc <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampli
       xn <- x + eps * sig * a$u
       rn <- pot(xn)
       if (!is.finite(rn$V)) {
-        # a step outside the support: shrink the step and resample velocity
-        eps <- eps / 2
+        # a step outside the support: resample velocity, and during warmup
+        # also shrink the step (the step is fixed while sampling)
+        if (it <= nw) eps <- eps / 2
         u <- stats::rnorm(n); u <- u / sqrt(sum(u^2))
         if (it > nw) { i <- it - nw; qs[i, ] <- x; dg[i, ] <- c(-r$V, 0, eps, 0, 1, 1, NA_real_) }
         next

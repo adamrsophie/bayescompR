@@ -38,6 +38,8 @@ bayescomp_diffusion <- function(model, num_samples = 300L, steps = 40L, horizon 
   S <- as_count(num_samples, "num_samples", 1L)
   Kst <- as_count(steps, "steps", 2L)
   M <- as_count(inner_samples, "inner_samples", 2L)
+  if (!is.numeric(horizon) || length(horizon) != 1L || !is.finite(horizon) || horizon <= 0)
+    stop("horizon must be a positive number", call. = FALSE)
   t0 <- proc.time()[["elapsed"]]
   info <- NULL
   res <- run_chains(model, 1L, seed, 1L, function(id) {
@@ -46,8 +48,8 @@ bayescomp_diffusion <- function(model, num_samples = 300L, steps = 40L, horizon 
     # log density of the standardized target, up to a constant
     lz <- function(z) lp(ref$mu + as.vector(ref$L %*% z))
     # times from horizon down to a small floor, denser near zero
-    ts <- horizon * (seq(1, 0, length.out = Kst + 1L))^2
-    ts[Kst + 1L] <- 1e-3
+    tmin <- min(1e-3, horizon / 10)
+    ts <- tmin + (horizon - tmin) * (seq(1, 0, length.out = Kst + 1L))^2
     chunks <- split(seq_len(S), ceiling(seq_len(S) * max(1L, min(cores, S)) / S))
     run_chunk <- function(ix) {
       Z <- matrix(stats::rnorm(length(ix) * n), length(ix), n)
@@ -77,6 +79,9 @@ bayescomp_diffusion <- function(model, num_samples = 300L, steps = 40L, horizon 
     info <<- list(ess = mean(vapply(outs, `[[`, 0, "ess")))
     dg <- matrix(0, S, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
     dg[, "lp__"] <- apply(qs, 1L, lp)
+    bad <- !is.finite(dg[, "lp__"])
+    if (any(bad)) stop(sprintf("%d of %d diffusion draws have zero posterior density; increase inner_samples, steps or reference_scale",
+                               sum(bad), S), call. = FALSE)
     list(q = qs, gq = chain_write_draws(model, qs, FALSE), diag = dg, step_size = NA_real_, inv_metric = NULL,
          n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0))
   })

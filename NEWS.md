@@ -51,3 +51,33 @@ First release.
 * Bounds may mix finite and infinite values elementwise.
 * `inv_erfc()`; `hypergeometric_2F1()` for all `z < 1`. Stan functions that
   are not implemented yet raise `bayescomp_unsupported_error`.
+* Gibbs conjugate blocks are always Metropolis corrected, and the slice
+  kernel splits its stepping out budget at random, so both are exact.
+* SG-MCMC scales minibatch gradients by the number of batches, which is
+  unbiased when batch sizes differ.
+* Overloaded user functions resolve to the signature with the fewest
+  promotions; ties are errors. Model block variables are not visible in
+  generated quantities, and data only library arguments are enforced.
+* Transformed data sizes may depend on earlier transformed data; array
+  expressions keep singleton vector elements, and elementwise operations
+  on containers of different sizes are shape errors.
+* Cumulative distribution functions check their parameters like the
+  densities; truncation at the edge of the support and extreme tail CDF
+  gradients are finite; `log_diff_exp(a, negative_infinity())` is `a`.
+* Repeated indices in an assignment give the adjoint to the last write.
+* ESS at lag zero, upper quantile indicators and MCSE of the SD follow the
+  posterior package; the constant check is relative to the draws' scale.
+* Nested sampling reports `converged` and computes the information from the
+  dead and live points; incomplete SMC sets `complete = FALSE` and
+  `log_evidence = NA`; a failed Newton line search is not reported as
+  converged, and Laplace warns when the optimizer did not converge.
+* Diffusion time grids end at a positive time and diffusion fails rather
+  than return draws outside the support; MCLMC keeps its step size fixed
+  while sampling; ADVI counts zero density draws in the ELBO.
+* Zig-Zag and BPS compare refresh and bounce times; particle filter
+  increments ignore zero weight particles; vector parameters work in PMCMC
+  and neural posterior estimation.
+* `bayescomp_generate_quantities()` checks that the parameter declarations
+  match the fit; impossible infinite bounds and nonpositive multipliers are
+  domain errors; slice, Metropolis, ensemble, tempering and PMCMC start
+  without a gradient.

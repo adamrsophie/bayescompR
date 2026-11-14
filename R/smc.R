@@ -135,8 +135,10 @@ bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinde
       scale <- scale * exp(acc - 0.234)
       if (beta >= 1) break
     }
-    if (beta < 1) warning(sprintf("SMC stopped at beta = %.3g after %d stages; increase 'max_stages'", beta, max_stages), call. = FALSE)
-    info <<- list(log_evidence = log_z, betas = betas, acceptance = accs)
+    complete <- beta >= 1
+    if (!complete) warning(sprintf("SMC stopped at beta = %.3g after %d stages; the draws and log_evidence describe the tempered bridge, not the posterior; increase 'max_stages'", beta, max_stages), call. = FALSE)
+    info <<- list(log_evidence = if (complete) log_z else NA_real_, partial_log_normalizer = log_z,
+                  betas = betas, acceptance = accs, complete = complete)
     gq <- chain_write_draws(model, U, FALSE)
     dg <- matrix(0, N, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
     dg[, "lp__"] <- lpv
@@ -146,6 +148,8 @@ bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinde
   fit <- make_fit_extra(model, res, list(num_particles = N, reference = reference), "smc", seed, proc.time()[["elapsed"]] - t0)
   fit$log_evidence <- info$log_evidence
   fit$betas <- info$betas
+  fit$complete <- info$complete
+  fit$partial_log_normalizer <- info$partial_log_normalizer
   fit$acceptance <- info$acceptance
   fit
 }

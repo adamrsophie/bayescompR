@@ -95,9 +95,12 @@ bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32
     batches <- split(perm, ceiling(seq_along(perm) / b))
     pg <- safe_lp(sp$prior, jacobian = TRUE)
     bg <- lapply(batches, function(ix) safe_lp(model_with_data(model, sp$subset(model$data, ix)), jacobian = TRUE))
+    # each batch is used equally often, so K times one batch's likelihood
+    # gradient is unbiased for the full one even when batch sizes differ
+    K <- length(batches)
     grad_est <- function(u, k) {
       g0 <- pg(u)$grad
-      g0 + (sp$N / length(batches[[k]])) * (bg[[k]](u)$grad - g0)
+      g0 + K * (bg[[k]](u)$grad - g0)
     }
     full <- safe_lp(model, jacobian = TRUE)
     lp_full <- lp_value_fun(model)

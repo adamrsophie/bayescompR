@@ -168,9 +168,11 @@ All of Stan's elementwise math functions, container operations
 `segment`, `head`, `tail`, `to_vector`, `to_matrix` and so on), linear
 algebra (`cholesky_decompose`, `mdivide_left_tri_low`, `inverse`,
 `log_determinant`, `eigenvalues_sym`, `matrix_exp`, `qr_thin_Q`, quadratic
-forms and more) and the distributions are available. Every distribution has
-its `_lpdf` or `_lpmf`, and where Stan defines them `_cdf`, `_lcdf`,
-`_lccdf` and `_rng`.
+forms and more) and most distributions are available. Every implemented
+distribution has its `_lpdf` or `_lpmf`; most also have `_cdf`, `_lcdf`,
+`_lccdf` and `_rng`, but some cumulative functions Stan defines are still
+missing (for example `bernoulli_lccdf` and the skew normal family), and
+truncation needs them. TODO.md lists the gaps.
 
 ```{r}
 m <- bayescomp_model("

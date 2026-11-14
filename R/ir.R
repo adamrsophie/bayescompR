@@ -22,7 +22,10 @@
 #' @export
 bayescomp_ir <- function(x, json = FALSE) {
   ir <- if (inherits(x, "bayescomp_model")) x$ir else stan_check(stan_parse(read_stan_source(x, NULL)))
-  out <- list(ir_version = ir_version, stan_version = "2.40.0", blocks = strip_ir(ir$blocks))
+  blocks <- strip_ir(ir$blocks)
+  # blocks is always a JSON object, also for an empty program
+  if (!length(blocks)) blocks <- structure(list(), names = character(0))
+  out <- list(ir_version = ir_version, stan_version = "2.40.0", blocks = blocks)
   if (json) to_json(out) else out
 }
 
@@ -45,6 +48,12 @@ strip_ir <- function(x) {
     return(out)
   }
   x
+}
+
+drop_loc <- function(x) {
+  if (!is.list(x)) return(x)
+  x$loc <- NULL
+  lapply(x, drop_loc)
 }
 
 json_str <- function(s) {
@@ -88,6 +97,17 @@ bayescomp_generate_quantities <- function(model, fit, seed = NULL) {
   if (!inherits(fit, "bayescomp_fit")) stop("'fit' must be a bayescomp_fit", call. = FALSE)
   if (model$dim != ncol(fit$unconstrained[[1L]]))
     stop("the model and the fit have different numbers of unconstrained parameters", call. = FALSE)
+  # the unconstrained draws only mean the same thing under the same ordered
+  # parameter declarations (names, shapes, transforms and their bounds)
+  if (!is.null(fit$model)) {
+    sig <- function(m) lapply(m$params$pars, function(n) {
+      d <- m$decls[[n]]
+      list(n, d$kind, d$adims, d$eshape,
+           deparse(drop_loc(strip_ir(Filter(function(st) identical(st$name, n), top_decls(m$ir, "parameters"))[[1L]]$type))))
+    })
+    if (!identical(sig(model), sig(fit$model)))
+      stop("the model's parameter declarations differ from those of the fit (names, order, shapes or constraints)", call. = FALSE)
+  }
   chains <- length(fit$unconstrained)
   t0 <- proc.time()[["elapsed"]]
   res <- run_chains(model, chains, seed, 1L, function(id) {

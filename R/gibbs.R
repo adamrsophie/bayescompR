@@ -15,12 +15,10 @@
 #       gamma variances, Poisson and exponential rates);
 #     - Beta for unit interval scalars x = inv_logit(u) whose log density is
 #       A log x + B log(1 - x) (binomial and Bernoulli probabilities).
-#   During warmup the proposal is fitted at the current state and the
-#   reverse proposal at the proposed state, so each step is exact even when
-#   the detection is wrong (the acceptance rate then drops below one). A
-#   block whose warmup draws were all accepted with probability one is
-#   treated as exact after warmup and drawn directly, which skips the
-#   reverse fit.
+#   The proposal is fitted at the current state and the reverse proposal at
+#   the proposed state, and the move is an independence Metropolis step, so
+#   each step leaves the posterior invariant even when the detection is
+#   wrong (the acceptance rate then drops below one).
 # * "slice": univariate slice sampling for each coordinate, widths adapted
 #   during warmup.
 # * "metropolis": random walk Metropolis on the block, covariance and scale
@@ -64,7 +62,7 @@ bayescomp_gibbs <- function(model, blocks = NULL, chains = 4L, iter_warmup = 100
   res <- run_chains(model, chains, seed, cores, function(id) {
     lpf <- lp_value_fun(model)
     lpg <- safe_lp(model, jacobian = TRUE, propto = FALSE)
-    q <- find_init(model, init, id)
+    q <- find_init(model, init, id, gradient = any(vapply(bl, function(b) b$kernel %in% c("mala", "hmc"), TRUE)))
     bs <- lapply(bl, function(b) gibbs_block_init(b, q, lpf))
     lp <- lpf(q)
     keep <- seq_len(ns)[(seq_len(ns) - 1L) %% thin == 0L]
@@ -252,10 +250,8 @@ gibbs_update <- function(b, q, lp, lpf, lpg, warm, it) {
     v <- fx$draw()
     qn <- set_block(q, idx, v)
     lpn <- lpf(qn)
-    # once warmup has shown that every proposal was accepted with
-    # probability one, the fitted family is the exact conditional and the
-    # reverse fit is skipped: a plain Gibbs draw
-    if (isTRUE(b$exact) && !warm && is.finite(lpn)) return(list(q = qn, lp = lpn, b = b, acc = 1))
+    # always Metropolis corrected: numerical conjugacy detection cannot prove
+    # that the fitted family is the exact conditional everywhere
     fy <- gibbs_fit(b$family, b, qn, lpf)
     acc <- 0
     if (is.finite(lpn) && !is.null(fy)) {
@@ -263,11 +259,6 @@ gibbs_update <- function(b, q, lp, lpf, lpg, warm, it) {
       acc <- if (is.nan(la)) 0 else min(1, exp(la))
     }
     if (stats::runif(1) < acc) { q <- qn; lp <- lpn }
-    if (warm) {
-      b$warm_n <- (b$warm_n %||% 0) + 1
-      b$warm_min <- min(b$warm_min %||% 1, acc)
-      b$exact <- b$warm_n >= 20 && b$warm_min > 1 - 1e-8
-    }
     return(list(q = q, lp = lp, b = b, acc = acc))
   }
   if (b$kernel == "slice") {
@@ -277,10 +268,12 @@ gibbs_update <- function(b, q, lp, lpf, lpg, warm, it) {
       w <- b$width[i]
       L <- q[j] - w * stats::runif(1); R <- L + w
       f <- function(x) lpf(replace(q, j, x))
-      J <- 31L
+      # stepping out with the expansion budget split at random between the
+      # two sides (Neal 2003, figure 3), which keeps the kernel reversible
+      m <- 62L
+      J <- floor(m * stats::runif(1)); K <- m - 1L - J
       while (J > 0L && f(L) > logy) { L <- L - w; J <- J - 1L }
-      J <- 31L
-      while (J > 0L && f(R) > logy) { R <- R + w; J <- J - 1L }
+      while (K > 0L && f(R) > logy) { R <- R + w; K <- K - 1L }
       repeat {
         x <- stats::runif(1, L, R)
         fx <- f(x)

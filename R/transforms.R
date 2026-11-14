@@ -41,12 +41,17 @@ tf_bounds <- list(
     if (!is.null(a$offset) || !is.null(a$multiplier)) {
       o <- if (is.null(a$offset)) 0 else a$offset
       m <- if (is.null(a$multiplier)) 1 else a$multiplier
+      if (any(!is.finite(val(m)) | val(m) <= 0)) stop_domain("multiplier must be positive and finite")
+      if (any(!is.finite(val(o)))) stop_domain("offset must be finite")
       x <- o + m * u
       lm <- log(m)
       lj <- if (length(val(lm)) == 1L) lm * length(val(u)) else ad_sum(lm)
       return(list(x = x, lj = lj))
     }
     n_u <- length(val(u))
+    # only lower = -Inf and upper = +Inf mean unbounded
+    if (!is.null(lo) && any(val(lo) == Inf | is.nan(val(lo)))) stop_domain("lower bound must not be positive infinity or NaN")
+    if (!is.null(up) && any(val(up) == -Inf | is.nan(val(up)))) stop_domain("upper bound must not be negative infinity or NaN")
     flo <- if (is.null(lo)) rep(FALSE, n_u) else rep_len(is.finite(val(lo)), n_u)
     fup <- if (is.null(up)) rep(FALSE, n_u) else rep_len(is.finite(val(up)), n_u)
     grp <- flo + 2L * fup

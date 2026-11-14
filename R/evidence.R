@@ -45,8 +45,8 @@ bayescomp_nested <- function(model, num_live = 400L, mcmc_steps = 20L, dlogz = 0
     P <- pr_fit$unconstrained[[1L]][seq(4L, 4L * nl, by = 4L), , drop = FALSE]
     LL <- apply(P, 1L, logL)
     LP <- apply(P, 1L, lprior)
-    dead_u <- list(); dead_l <- numeric(0)
-    log_z <- -Inf; H <- 0
+    dead_u <- list(); dead_l <- numeric(0); dead_L <- numeric(0); converged <- FALSE
+    log_z <- -Inf
     scale <- 1
     log_x <- 0
     for (i in seq_len(max_iter)) {
@@ -54,11 +54,8 @@ bayescomp_nested <- function(model, num_live = 400L, mcmc_steps = 20L, dlogz = 0
       Lstar <- LL[w]
       log_x_new <- -i / nl
       log_wt <- Lstar + log_x + log1p(-exp(log_x_new - log_x))
-      log_z_new <- log_sum_exp_v(c(log_z, log_wt))
-      H <- exp(log_wt - log_z_new) * Lstar + exp(log_z - log_z_new) * (H + log_z) - log_z_new
-      if (!is.finite(H)) H <- 0
-      log_z <- log_z_new
-      dead_u[[i]] <- P[w, ]; dead_l[i] <- log_wt
+      log_z <- log_sum_exp_v(c(log_z, log_wt))
+      dead_u[[i]] <- P[w, ]; dead_l[i] <- log_wt; dead_L[i] <- Lstar
       log_x <- log_x_new
       # replace the worst point with a constrained prior draw
       C <- stats::cov(P)
@@ -77,16 +74,20 @@ bayescomp_nested <- function(model, num_live = 400L, mcmc_steps = 20L, dlogz = 0
       }
       scale <- scale * exp((acc / mcmc_steps - 0.5) / 5)
       P[w, ] <- x; LL[w] <- lx; LP[w] <- px
-      if (max(LL) + log_x < log_z + log(expm1(dlogz))) break
+      if (max(LL) + log_x < log_z + log(expm1(dlogz))) { converged <- TRUE; break }
     }
     # the remaining live points share the final prior volume
     lw_live <- LL + log_x - log(nl)
     log_z_final <- log_sum_exp_v(c(log_z, lw_live))
     U <- rbind(do.call(rbind, dead_u), P)
     lw <- c(dead_l, lw_live) - log_z_final
+    # information H = sum p_i log L_i - log Z over dead and live points
+    pw <- exp(lw); Li <- c(dead_L[seq_along(dead_l)], LL)
+    H <- sum(pw[pw > 0] * Li[pw > 0]) - log_z_final
     idx <- sample.int(nrow(U), S, replace = TRUE, prob = exp(lw))
     qs <- U[idx, , drop = FALSE]
-    info <<- list(log_z = log_z_final, se = sqrt(max(H, 0) / nl), H = H, iter = i)
+    if (!converged) warning("nested sampling stopped at max_iter before the evidence tolerance was reached", call. = FALSE)
+    info <<- list(log_z = log_z_final, se = sqrt(max(H, 0) / nl), H = H, iter = i, converged = converged)
     dg <- matrix(0, S, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
     dg[, "lp__"] <- apply(qs, 1L, lfull)
     list(q = qs, gq = chain_write_draws(model, qs, FALSE), diag = dg, step_size = NA_real_, inv_metric = NULL,
@@ -97,6 +98,7 @@ bayescomp_nested <- function(model, num_live = 400L, mcmc_steps = 20L, dlogz = 0
   fit$log_evidence_se <- info$se
   fit$information <- info$H
   fit$iterations <- info$iter
+  fit$converged <- info$converged
   fit
 }
 

@@ -52,7 +52,10 @@ stan_check <- function(prog) {
     s$block <- bn
     body <- b[[bn]]$body
     newbody <- vector("list", length(body))
+    # model block variables are local: not visible in generated quantities
+    if (bn == "model") sem_push(s)
     for (i in seq_along(body)) newbody[[i]] <- sem_stmt(s, body[[i]], top = TRUE)
+    if (bn == "model") sem_pop(s)
     out$blocks[[bn]]$body <- newbody
   }
   if (!is.null(b$functions)) out$blocks$functions$body <- s$typed_funs
@@ -609,10 +612,23 @@ binop_type <- function(op, a, b) {
 resolve_call <- function(s, name, types, quiet = FALSE, loc = NULL) {
   cands <- c(s$ufuns[[name]], .lib[[name]])
   if (!length(cands)) return(NULL)
+  # user overloads: the unique viable signature with the fewest promotions
+  # (Stan Reference Manual, "Resolving overloads")
+  best <- NULL; best_cost <- Inf; tie <- FALSE
+  for (sg in cands) {
+    if (!isTRUE(sg$user) || length(sg$args) != length(types)) next
+    if (!all(mapply(ty_assignable, sg$args, types))) next
+    cost <- sum(vapply(seq_along(types), function(i) sg$args[[i]]$base != types[[i]]$base, TRUE))
+    if (cost < best_cost) { best <- sg; best_cost <- cost; tie <- FALSE }
+    else if (cost == best_cost) tie <- TRUE
+  }
+  if (!is.null(best)) {
+    if (tie) stop_semantic(sprintf("ambiguous call to overloaded function '%s'", name), loc)
+    return(list(sig = best, ret = best$ret))
+  }
   for (sg in cands) {
     if (isTRUE(sg$user)) {
-      if (length(sg$args) != length(types)) next
-      if (all(mapply(ty_assignable, sg$args, types))) return(list(sig = sg, ret = sg$ret))
+      next
     } else {
       if (length(sg$args) != length(types)) next
       if (all(mapply(pat_ok, sg$args, types))) {
@@ -689,6 +705,10 @@ sem_call <- function(s, e) {
   if (isTRUE(sg$user)) {
     for (i in seq_along(args)) if (isTRUE(sg$data_only[i]) && !args[[i]]$data_only)
       stop_semantic(sprintf("argument %d of '%s' must be data only", i, nm), args[[i]]$loc)
+  } else if (nm %in% data_only_functions && s$block %in% c("transformed parameters", "model")) {
+    # in generated quantities every value is a double, so parameters qualify
+    for (i in seq_along(args)) if (!isTRUE(args[[i]]$data_only))
+      stop_semantic(sprintf("argument %d of '%s' must be data only", i, nm), args[[i]]$loc)
   }
   e$args <- args
   e$sig <- sg
@@ -725,6 +745,13 @@ resolve_dist <- function(s, dist, types, int_lhs, loc) {
 
 # Stan functions recognized but not implemented in this version. Using them
 # raises bayescomp_unsupported_error instead of an unknown function error.
+# library functions whose arguments are all data only in Stan 2.40
+data_only_functions <- c("linspaced_array", "linspaced_int_array", "linspaced_vector", "linspaced_row_vector",
+                         "one_hot_array", "one_hot_int_array", "one_hot_vector", "one_hot_row_vector",
+                         "zeros_array", "zeros_int_array", "zeros_vector", "zeros_row_vector",
+                         "ones_array", "ones_int_array", "ones_vector", "ones_row_vector",
+                         "uniform_simplex", "quantile", "to_int")
+
 unsupported_functions <- c(
   "ode_rk45", "ode_rk45_tol", "ode_bdf", "ode_bdf_tol", "ode_adams", "ode_adams_tol",
   "ode_ckrk", "ode_ckrk_tol", "ode_adjoint_tol_ctl", "dae", "dae_tol", "algebra_solver",

@@ -127,10 +127,12 @@ rt_foreach <- function(x, nd, base) {
 }
 
 # array expression {a, b, ...}
-rt_array <- function(items, is_int) {
+# scalar_elem: the static element type is int or real (a vector[1] element
+# keeps its dimension)
+rt_array <- function(items, is_int, scalar_elem = TRUE) {
   shapes <- lapply(items, function(it) {
     v <- val(it)
-    if (is.null(dim(v))) (if (length(v) == 1L) integer(0) else length(v)) else dim(v)
+    if (is.null(dim(v))) (if (scalar_elem) integer(0) else length(v)) else dim(v)
   })
   s1 <- shapes[[1L]]
   for (sh in shapes[-1L]) if (!identical(as.integer(sh), as.integer(s1)))
@@ -149,6 +151,15 @@ rt_array <- function(items, is_int) {
   cc <- ad_c(lapply(items, as_dbl))
   if (!length(s1)) return(cc)
   ad_gather(cc, layout_perm(n, s1), c(n, s1))
+}
+
+# elementwise operation on two containers with a strict size check
+rt_elementwise <- function(f, a, b, what) {
+  da <- dim(val(a)) %||% length(val(a))
+  db <- dim(val(b)) %||% length(val(b))
+  if (!identical(as.integer(da), as.integer(db)))
+    stop_shape(sprintf("%s: size mismatch (%s versus %s)", what, paste(da, collapse = " x "), paste(db, collapse = " x ")))
+  f(a, b)
 }
 
 # row vector expression [a, b, ...]
@@ -262,7 +273,12 @@ rt_truncate <- function(ctx, y, lo, hi, lcdf, lccdf, args, discrete, fam) {
   one <- function(a) {
     if (!is.null(lo) && !is.null(hi)) {
       if (!is.null(vlo) && !is.null(vhi) && vlo > vhi) stop_domain(sprintf("truncation of %s: lower bound is greater than upper bound", fam))
-      return(ad_log_diff_exp(do.call(lcdf, c(list(hi), a)), do.call(lcdf, c(list(lo_adj), a))))
+      l_lo <- do.call(lcdf, c(list(lo_adj), a))
+      l_hi <- do.call(lcdf, c(list(hi), a))
+      # a lower bound at the edge of the support: F(lo) = 0, and its
+      # gradient (often 0 / 0 there) must not enter
+      if (all(val(l_lo) == -Inf)) return(l_hi)
+      return(ad_log_diff_exp(l_hi, l_lo))
     }
     if (!is.null(lo)) return(do.call(lccdf, c(list(lo_adj), a)))
     do.call(lcdf, c(list(hi), a))

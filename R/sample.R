@@ -101,7 +101,7 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
               thin = thin, save_warmup = save_warmup, refresh = as.integer(refresh), print = show_print)
   t0 <- proc.time()[["elapsed"]]
   res <- run_chains(model, chains, seed, cores, function(id) {
-    q0 <- find_init(model, init, id)
+    q0 <- find_init(model, init, id, gradient = !(algorithm %in% c("metropolis", "slice", "elliptical_slice")))
     out <- if (n == 0L) fixed_param_chain(cfg) else run_hmc_chain(model, q0, cfg, id)
     out$gq <- chain_write_draws(model, out$q, show_print)
     out
@@ -165,14 +165,16 @@ run_chains <- function(model, chains, seed, cores, f) {
 
 # Stan's initialization: up to 100 attempts at a point with finite log
 # density and gradient.
-find_init <- function(model, init, chain_id) {
+# gradient = FALSE: the method needs only log density values, so a model
+# whose gradient is unavailable can still be initialized
+find_init <- function(model, init, chain_id, gradient = TRUE) {
   n <- model$dim
   if (n == 0L) return(numeric(0))
   if (inherits(init, "bayescomp_fit")) {
     # e.g. a Pathfinder or ADVI fit: start from one of its draws
     u <- do.call(rbind, init$unconstrained)
     if (ncol(u) != n) stop("the initialization fit has a different number of parameters", call. = FALSE)
-    pot <- hmc_potential(model)
+    pot <- init_check_fun(model, gradient)
     for (attempt in seq_len(100L)) {
       q <- u[sample.int(nrow(u), 1L), ]
       r <- pot(q)
@@ -188,7 +190,7 @@ find_init <- function(model, init, chain_id) {
     radius <- user
     user <- NULL
   }
-  pot <- hmc_potential(model)
+  pot <- init_check_fun(model, gradient)
   for (attempt in seq_len(100L)) {
     q <- if (radius == 0) numeric(n) else stats::runif(n, -radius, radius)
     if (is.list(user) && length(user)) {
@@ -208,6 +210,12 @@ find_init <- function(model, init, chain_id) {
     if (radius == 0) break
   }
   stop(sprintf("chain %d: initialization failed after 100 attempts; try smaller initial values or check the model", chain_id), call. = FALSE)
+}
+
+init_check_fun <- function(model, gradient) {
+  if (gradient) return(hmc_potential(model))
+  lp <- lp_value_fun(model)
+  function(q) list(V = -lp(q), g = 0)
 }
 
 # constrained parameters, transformed parameters and generated quantities

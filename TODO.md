@@ -67,6 +67,25 @@ Diagnostics
 * Richer flows (coupling layers) for normalizing flow VI and neural
   posterior estimation.
 
+## Known gaps found in review
+
+* Lexer: `lower`, `upper`, `offset` and `multiplier` as ordinary
+  identifiers, and digit separators in real literals such as `1_000.5`.
+* RMHMC: check implicit solver residuals and reversibility, and reject
+  unconverged steps.
+* MCLMC: tune the momentum decoherence length `L` from the draws.
+* Ensemble samplers: walkers are dependent, so R-hat and ESS over walkers
+  are optimistic; independent ensembles would fix this.
+* Summaries: MCSE columns and quantile MCSE.
+* Approximation diagnostics for INLA, nested sampling, flows, SBI, PDMP,
+  SG-MCMC and diffusion.
+* A reproducible differential test corpus against Stan 2.40 for densities,
+  gradients, transforms and generated quantities, and a generated
+  compatibility matrix of signatures and tests.
+* Native backend ABI for transforms, generated quantities and RNG.
+* Missing cumulative functions such as `bernoulli_lccdf` and the skew
+  normal family.
+
 ## Language features not yet supported
 
 Complex numbers, tuples, ODE and DAE solvers, algebraic solvers, 1D

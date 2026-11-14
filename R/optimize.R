@@ -106,7 +106,8 @@ newton_opt <- function(lpg, u, iter) {
       rn <- lpg(un)
       if (is.finite(rn$value) && rn$value >= r$value) break
       a <- a / 2
-      if (a < 1e-10) return(list(u = u, value = r$value, code = 0L, iterations = k))
+      # no ascent possible: converged only if the gradient vanishes
+      if (a < 1e-10) return(list(u = u, value = r$value, code = if (max(abs(r$grad)) < 1e-6) 0L else 2L, iterations = k))
     }
     done <- abs(rn$value - r$value) < 1e-10 * (1 + abs(r$value))
     u <- un; r <- rn
@@ -136,7 +137,9 @@ bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L
   res <- run_chains(model, 1L, seed, 1L, function(id) {
     lpg <- safe_lp(model, jacobian)
     u <- if (is.null(mode)) {
-      optimize_u(lpg, find_init(model, 2, 1L), "lbfgs", 2000L, 1e7, 1e-12)$u
+      op <- optimize_u(lpg, find_init(model, 2, 1L), "lbfgs", 2000L, 1e7, 1e-12)
+      if (op$code != 0L) warning(sprintf("the optimizer did not converge (code %d); the Laplace approximation may be centered away from the mode", op$code), call. = FALSE)
+      op$u
     } else if (inherits(mode, "bayescomp_fit")) {
       as.vector(mode$unconstrained[[1L]][1L, ])
     } else {

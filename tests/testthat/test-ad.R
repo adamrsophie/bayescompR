@@ -7,7 +7,7 @@ test_that("elementwise math functions have correct gradients", {
   domain <- list(sqrt = "pos", log = "pos", log2 = "pos", log10 = "pos", log1m = "unit", logit = "unit",
                  inv_sqrt = "pos", acosh = "ge1", asin = "unit", acos = "unit", atanh = "unit",
                  lgamma = "pos", tgamma = "pos", digamma = "pos", trigamma = "pos", inv_Phi = "unit",
-                 std_normal_qf = "unit", log1m_exp = "default", lambert_w0 = "pos", cbrt = "pos")
+                 std_normal_qf = "unit", log1m_exp = "default", lambert_w0 = "pos", cbrt = "pos", inv_erfc = "unit")
   skip_fns <- c("floor", "ceil", "round", "trunc", "step", "fabs", "lambert_wm1", "std_normal_log_qf")
   for (nm in setdiff(names(unary_defs), skip_fns)) {
     x <- pts[[domain[[nm]] %||% "default"]]
