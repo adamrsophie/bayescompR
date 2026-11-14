@@ -30,7 +30,9 @@ size and inverse metric of each chain as JSON (\verb{<file>_metric.json}, as
 CmdStan's \code{save_metric}); such a file can be given to
 \code{bayescomp_sample(inv_metric = )}. Fits sampled with
 \code{save_diagnostics = TRUE} also get \verb{<file>_diagnostic.csv} (CmdStan's
-\code{diagnostic_file}).}
+\code{diagnostic_file}). Programs with \code{profile} blocks also get
+\verb{<file>_profile.csv} (CmdStan's \code{profile_file}) from element \code{profile}
+of the fit.}
 
 \item{files}{Paths of CSV files, one per chain.}
 

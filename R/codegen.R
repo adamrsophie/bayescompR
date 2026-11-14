@@ -10,6 +10,9 @@
 vsym <- function(name) as.name(paste0("V.", name))
 cl <- function(f, ...) as.call(c(list(f), list(...)))
 cl_list <- function(f, args) as.call(c(list(f), args))
+prof_state <- new.env(parent = emptyenv())
+prof_counter <- function() { prof_state$n <- (prof_state$n %||% 0L) + 1L; prof_state$n }
+
 blk <- function(stmts) as.call(c(list(as.name("{")), stmts))
 CTX <- quote(.ctx)
 
@@ -302,7 +305,16 @@ cg_stmt <- function(st, ctx) {
       }
       out
     },
-    block_stmt = list(blk(cg_stmts(st$body, ctx))),
+    block_stmt = {
+      body <- cg_stmts(st$body, ctx)
+      if (!is.null(st$profile)) {
+        # profile("name") { }: time each execution (an early return or break
+        # skips the record)
+        tv <- as.name(sprintf(".prof_%d", prof_counter()))
+        body <- c(list(cl(as.name("<-"), tv, cl(rt_profile_start))), body, list(cl(rt_profile_end, st$profile, tv)))
+      }
+      list(blk(body))
+    },
     assign = {
       lhs <- st$lhs
       rhs <- st$rhs

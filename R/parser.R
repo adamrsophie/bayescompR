@@ -425,7 +425,7 @@ parse_statement <- function(p, block) {
         expect(p, ")")
         body <- parse_statement(p, block)
         if (body$kind != "block_stmt") stop_syntax("profile needs a block in braces", loc)
-        return(list(kind = "block_stmt", body = body$body, loc = loc))
+        return(list(kind = "block_stmt", body = body$body, profile = s$value, loc = loc))
       },
       "target" = {
         if (tk_is(p, "+=", k = 1L)) {

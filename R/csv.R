@@ -22,7 +22,9 @@
 #'   CmdStan's `save_metric`); such a file can be given to
 #'   `bayescomp_sample(inv_metric = )`. Fits sampled with
 #'   `save_diagnostics = TRUE` also get `<file>_diagnostic.csv` (CmdStan's
-#'   `diagnostic_file`).
+#'   `diagnostic_file`). Programs with `profile` blocks also get
+#'   `<file>_profile.csv` (CmdStan's `profile_file`) from element `profile`
+#'   of the fit.
 #' @param sig_figs Significant digits of the values (CmdStan's default is
 #'   8; 17 or more round trips exactly).
 #' @param files Paths of CSV files, one per chain.
@@ -50,6 +52,12 @@ bayescomp_write_csv <- function(fit, dir = ".", basename = "output", sig_figs = 
     for (c in seq_len(chains))
       bayescomp_write_data(list(stepsize = fit$step_size[c], metric_type = fit$config$metric %||% "diag_e", inv_metric = fit$inv_metric[[c]]),
                            paste0(stem[c], "_metric.json"))
+  }
+  if (!is.null(fit$profile)) {
+    for (c in seq_len(chains)) {
+      p <- fit$profile[fit$profile$chain == c, -1L, drop = FALSE]
+      if (nrow(p)) utils::write.csv(p, paste0(stem[c], "_profile.csv"), row.names = FALSE, quote = FALSE)
+    }
   }
   if (!is.null(fit$single_paths)) {
     for (i in seq_along(fit$single_paths)) {

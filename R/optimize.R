@@ -284,6 +284,7 @@ make_fit_extra <- function(model, res, cfg, method, seed, elapsed) {
   draws[, 1L, -1L] <- r$gq
   structure(list(draws = draws, sampler_diagnostics = NULL, method = method, model = model,
                  n_warmup_saved = 0L, step_size = NA_real_, inv_metric = list(r$inv_metric),
-                 unconstrained = list(r$q), time = list(total = elapsed), config = cfg, seed = seed),
+                 unconstrained = list(r$q), time = list(total = elapsed), config = cfg, seed = seed,
+                 profile = profile_of(res)),
             class = "bayescomp_fit")
 }

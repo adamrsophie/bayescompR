@@ -7,15 +7,22 @@
 bayescomp_diagnose(fit, quiet = FALSE)
 }
 \arguments{
-\item{fit}{A \code{bayescomp_fit} from \code{\link[=bayescomp_sample]{bayescomp_sample()}}.}
+\item{fit}{A \code{bayescomp_fit} from \code{\link[=bayescomp_sample]{bayescomp_sample()}}, or the names of
+Stan CSV files (for example from CmdStan).}
 
-\item{quiet}{Do not print messages.}
+\item{quiet}{Do not print the report.}
 }
 \value{
-A list with \code{num_divergent}, \code{num_max_treedepth} and \code{ebfmi}.
+A list with \code{num_divergent}, \code{num_max_treedepth}, \code{ebfmi} (per
+chain), \code{ebfmi_all}, \code{low_ess} and \code{high_rhat} (parameter names), and
+\code{problems}
+(\code{TRUE} when any check failed), invisibly.
 }
 \description{
-Counts divergent transitions and transitions that saturated the maximum
-tree depth, and computes the energy Bayesian fraction of missing
-information (E-BFMI) per chain.
+Checks what CmdStan's \code{diagnose} utility checks: transitions that
+saturated the maximum tree depth, divergent transitions, the energy
+Bayesian fraction of missing information (E-BFMI, over all chains as
+CmdStan computes it, and per chain), effective sample sizes below 0.001
+per draw, and rank normalized split R-hat above 1.01, and prints
+CmdStan's report.
 }

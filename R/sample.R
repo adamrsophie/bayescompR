@@ -263,7 +263,10 @@ run_chains <- function(model, chains, seed, cores, f) {
     # each chain sees its own CHAIN_ID, so transformed data is rebuilt
     if (rebind) bind_chain_id(model, i)
     assign(".Random.seed", streams[[i]], envir = globalenv())
-    f(i)
+    profile_reset()
+    r <- f(i)
+    if (is.list(r)) r$profile <- profile_table()
+    r
   }
   if (cores > 1L && chains > 1L) {
     out <- if (parallel_backend() == "fork") run_forked(chains, min(cores, chains), one)

@@ -359,3 +359,29 @@ rt_truncate <- function(ctx, y, lo, hi, lcdf, lccdf, args, discrete, fam) {
   }
   invisible(NULL)
 }
+
+# ---- profiling -----------------------------------------------------------------
+# profile("name") { } blocks accumulate their run time and number of runs,
+# split by whether automatic differentiation was active (CmdStan's
+# autodiff_calls and no_autodiff_calls)
+.prof <- new.env(parent = emptyenv())
+rt_profile_start <- function() proc.time()[["elapsed"]]
+rt_profile_end <- function(name, t0) {
+  dt <- proc.time()[["elapsed"]] - t0
+  r <- .prof[[name]] %||% c(total = 0, ad_time = 0, autodiff_calls = 0, no_autodiff_calls = 0)
+  ad <- !is.null(.ad$tape)
+  r[["total"]] <- r[["total"]] + dt
+  if (ad) { r[["ad_time"]] <- r[["ad_time"]] + dt; r[["autodiff_calls"]] <- r[["autodiff_calls"]] + 1 }
+  else r[["no_autodiff_calls"]] <- r[["no_autodiff_calls"]] + 1
+  assign(name, r, envir = .prof)
+  invisible()
+}
+profile_reset <- function() rm(list = ls(.prof, all.names = TRUE), envir = .prof)
+profile_table <- function() {
+  nm <- sort(ls(.prof, all.names = TRUE))
+  if (!length(nm)) return(NULL)
+  v <- do.call(rbind, lapply(nm, function(n) .prof[[n]]))
+  data.frame(name = nm, thread_id = 1L, total_time = signif(v[, "total"], 6), forward_time = signif(v[, "ad_time"], 6), reverse_time = 0,
+             chain_stack = 0L, no_chain_stack = 0L, autodiff_calls = as.integer(v[, "autodiff_calls"]),
+             no_autodiff_calls = as.integer(v[, "no_autodiff_calls"]), row.names = NULL)
+}

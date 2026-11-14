@@ -22,7 +22,8 @@ make_fit <- function(model, res, cfg, method, seed, elapsed) {
     unconstrained = lapply(res, `[[`, "q"),
     time = list(chains = do.call(rbind, lapply(res, `[[`, "time")), total = elapsed),
     config = cfg, seed = if (is.null(seed)) attr(res, "seed") else seed,
-    diagnostics = if (!is.null(res[[1L]]$diagnostics)) lapply(res, `[[`, "diagnostics")),
+    diagnostics = if (!is.null(res[[1L]]$diagnostics)) lapply(res, `[[`, "diagnostics"),
+    profile = profile_of(res)),
     class = c("bayescomp_fit"))
 }
 
@@ -171,16 +172,25 @@ print.bayescomp_fit <- function(x, variables = NULL, max_rows = 10L, ...) {
 
 #' Sampler diagnostics
 #'
-#' Counts divergent transitions and transitions that saturated the maximum
-#' tree depth, and computes the energy Bayesian fraction of missing
-#' information (E-BFMI) per chain.
+#' Checks what CmdStan's `diagnose` utility checks: transitions that
+#' saturated the maximum tree depth, divergent transitions, the energy
+#' Bayesian fraction of missing information (E-BFMI, over all chains as
+#' CmdStan computes it, and per chain), effective sample sizes below 0.001
+#' per draw, and rank normalized split R-hat above 1.01, and prints
+#' CmdStan's report.
 #'
-#' @param fit A `bayescomp_fit` from [bayescomp_sample()].
-#' @param quiet Do not print messages.
-#' @return A list with `num_divergent`, `num_max_treedepth` and `ebfmi`.
+#' @param fit A `bayescomp_fit` from [bayescomp_sample()], or the names of
+#'   Stan CSV files (for example from CmdStan).
+#' @param quiet Do not print the report.
+#' @return A list with `num_divergent`, `num_max_treedepth`, `ebfmi` (per
+#'   chain), `ebfmi_all`, `low_ess` and `high_rhat` (parameter names), and
+#'   `problems`
+#'   (`TRUE` when any check failed), invisibly.
 #' @export
 bayescomp_diagnose <- function(fit, quiet = FALSE) {
+  if (is.character(fit)) fit <- bayescomp_read_csv(fit)
   sd <- fit$sampler_diagnostics[kept(fit), , , drop = FALSE]
+  nt <- dim(sd)[1L] * dim(sd)[2L]
   div <- sum(sd[, , "divergent__"], na.rm = TRUE)
   mtd <- fit$config$max_treedepth %||% 10L
   hit <- if (identical(fit$config$algorithm, "nuts")) sum(sd[, , "treedepth__"] >= mtd, na.rm = TRUE) else 0L
@@ -188,13 +198,121 @@ bayescomp_diagnose <- function(fit, quiet = FALSE) {
     if (length(e) < 2L || anyNA(e)) return(NA_real_)
     sum(diff(e)^2) / length(e) / stats::var(e)
   })
-  r <- list(num_divergent = as.integer(div), num_max_treedepth = as.integer(hit), ebfmi = ebfmi)
+  e_all <- as.vector(sd[, , "energy__"])
+  ebfmi_all <- if (length(e_all) > 1L && !anyNA(e_all)) mean(diff(e_all)^2) / stats::var(e_all) else NA_real_
+  a <- bayescomp_draws(fit)
+  vars <- setdiff(dimnames(a)[[3L]], "lp__")
+  vars <- vars[!grepl("__$", vars)]
+  chains <- dim(a)[2L]
+  low <- character(0); high <- character(0)
+  for (v in vars) {
+    x <- matrix(a[, , v], dim(a)[1L])
+    if (!all(is.finite(x)) || diff(range(x)) == 0) next
+    if (min(bayescomp_ess_bulk(x), bayescomp_ess_tail(x)) / length(x) < 0.001) low <- c(low, v)
+    if (chains > 1L && bayescomp_rhat(x) > 1.01) high <- c(high, v)
+  }
+  bad_e <- isTRUE(ebfmi_all < 0.3)
+  r <- list(num_divergent = as.integer(div), num_max_treedepth = as.integer(hit), ebfmi = ebfmi, ebfmi_all = ebfmi_all,
+            low_ess = low, high_rhat = high,
+            problems = div > 0 || hit > 0 || bad_e || length(low) > 0 || length(high) > 0)
   if (!quiet) {
-    cat(sprintf("Divergent transitions: %d\n", r$num_divergent))
-    cat(sprintf("Transitions at maximum tree depth: %d\n", r$num_max_treedepth))
-    cat(sprintf("E-BFMI per chain: %s\n", paste(formatC(ebfmi, digits = 3, format = "f"), collapse = ", ")))
+    pct <- function(k) sprintf("%d of %d (%s%%)", as.integer(k), as.integer(nt), format(100 * k / nt, digits = 6))
+    cat("Checking sampler transitions treedepth.\n")
+    if (hit > 0) cat(sprintf("%s transitions hit the maximum treedepth limit of %d, or 2^%d leapfrog steps.\nTrajectories that are prematurely terminated due to this limit will result in slow exploration.\nFor optimal performance, increase this limit.\n\n", pct(hit), mtd, mtd))
+    else cat("Treedepth satisfactory for all transitions.\n\n")
+    cat("Checking sampler transitions for divergences.\n")
+    if (div > 0) cat(sprintf("%s transitions ended with a divergence.\nThese divergent transitions indicate that HMC is not fully able to explore the posterior distribution.\nTry increasing adapt delta closer to 1.\nIf this doesn't remove all divergences, try to reparameterize the model.\n\n", pct(div)))
+    else cat("No divergent transitions found.\n\n")
+    cat("Checking E-BFMI - sampler transitions HMC potential energy.\n")
+    if (bad_e) {
+      cat(sprintf("The E-BFMI, %s, is below the nominal threshold of 0.3 which suggests that HMC may have trouble exploring the target distribution.\nIf possible, try to reparameterize the model.\n\n", format(ebfmi_all, digits = 6)))
+    } else cat("E-BFMI satisfactory.\n\n")
+    if (length(low)) cat(sprintf("The following parameters had fewer than 0.001 effective draws per transition:\n  %s\nSuch low values indicate that the effective sample size estimators may be biased high and actual performance may be substantially lower than quoted.\n\n", paste(low, collapse = ", ")))
+    else cat("Rank-normalized split effective sample size satisfactory for all parameters.\n\n")
+    if (length(high)) cat(sprintf("The following parameters had rank-normalized split R-hat greater than 1.01:\n  %s\nSuch high values indicate incomplete mixing and biased estimation.\nYou should consider regularizing your model with additional prior information or a more effective parameterization.\n\n", paste(high, collapse = ", ")))
+    else cat("Rank-normalized split R-hat values satisfactory for all parameters.\n\n")
+    cat(if (r$problems) "Processing complete.\n" else "Processing complete, no problems detected.\n")
   }
   invisible(r)
+}
+
+#' Posterior summary in the style of CmdStan's stansummary
+#'
+#' Prints and returns the table of CmdStan's `stansummary` utility: mean,
+#' Monte Carlo standard error, standard deviation, median absolute
+#' deviation, percentiles, bulk and tail effective sample sizes, bulk ESS per
+#' second of sampling and R-hat, for `lp__`, the sampler diagnostics and
+#' every variable.
+#'
+#' @param x A `bayescomp_fit` or the names of Stan CSV files.
+#' @param percentiles Percentiles to report (stansummary's `-p`).
+#' @param sig_figs Significant figures (`-s`).
+#' @param include_param Variables to include (`-i`); base names select all
+#'   elements. `NULL` includes all.
+#' @param autocorr A chain number: also print the autocorrelations of that
+#'   chain's draws (`-a`).
+#' @param csv_file File to write the table to (`-c`).
+#' @return The table as a data frame, invisibly.
+#' @examples
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
+#'                         seed = 1, refresh = 0)
+#' bayescomp_stansummary(fit)
+#' @export
+bayescomp_stansummary <- function(x, percentiles = c(5, 50, 95), sig_figs = 2L, include_param = NULL,
+                                  autocorr = NULL, csv_file = NULL) {
+  fit <- if (is.character(x)) bayescomp_read_csv(x) else x
+  if (!inherits(fit, "bayescomp_fit")) stop("'x' must be a bayescomp_fit or Stan CSV file names", call. = FALSE)
+  if (any(percentiles < 0 | percentiles > 100)) stop("'percentiles' must be in [0, 100]", call. = FALSE)
+  a <- bayescomp_draws(fit, include_param)
+  if (!is.null(include_param) && !("lp__" %in% dimnames(a)[[3L]])) a <- a
+  sd <- if (!is.null(fit$sampler_diagnostics)) fit$sampler_diagnostics[kept(fit), , , drop = FALSE]
+  all_vars <- c(if ("lp__" %in% dimnames(a)[[3L]]) "lp__", if (!is.null(sd) && is.null(include_param)) dimnames(sd)[[3L]],
+                setdiff(dimnames(a)[[3L]], "lp__"))
+  get <- function(v) if (v %in% dimnames(a)[[3L]]) matrix(a[, , v], dim(a)[1L]) else matrix(sd[, , v], dim(sd)[1L])
+  mcmc <- fit$method %in% mcmc_methods
+  samp_time <- if (!is.null(fit$time$chains)) sum(fit$time$chains[, "sampling"], na.rm = TRUE) else NA_real_
+  rows <- lapply(all_vars, function(v) {
+    m <- get(v)
+    xv <- as.vector(m)
+    # constant within every chain (such as stepsize__): no ESS or R-hat
+    const <- !all(is.finite(xv)) || all(apply(m, 2L, function(cc) diff(range(cc)) == 0))
+    q <- stats::quantile(xv, percentiles / 100, names = FALSE, na.rm = TRUE)
+    eb <- if (mcmc && !const) bayescomp_ess_bulk(m) else NaN
+    c(Mean = mean(xv), MCSE = if (mcmc && !const) bayescomp_mcse_mean(m) else NaN, StdDev = stats::sd(xv),
+      MAD = stats::mad(xv), q, ESS_bulk = eb, ESS_tail = if (mcmc && !const) bayescomp_ess_tail(m) else NaN,
+      `ESS_bulk/s` = eb / samp_time, R_hat = if (mcmc && !const) bayescomp_rhat(m) else NaN)
+  })
+  tab <- as.data.frame(do.call(rbind, rows), check.names = FALSE)
+  names(tab)[4L + seq_along(percentiles)] <- paste0(formatC(percentiles, format = "g"), "%")
+  rownames(tab) <- all_vars
+  chains <- dim(a)[2L]
+  cat(sprintf("Inference for Stan model: %s\n", fit$model$name %||% "bayescompR_model"))
+  cat(sprintf("%d chains: each with iter=%d; warmup=%d; thin=%d; %d iterations saved.\n\n", chains,
+              as.integer(fit$config$iter_sampling %||% dim(a)[1L]), as.integer(fit$config$iter_warmup %||% 0L),
+              as.integer(fit$config$thin %||% 1L), dim(a)[1L]))
+  if (!is.null(fit$time$chains)) {
+    tw <- fit$time$chains[, "warmup"]; ts <- fit$time$chains[, "sampling"]
+    cat(sprintf("Warmup took (%s) seconds, %s seconds total\n", paste(signif(tw, 2), collapse = ", "), signif(sum(tw), 2)))
+    cat(sprintf("Sampling took (%s) seconds, %s seconds total\n\n", paste(signif(ts, 2), collapse = ", "), signif(sum(ts), 2)))
+  }
+  shown <- tab
+  for (j in seq_along(shown)) shown[[j]] <- formatC(signif(tab[[j]], sig_figs), digits = sig_figs, format = "g")
+  for (j in c("ESS_bulk", "ESS_tail")) shown[[j]] <- ifelse(is.finite(tab[[j]]), formatC(round(tab[[j]]), format = "d"), "nan")
+  print(shown, right = TRUE, quote = FALSE)
+  cat("\nSamples were drawn using", fit$config$algorithm %||% fit$method, "\n")
+  cat("MCSE and ESS were computed with rank normalization; R_hat is the rank normalized split R-hat.\n")
+  if (!is.null(autocorr)) {
+    ch <- as.integer(autocorr)
+    if (ch < 1L || ch > chains) stop("'autocorr' must be a chain number", call. = FALSE)
+    vs <- setdiff(dimnames(a)[[3L]], "lp__")
+    ac <- vapply(vs, function(v) stats::acf(a[, ch, v], lag.max = min(20L, dim(a)[1L] - 1L), plot = FALSE, na.action = stats::na.pass)$acf[, 1, 1],
+                 numeric(min(20L, dim(a)[1L] - 1L) + 1L))
+    cat(sprintf("\nDisplaying the autocorrelations for chain %d:\n\n", ch))
+    print(round(cbind(Lag = seq_len(nrow(ac)) - 1L, ac), sig_figs + 1L), row.names = FALSE)
+  }
+  if (!is.null(csv_file)) utils::write.csv(cbind(name = all_vars, tab), csv_file, row.names = FALSE, quote = TRUE)
+  invisible(tab)
 }
 
 #' @rdname bayescomp_draws
@@ -302,4 +420,11 @@ plot.bayescomp_fit <- function(x, variables = NULL, type = c("trace", "density",
     }
   }
   invisible(x)
+}
+
+# profile tables of the chains, with a chain column
+profile_of <- function(res) {
+  p <- lapply(seq_along(res), function(i) if (!is.null(res[[i]]$profile)) cbind(chain = i, res[[i]]$profile))
+  p <- Filter(Negate(is.null), p)
+  if (length(p)) do.call(rbind, p) else NULL
 }

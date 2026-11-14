@@ -82,3 +82,32 @@ test_that("Laplace takes its mode from files", {
   expect_equal(bayescomp_laplace(m, mode = j, draws = 20, seed = 3)$draws, a$draws)
   expect_true(all(is.nan(bayescomp_laplace(m, mode = o, draws = 5, seed = 1, calculate_lp = FALSE)$draws[, 1L, "log_p__"])))
 })
+
+test_that("profile blocks are timed and written as CmdStan's profile file", {
+  m <- bayescomp_model("parameters { real mu; } model { profile(\"prior\") { mu ~ normal(0, 1); } }
+                        generated quantities { profile(\"gq\") { real z = mu; } }")
+  f <- bayescomp_sample(m, chains = 1, iter_warmup = 20, iter_sampling = 10, seed = 1, refresh = 0)
+  p <- f$profile
+  expect_setequal(p$name, c("prior", "gq"))
+  expect_identical(p$no_autodiff_calls[p$name == "gq"], 10L)
+  expect_gt(p$autodiff_calls[p$name == "prior"], 0L)
+  d <- tempfile()
+  bayescomp_write_csv(f, d)
+  x <- readLines(file.path(d, "output_profile.csv"))
+  expect_identical(x[1L], "name,thread_id,total_time,forward_time,reverse_time,chain_stack,no_chain_stack,autodiff_calls,no_autodiff_calls")
+})
+
+test_that("stansummary and diagnose reports follow CmdStan", {
+  m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+  f <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100, seed = 1, refresh = 0)
+  out <- utils::capture.output(tab <- bayescomp_stansummary(f, percentiles = c(10, 90), csv_file = csv <- tempfile()))
+  expect_identical(rownames(tab), c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__", "mu"))
+  expect_identical(names(tab), c("Mean", "MCSE", "StdDev", "MAD", "10%", "90%", "ESS_bulk", "ESS_tail", "ESS_bulk/s", "R_hat"))
+  expect_true(is.nan(tab["stepsize__", "ESS_bulk"]))
+  expect_equal(tab["mu", "Mean"], mean(bayescomp_draws(f, "mu")))
+  expect_identical(nrow(utils::read.csv(csv)), 8L)
+  rep <- utils::capture.output(d <- bayescomp_diagnose(bayescomp_write_csv(f, tempfile())))
+  expect_identical(rep[1L], "Checking sampler transitions treedepth.")
+  expect_true("Rank-normalized split effective sample size satisfactory for all parameters." %in% rep)
+  expect_equal(d$ebfmi_all, {e <- as.vector(f$sampler_diagnostics[, , "energy__"]); mean(diff(e)^2) / stats::var(e)}, tolerance = 1e-6)
+})

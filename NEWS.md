@@ -31,6 +31,11 @@ First release.
   `calculate_lp`, `save_single_paths`, `init_alpha` and the L-BFGS
   tolerances) and records the path of each draw; Laplace takes its mode from
   a file and has `calculate_lp`.
+* `profile()` blocks are timed (element `profile` of a fit, written as
+  CmdStan's profile file). `bayescomp_stansummary()` reproduces CmdStan's
+  `stansummary` (percentiles, significant figures, autocorrelations, CSV
+  output) and `bayescomp_diagnose()` CmdStan's `diagnose` report; both take
+  CSV files.
 * Library calls are checked against the signatures of stanc 2.40, so calls
   stanc rejects (such as `sum()` of a two dimensional array) are rejected.
 * Exact gradients of `svd_U()`, `svd_V()`, `qr_Q()` and `qr_R()` of tall
