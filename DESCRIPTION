@@ -1,0 +1,44 @@
+Package: bayescompR
+Title: A Pure R Implementation of the Stan Probabilistic Programming Language
+Version: 0.1.0
+Authors@R:
+    person("Adam R", "Sophie", email = "adamrsophie@gmail.com",
+           role = c("aut", "cre", "cph"))
+Description: An independent implementation, written entirely in R, of the
+    Stan probabilistic programming language and its inference algorithms.
+    Stan programs are tokenized, parsed into a typed abstract syntax tree,
+    checked by a semantic analyzer, and compiled into R closures that run on
+    a reverse mode automatic differentiation tape. Constrained parameters are
+    mapped to an unconstrained space with the Jacobian adjustments used by
+    Stan. Inference includes the No-U-Turn sampler with multinomial
+    trajectory sampling and windowed step size and metric adaptation, static
+    Hamiltonian Monte Carlo, maximum a posteriori and maximum likelihood
+    optimization, Laplace approximation, and mean field and full rank
+    automatic differentiation variational inference. Posterior summaries use
+    rank normalized split R-hat and bulk and tail effective sample sizes.
+    No C++ compiler, Stan installation, or external inference engine is
+    required. This package is not affiliated with or endorsed by the Stan
+    Development Team or NumFOCUS.
+License: GPL-3
+Encoding: UTF-8
+Language: en-US
+Roxygen: list(markdown = TRUE)
+Depends:
+    R (>= 4.3.0)
+Imports:
+    graphics,
+    grDevices,
+    Matrix,
+    parallel,
+    stats,
+    utils
+Suggests:
+    knitr,
+    posterior,
+    rmarkdown,
+    testthat (>= 3.0.0)
+VignetteBuilder: knitr
+Config/testthat/edition: 3
+URL: https://adamrsophie.github.io/bayescompR/,
+    https://github.com/adamrsophie/bayescompR
+BugReports: https://github.com/adamrsophie/bayescompR/issues

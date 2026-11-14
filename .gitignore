@@ -1,0 +1,15 @@
+.Rhistory
+.RData
+.Rproj.user
+*.Rcheck/
+bayescompR_*.tar.gz
+.DS_Store
+docs/
+documentation/
+.gstack/
+.claude/
+tests/testthat/_problems/
+tests/testthat/testthat-problems.rds
+Rplots.pdf
+vignettes/*.html
+vignettes/*.R
