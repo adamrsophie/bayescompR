@@ -87,14 +87,20 @@ small models with expensive gradients they can be competitive.
 
 ## Parallel chains
 
-`cores` runs chains in forked processes (not on Windows). Results are
-identical to sequential runs with the same `seed`.
+Chains run one after another by default (`cores = 1`). Set `cores` to run
+them in parallel in forked processes. Forking is not available on Windows,
+where chains always run sequentially, whatever the value of `cores`. Each
+chain has its own random number stream derived from `seed`, so the draws are
+identical whether the chains run in parallel or not.
 
 ```{r, eval = FALSE}
 fit <- bayescomp_sample(model, chains = 4, cores = 4, seed = 1)
 ```
 
-`bayescomp_smc()` also takes `cores` for the particle moves.
+The other samplers that take `cores` (for example `bayescomp_gibbs()`,
+`bayescomp_pdmp()` and `bayescomp_riemannian()`) also default to 1, and
+`bayescomp_smc()` and `bayescomp_ep()` use it for the particle moves and the
+site updates.
 
 ## Native backends
 
