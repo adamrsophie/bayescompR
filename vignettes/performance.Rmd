@@ -97,9 +97,14 @@ fit <- bayescomp_sample(model, chains = 4, cores = 4, seed = 1)
 
 ## Native backends
 
-For large models the interpreter overhead dominates. The native backends
-compile the IR to machine code and are typically one to three orders of
-magnitude faster per gradient:
+For models whose likelihood is written as loops the interpreter overhead
+dominates, and the native backends help most. Measured on an Apple silicon
+laptop for a normal linear regression with N = 5000, one gradient takes
+939 ms in R and 2.7 ms with Cranelift when the likelihood is a loop over
+observations, and 0.56 ms in R and 0.23 ms with Cranelift when it is
+vectorized. NUTS on the vectorized model runs about 1.7 times faster end to
+end, since the sampler itself stays in R. Vectorize first; then try a
+native backend:
 
 ```{r, eval = FALSE}
 library(bayescompRCranelift)

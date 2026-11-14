@@ -22,11 +22,23 @@ machine code:
 | Backend | Package | Requires |
 |---------|---------|----------|
 | `"r"` | bayescompR | nothing beyond R |
-| `"cranelift"` | bayescompRCranelift | a prebuilt binary or a Rust toolchain |
-| `"llvm"` | bayescompRLLVM | a prebuilt binary or LLVM |
+| `"cranelift"` | bayescompRCranelift | a Rust toolchain (Linux, macOS, Windows) |
+| `"llvm"` | bayescompRLLVM | a Rust toolchain and LLVM 18, 20, 21 or 22 (Linux, macOS) |
 
-bayescompR itself has no native dependencies. Installing a backend package
-registers its backend when the package is loaded.
+bayescompR itself has no native dependencies. Both native packages live in
+the [bayescomp-native-rs](https://github.com/adamrsophie/bayescomp-native-rs)
+repository and install from source:
+
+```{r, eval = FALSE}
+remotes::install_github("adamrsophie/bayescomp-native-rs", subdir = "rpkg/bayescompRCranelift")
+remotes::install_github("adamrsophie/bayescomp-native-rs", subdir = "rpkg/bayescompRLLVM")
+```
+
+Loading a backend package registers its backend. In this version the
+native backends provide the log density and its gradient; the native
+lowering does not yet cover user defined functions, truncation, matrix
+division and a few other constructs, and such programs are refused with
+`bayescomp_unsupported_error` when the model is built.
 
 ```{r}
 bayescomp_backends()
@@ -157,7 +169,7 @@ provide it, but only when the user asks:
 
 ```{r, eval = FALSE}
 m <- bayescomp_model(code, data, backend = "cranelift")
-#> Error: backend 'cranelift' does not provide generated_quantities, rng;
+#> Error: backend 'cranelift' does not provide constrain, generated_quantities, rng;
 #>   set allow_fallback = TRUE to use the R implementation for them
 m <- bayescomp_model(code, data, backend = "cranelift", allow_fallback = TRUE)
 m$provenance   # which backend provides each capability

@@ -70,7 +70,7 @@ bayescomp_diagnose(fit)
 | Approximations | `bayescomp_optimize()`, `bayescomp_laplace()`, `bayescomp_variational()` (ADVI), `bayescomp_pathfinder()` (also as MCMC initializer), `bayescomp_flow_vi()`, `bayescomp_ep()`, `bayescomp_inla()`, `bayescomp_npe()`, `bayescomp_diffusion()` (experimental), `bayescomp_generate_quantities()` |
 | Model interface | `bayescomp_log_prob()`, `bayescomp_grad_log_prob()`, `bayescomp_constrain()`, `bayescomp_unconstrain()` |
 | Diagnostics | rank normalized split R-hat, bulk, tail and quantile ESS, MCSE, divergences, tree depth, E-BFMI; trace, density, rank and ESS plots |
-| Backends | typed versioned IR (`bayescomp_ir()`), backend registry with explicit fallback and `bayescomp_validate_backend()`; native backends in [bayescompRCranelift](https://github.com/adamrsophie/bayescompRCranelift) and [bayescompRLLVM](https://github.com/adamrsophie/bayescompRLLVM) |
+| Backends | typed versioned IR (`bayescomp_ir()`), backend registry with explicit fallback and `bayescomp_validate_backend()`; native backends bayescompRCranelift and bayescompRLLVM in [bayescomp-native-rs](https://github.com/adamrsophie/bayescomp-native-rs) |
 
 Features of Stan that are not implemented (complex numbers, tuples, ODE and
 DAE solvers, algebraic solvers, 1D integrators, HMMs, `map_rect` and
