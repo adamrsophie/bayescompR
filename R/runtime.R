@@ -1,0 +1,279 @@
+# Runtime support for compiled Stan programs: declarations, indexing,
+# assignment, loops, the target accumulator, printing and data conversion.
+
+# shape of a declared variable's storage
+decl_shape <- function(adims, eshape) {
+  d <- c(adims, eshape)
+  as.integer(d)
+}
+
+# new uninitialized variable (Stan fills reals with NaN)
+rt_decl <- function(base, adims, eshape) {
+  d <- decl_shape(adims, eshape)
+  if (any(d < 0L)) stop_domain(sprintf("declared size is negative (%s)", paste(d, collapse = ", ")))
+  n <- prod(d)
+  v <- if (base == "int") rep(NA_integer_, n) else rep(NaN, n)
+  if (length(d) > 1L) dim(v) <- d
+  v
+}
+
+storage_dims <- function(x) {
+  v <- val(x)
+  d <- dim(v)
+  if (is.null(d)) length(v) else d
+}
+
+# resolve index specifications to per dimension selections
+# kinds: "single", "intarray", "range", "lower", "upper", "omni"
+index_selection <- function(D, kinds, vals, what = "index") {
+  k <- length(D)
+  sel <- vector("list", k)
+  keep <- logical(k)
+  for (j in seq_len(k)) {
+    if (j > length(kinds)) {
+      sel[[j]] <- seq_len(D[j])
+      keep[j] <- TRUE
+      next
+    }
+    kd <- kinds[j]
+    v <- vals[[j]]
+    s <- switch(kd,
+      single = v,
+      intarray = v,
+      range = if (v[2L] < v[1L]) integer(0) else v[1L]:v[2L],
+      lower = if (D[j] < v) integer(0) else v:D[j],
+      upper = if (v < 1L) integer(0) else seq_len(v),
+      omni = seq_len(D[j]))
+    s <- as.integer(s)
+    if (length(s) && (any(is.na(s)) || min(s) < 1L || max(s) > D[j])) {
+      bad <- s[is.na(s) | s < 1L | s > D[j]][1L]
+      stop_domain(sprintf("%s out of range: index %s for a dimension of size %d", what, bad, D[j]))
+    }
+    sel[[j]] <- s
+    keep[j] <- kd != "single"
+  }
+  list(sel = sel, keep = keep)
+}
+
+flat_index <- function(D, sel) {
+  flat <- sel[[1L]]
+  stride <- 1L
+  if (length(D) > 1L) for (j in 2:length(D)) {
+    stride <- stride * D[j - 1L]
+    flat <- as.vector(outer(flat, (sel[[j]] - 1L) * stride, `+`))
+  }
+  as.integer(flat)
+}
+
+rt_index <- function(x, kinds, vals) {
+  D <- storage_dims(x)
+  is <- index_selection(D, kinds, vals)
+  flat <- flat_index(D, is$sel)
+  shape <- lengths(is$sel)[is$keep]
+  v <- val(x)
+  if (is.integer(v) && !is_ad(x)) {
+    out <- v[flat]
+    if (length(shape) > 1L) dim(out) <- shape
+    return(out)
+  }
+  ad_gather(x, flat, if (length(shape) > 1L) shape else NULL)
+}
+
+rt_assign_index <- function(x, kinds, vals, rhs, name) {
+  D <- storage_dims(x)
+  is <- index_selection(D, kinds, vals, what = sprintf("assignment to '%s': index", name))
+  flat <- flat_index(D, is$sel)
+  shape <- lengths(is$sel)[is$keep]
+  vr <- val(rhs)
+  rd <- if (is.null(dim(vr))) length(vr) else dim(vr)
+  if (!length(shape)) {
+    if (length(vr) != 1L) stop_shape(sprintf("assignment to '%s': a single element needs a scalar value", name))
+  } else if (!identical(as.integer(rd), as.integer(shape)) && !(length(shape) == 1L && length(vr) == shape)) {
+    stop_shape(sprintf("assignment to '%s': size mismatch, the left side selects %s but the right side has size %s",
+                       name, paste(shape, collapse = " x "), paste(rd, collapse = " x ")))
+  }
+  vx <- val(x)
+  if (is.integer(vx) && !is_ad(x)) {
+    vx[flat] <- as.integer(vr)
+    return(vx)
+  }
+  ad_scatter(x, flat, as_dbl(rhs))
+}
+
+rt_assign <- function(old, rhs, name) {
+  vo <- val(old)
+  vr <- val(rhs)
+  do <- if (is.null(dim(vo))) length(vo) else dim(vo)
+  dr <- if (is.null(dim(vr))) length(vr) else dim(vr)
+  if (!identical(as.integer(do), as.integer(dr)))
+    stop_shape(sprintf("assignment to '%s': size mismatch, the variable has size %s but the value has size %s",
+                       name, paste(do, collapse = " x "), paste(dr, collapse = " x ")))
+  if (is.integer(vo) && !is_ad(old)) return(as.integer(vr))
+  as_dbl(rhs)
+}
+
+rt_range <- function(lo, hi) if (hi < lo) integer(0) else lo:hi
+
+rt_foreach <- function(x, nd, base) {
+  v <- val(x)
+  if (nd > 0L) {
+    D <- storage_dims(x)
+    n <- D[1L]
+    return(lapply(seq_len(n), function(i) rt_index(x, "single", list(i))))
+  }
+  n <- length(v)
+  if (is.integer(v) && !is_ad(x)) return(as.list(v))
+  lapply(seq_len(n), function(i) ad_select(x, i))
+}
+
+# array expression {a, b, ...}
+rt_array <- function(items, is_int) {
+  shapes <- lapply(items, function(it) {
+    v <- val(it)
+    if (is.null(dim(v))) (if (length(v) == 1L) integer(0) else length(v)) else dim(v)
+  })
+  s1 <- shapes[[1L]]
+  for (sh in shapes[-1L]) if (!identical(as.integer(sh), as.integer(s1)))
+    stop_shape("array expression elements must all have the same size")
+  n <- length(items)
+  if (is_int) {
+    out <- unlist(lapply(items, val), use.names = FALSE)
+    out <- as.integer(out)
+    if (length(s1)) {
+      p <- layout_perm(n, s1)
+      out <- out[p]
+      dim(out) <- c(n, s1)
+    }
+    return(out)
+  }
+  cc <- ad_c(lapply(items, as_dbl))
+  if (!length(s1)) return(cc)
+  ad_gather(cc, layout_perm(n, s1), c(n, s1))
+}
+
+# row vector expression [a, b, ...]
+rt_rowvec <- function(items, rows) {
+  if (!rows) return(ad_c(lapply(items, as_dbl)))
+  lens <- vapply(items, nelem, 1L)
+  if (any(lens != lens[1L])) stop_shape("matrix expression rows must have the same size")
+  ad_transpose(ad_reshape(ad_c(lapply(items, as_dbl)), c(lens[1L], length(items))))
+}
+
+# ---- context --------------------------------------------------------------------------
+
+new_ctx <- function(jacobian = TRUE, print = TRUE, propto = FALSE) {
+  ctx <- new.env(parent = emptyenv())
+  ctx$propto <- propto
+  ctx$target <- list()
+  ctx$jacobian <- jacobian
+  ctx$print <- print
+  ctx
+}
+
+rt_target_add <- function(ctx, v) {
+  if (is.null(ctx)) stop_semantic("target can only be incremented in a log density context")
+  vv <- val(v)
+  if (any(is.nan(vv))) stop_domain("target increment is NaN")
+  n <- length(ctx$target) + 1L
+  ctx$target[[n]] <- if (length(vv) == 1L) v else ad_sum(as_dbl(v))
+  invisible(NULL)
+}
+
+rt_target_get <- function(ctx) {
+  if (!length(ctx$target)) return(0)
+  ad_sum_list(ctx$target)
+}
+
+fmt_value <- function(x) {
+  v <- val(x)
+  if (length(v) == 1L && is.null(dim(v))) return(format_scalar(v))
+  d <- dim(v)
+  if (is.null(d)) return(paste0("[", paste(vapply(v, format_scalar, ""), collapse = ","), "]"))
+  if (length(d) == 2L) {
+    rows <- vapply(seq_len(d[1L]), function(i) paste0("[", paste(vapply(v[i, ], format_scalar, ""), collapse = ","), "]"), "")
+    return(paste0("[", paste(rows, collapse = ","), "]"))
+  }
+  paste0("[", paste(vapply(as.vector(v), format_scalar, ""), collapse = ","), "]")
+}
+format_scalar <- function(v) {
+  if (is.integer(v)) return(as.character(v))
+  if (is.nan(v)) return("nan")
+  if (is.infinite(v)) return(if (v > 0) "inf" else "-inf")
+  format(v, digits = 6)
+}
+
+rt_print <- function(ctx, items) {
+  if (!is.null(ctx) && isFALSE(ctx$print)) return(invisible(NULL))
+  msg <- paste(vapply(items, function(it) if (is.character(it)) it else fmt_value(it), ""), collapse = "")
+  cat(msg, "\n", sep = "")
+  invisible(NULL)
+}
+
+rt_reject <- function(items, fatal = FALSE) {
+  msg <- paste(vapply(items, function(it) if (is.character(it)) it else fmt_value(it), ""), collapse = "")
+  stop_reject(msg, fatal = fatal)
+}
+
+# a parameter: slice the unconstrained vector, constrain, add the Jacobian
+rt_param <- function(u, decl, args, ctx) {
+  n <- decl$free_size
+  ui <- if (n > 0L) ad_gather(u, decl$offset + seq_len(n)) else numeric(0)
+  for (nm in names(args)) {
+    a <- args[[nm]]
+    if (any(is.na(val(a)))) stop_domain(sprintf("%s bound of parameter '%s' is NaN", nm, decl$name))
+  }
+  r <- constrain_variable(ui, decl, args)
+  if (isTRUE(ctx$jacobian) && !identical(r$lj, 0)) rt_target_add(ctx, r$lj)
+  r$x
+}
+
+# validate a top level variable at the end of its block
+rt_check <- function(x, decl, args, block) {
+  v <- val(x)
+  if (block == "transformed parameters" && any(is.nan(v))) {
+    i <- which(is.nan(v))[1L]
+    stop_domain(sprintf("%s variable '%s' is nan at element %d", block, decl$name, i))
+  }
+  m <- check_variable(v, decl, lapply(args, val))
+  if (!is.null(m)) stop_domain(sprintf("%s variable '%s' %s", block, decl$name, m))
+  invisible(NULL)
+}
+
+# run a user density with normalization on (called as foo_lpdf)
+rt_normalized <- function(expr, ctx) {
+  old <- ctx$propto
+  ctx$propto <- FALSE
+  on.exit(ctx$propto <- old)
+  expr
+}
+
+# truncated density normalization
+rt_truncate <- function(ctx, y, lo, hi, lcdf, lccdf, args, discrete, fam) {
+  vy <- as.vector(val(y))
+  N <- length(vy)
+  vlo <- if (is.null(lo)) NULL else val(lo)
+  vhi <- if (is.null(hi)) NULL else val(hi)
+  if ((!is.null(vlo) && any(vy < vlo)) || (!is.null(vhi) && any(vy > vhi))) {
+    rt_target_add(ctx, -Inf)
+    return(invisible(NULL))
+  }
+  lo_adj <- if (!is.null(lo) && discrete) lo - 1L else lo
+  scalar_args <- all(vapply(args, function(a) length(val(a)) == 1L, TRUE))
+  one <- function(a) {
+    if (!is.null(lo) && !is.null(hi)) {
+      if (!is.null(vlo) && !is.null(vhi) && vlo > vhi) stop_domain(sprintf("truncation of %s: lower bound is greater than upper bound", fam))
+      return(ad_log_diff_exp(do.call(lcdf, c(list(hi), a)), do.call(lcdf, c(list(lo_adj), a))))
+    }
+    if (!is.null(lo)) return(do.call(lccdf, c(list(lo_adj), a)))
+    do.call(lcdf, c(list(hi), a))
+  }
+  if (scalar_args) {
+    rt_target_add(ctx, -N * one(args))
+  } else {
+    for (i in seq_len(N)) {
+      ai <- lapply(args, function(a) if (length(val(a)) == 1L) a else ad_select(flat(a), i))
+      rt_target_add(ctx, -one(ai))
+    }
+  }
+  invisible(NULL)
+}

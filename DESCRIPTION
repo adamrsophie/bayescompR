@@ -13,8 +13,8 @@ Description: An independent implementation, written entirely in R, of the
     Stan. Inference includes the No-U-Turn sampler with multinomial
     trajectory sampling and windowed step size and metric adaptation, static
     Hamiltonian Monte Carlo, maximum a posteriori and maximum likelihood
-    optimization, Laplace approximation, and mean field and full rank
-    automatic differentiation variational inference. Posterior summaries use
+    optimization, Laplace approximation, mean field and full rank
+    automatic differentiation variational inference, and Pathfinder. Posterior summaries use
     rank normalized split R-hat and bulk and tail effective sample sizes.
     No C++ compiler, Stan installation, or external inference engine is
     required. This package is not affiliated with or endorsed by the Stan
@@ -42,3 +42,28 @@ Config/testthat/edition: 3
 URL: https://adamrsophie.github.io/bayescompR/,
     https://github.com/adamrsophie/bayescompR
 BugReports: https://github.com/adamrsophie/bayescompR/issues
+Collate:
+    'bayescompR-package.R'
+    'errors.R'
+    'types.R'
+    'ad.R'
+    'lexer.R'
+    'parser.R'
+    'transforms.R'
+    'library_core.R'
+    'library_containers.R'
+    'library_linalg.R'
+    'library_dist.R'
+    'semantic.R'
+    'runtime.R'
+    'codegen.R'
+    'backends.R'
+    'model.R'
+    'nuts.R'
+    'diagnostics.R'
+    'sample.R'
+    'fit.R'
+    'optimize.R'
+    'vi.R'
+    'ir.R'
+Config/roxygen2/version: 8.1.1
