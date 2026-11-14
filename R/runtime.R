@@ -175,7 +175,8 @@ rt_rowvec <- function(items, rows) {
 new_ctx <- function(jacobian = TRUE, print = TRUE, propto = FALSE) {
   ctx <- new.env(parent = emptyenv())
   ctx$propto <- propto
-  ctx$target <- list()
+  ctx$target <- vector("list", 64L)
+  ctx$n_target <- 0L
   ctx$jacobian <- jacobian
   ctx$print <- print
   ctx
@@ -185,14 +186,21 @@ rt_target_add <- function(ctx, v) {
   if (is.null(ctx)) stop_semantic("target can only be incremented in a log density context")
   vv <- val(v)
   if (any(is.nan(vv))) stop_domain("target increment is NaN")
-  n <- length(ctx$target) + 1L
-  ctx$target[[n]] <- if (length(vv) == 1L) v else ad_sum(as_dbl(v))
+  n <- ctx$n_target + 1L
+  # detach the list before writing so R modifies it in place instead of
+  # copying it on every increment, and grow it by doubling
+  tl <- ctx$target
+  ctx$target <- NULL
+  if (n > length(tl)) length(tl) <- 2L * length(tl)
+  tl[[n]] <- if (length(vv) == 1L) v else ad_sum(as_dbl(v))
+  ctx$target <- tl
+  ctx$n_target <- n
   invisible(NULL)
 }
 
 rt_target_get <- function(ctx) {
-  if (!length(ctx$target)) return(0)
-  ad_sum_list(ctx$target)
+  if (!ctx$n_target) return(0)
+  ad_sum_list(ctx$target[seq_len(ctx$n_target)])
 }
 
 fmt_value <- function(x) {
