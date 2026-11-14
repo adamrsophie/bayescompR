@@ -64,6 +64,16 @@ json_str <- function(s) {
   paste0("\"", s, "\"")
 }
 
+# numbers as JSON, vectorized; %.17g round trips doubles exactly
+num_json <- function(x) {
+  v <- if (is.integer(x)) as.character(x) else sprintf("%.17g", x)
+  bad <- !is.finite(x)
+  if (any(bad)) v[bad] <- ifelse(is.nan(x[bad]), "\"NaN\"", ifelse(x[bad] > 0, "\"Infinity\"", "\"-Infinity\""))
+  v
+}
+
+json_array <- function(x) paste0("[", paste(num_json(x), collapse = ","), "]")
+
 to_json <- function(x) {
   if (is.null(x)) return("null")
   if (is.list(x)) {
@@ -75,8 +85,7 @@ to_json <- function(x) {
   }
   if (is.character(x)) v <- json_str(x)
   else if (is.logical(x)) v <- ifelse(is.na(x), "null", ifelse(x, "true", "false"))
-  else if (is.numeric(x)) v <- ifelse(is.finite(x), format(x, digits = 17, scientific = NA, trim = TRUE),
-                                      ifelse(is.nan(x), "\"NaN\"", ifelse(x > 0, "\"Infinity\"", "\"-Infinity\"")))
+  else if (is.numeric(x)) v <- num_json(x)
   else v <- json_str(as.character(x))
   if (length(x) == 1L) v else paste0("[", paste(v, collapse = ","), "]")
 }

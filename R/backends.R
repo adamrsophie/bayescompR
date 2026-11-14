@@ -87,8 +87,7 @@ bayescomp_native_inputs <- function(model) {
     v <- val(get(paste0("V.", nm), envir = model$env))
     dims <- c(info$adims, info$eshape)
     x <- to_element_order(as.numeric(v), info$adims, info$eshape)
-    paste0(json_str(nm), ":{\"dims\":", to_json(as.list(as.numeric(dims))),
-           ",\"values\":", to_json(as.list(x)), "}")
+    paste0(json_str(nm), ":{\"dims\":", json_array(as.numeric(dims)), ",\"values\":", json_array(x), "}")
   }, "")
   list(ir = ir, data = paste0("{", paste(parts, collapse = ","), "}"), dim = model$dim)
 }

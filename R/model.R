@@ -204,23 +204,27 @@ compile_r <- function(ir) {
   ctxl <- function(b) list(block = b)
   funs <- lapply(Filter(function(fd) !is.null(fd$body), ir$blocks$functions$body %||% list()), cg_fundef)
   # transformed data: statements, then validation of the declared variables
-  td <- cg_stmts(block_body(ir, "transformed data"), ctxl("transformed data"))
+  td <- c(cg_block(block_body(ir, "transformed data"), ctxl("transformed data")), list(quote(.stmt$loc <- NULL)))
   td_checks <- check_calls(top_decls(ir, "transformed data"), "transformed data")
   pars <- top_decls(ir, "parameters")
   par_code <- lapply(pars, function(d) {
     cl(as.name("<-"), vsym(d$name), cl(rt_param, quote(.u), cl(as.name("[["), quote(.decls), d$name),
                                         cg_cons_args(d$type), CTX))
   })
-  tp <- c(cg_stmts(block_body(ir, "transformed parameters"), ctxl("transformed parameters")),
+  tp <- c(cg_block(block_body(ir, "transformed parameters"), ctxl("transformed parameters")),
+          list(quote(.stmt$loc <- NULL)),
           check_calls(top_decls(ir, "transformed parameters"), "transformed parameters"))
-  mb <- cg_stmts(block_body(ir, "model"), ctxl("model"))
-  gq <- c(cg_stmts(block_body(ir, "generated quantities"), ctxl("generated quantities")),
+  mb <- cg_block(block_body(ir, "model"), ctxl("model"))
+  gq <- c(cg_block(block_body(ir, "generated quantities"), ctxl("generated quantities")),
+          list(quote(.stmt$loc <- NULL)),
           check_calls(top_decls(ir, "generated quantities"), "generated quantities"))
   out_list <- function(decls) cl_list(as.name("list"), stats::setNames(lapply(decls, function(d) vsym(d$name)), vapply(decls, `[[`, "", "name")))
   tps <- top_decls(ir, "transformed parameters")
   gqs <- top_decls(ir, "generated quantities")
-  log_prob_body <- blk(c(par_code, tp, mb, list(cl(rt_target_get, CTX))))
-  write_body <- blk(c(par_code,
+  # parameter transforms run before any statement: no location
+  reset <- list(quote(.stmt$loc <- NULL))
+  log_prob_body <- blk(c(reset, par_code, tp, mb, list(cl(rt_target_get, CTX))))
+  write_body <- blk(c(reset, par_code,
     list(cl(as.name("<-"), quote(.out), cl(as.name("list"), out_list(pars), NULL, NULL))),
     list(cl(as.name("if"), quote(.tp || .gq), blk(c(tp, list(cl(as.name("<-"), quote(.out[[2L]]), out_list(tps)))))),
          cl(as.name("if"), quote(.gq), blk(c(gq, list(cl(as.name("<-"), quote(.out[[3L]]), out_list(gqs)))))),

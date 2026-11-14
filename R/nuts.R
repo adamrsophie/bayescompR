@@ -319,12 +319,15 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
       t_warm <- proc.time()[["elapsed"]] - t_start
       if (tune_step) st$eps <- exp(da$x_bar)
     }
+    eps_nominal <- st$eps
+    if (cfg$step_size_jitter > 0) st$eps <- eps_nominal * (1 + cfg$step_size_jitter * (2 * stats::runif(1) - 1))
     eps_used <- st$eps
     # elliptical slice sampling relies on the Gaussian fitted during warmup;
     # warmup itself uses scale free slice sampling so that the fit does not
     # shrink along with the moves
     s <- if (cfg$algorithm == "elliptical_slice" && it <= nw) slice_transition(st, q) else trans(st, q)
     q <- s$q
+    st$eps <- eps_nominal
     if (it <= nw && adapt) {
       if (tune_step) st$eps <- dual_avg_learn(da, s$accept_stat)
       if (cfg$adapt_metric) {

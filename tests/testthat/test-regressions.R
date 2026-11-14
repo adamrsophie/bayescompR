@@ -394,3 +394,70 @@ test_that("posterior, bayesplot and loo generics accept a fit", {
   expect_s3_class(l, "psis_loo")
   expect_equal(dim(l$pointwise)[1], 4)
 })
+
+test_that("truncation works with user defined cumulative functions", {
+  code <- "functions { real my_lpdf(real y, real mu) { return normal_lpdf(y | mu, 1); }
+             real my_lcdf(real y, real mu) { return normal_lcdf(y | mu, 1); }
+             real my_lccdf(real y, real mu) { return normal_lccdf(y | mu, 1); } }
+           data { real y; } parameters { real mu; } model { mu ~ normal(0, 1); y ~ my(mu) TR; }"
+  ref <- "data { real y; } parameters { real mu; } model { mu ~ normal(0, 1); y ~ normal(mu, 1) TR; }"
+  for (tr in c("T[0, 3]", "T[0, ]", "T[, 3]")) {
+    a <- bayescomp_model(sub("TR", tr, code, fixed = TRUE), data = list(y = 1.2))
+    b <- bayescomp_model(sub("TR", tr, ref, fixed = TRUE), data = list(y = 1.2))
+    expect_equal(bayescomp_log_prob(a, 0.4), bayescomp_log_prob(b, 0.4))
+    expect_equal(bayescomp_grad_log_prob(a, 0.4), bayescomp_grad_log_prob(b, 0.4))
+  }
+})
+
+test_that("the optimizer uses Stan's stopping rules and reports why it stopped", {
+  m <- bayescomp_model("parameters { real x; real y; } model { target += -(1 - x)^2 - 100 * (y - x^2)^2; }")
+  for (alg in c("lbfgs", "bfgs")) {
+    o <- bayescomp_optimize(m, algorithm = alg, seed = 1)
+    expect_identical(o$code, 0L)
+    expect_equal(unname(o$par), c(1, 1), tolerance = 1e-3)
+    expect_type(o$message, "character")
+  }
+  o <- bayescomp_optimize(m, seed = 1, history_size = 2, tol_rel_grad = 0, tol_rel_obj = 0, tol_obj = 0, tol_param = 0)
+  expect_match(o$message, "tol_grad")
+  expect_warning(o <- bayescomp_optimize(m, seed = 1, iter = 3), "did not converge")
+  expect_identical(o$code, 1L)
+})
+
+test_that("unit_e metric, step size jitter, fixed_param and adapt_metric", {
+  m <- bayescomp_model("parameters { vector[2] y; } model { y ~ normal(0, [1, 3]'); } generated quantities { real s = sum(y); }")
+  f <- bayescomp_sample(m, chains = 1, iter_warmup = 150, iter_sampling = 100, seed = 1, refresh = 0, metric = "unit_e")
+  expect_equal(as.vector(f$inv_metric[[1]]), c(1, 1))
+  j <- bayescomp_sample(m, chains = 1, iter_warmup = 150, iter_sampling = 100, seed = 1, refresh = 0, step_size_jitter = 0.5)
+  expect_gt(length(unique(j$sampler_diagnostics[, 1, "stepsize__"])), 1)
+  a <- bayescomp_sample(m, chains = 1, iter_warmup = 150, iter_sampling = 50, seed = 1, refresh = 0,
+                        adapt_metric = FALSE, inv_metric = c(2, 5))
+  expect_equal(as.vector(a$inv_metric[[1]]), c(2, 5))
+  fp <- bayescomp_sample(m, chains = 2, iter_sampling = 20, seed = 1, refresh = 0, algorithm = "fixed_param",
+                         init = list(y = c(0.5, -1)))
+  expect_true(all(fp$draws[, , "y[1]"] == 0.5))
+  expect_true(all(fp$draws[, , "s"] == -0.5))
+  expect_error(bayescomp_sample(m, step_size_jitter = 2), "step_size_jitter")
+})
+
+test_that("socket cluster chains match sequential draws", {
+  skip_on_cran()
+  # the workers load the installed package, as under R CMD check
+  skip_if(testthat::is_checking() == FALSE && !identical(Sys.getenv("BAYESCOMPR_TEST_PSOCK"), "true"), "needs the installed package")
+  m <- bayescomp_model("parameters { real y; } model { y ~ normal(0, 1); }")
+  a <- bayescomp_sample(m, chains = 2, iter_warmup = 30, iter_sampling = 20, seed = 1, refresh = 0)
+  old <- options(bayescompR.parallel = "psock"); on.exit(options(old))
+  b <- bayescomp_sample(m, chains = 2, iter_warmup = 30, iter_sampling = 20, seed = 1, refresh = 0, cores = 2)
+  expect_identical(a$draws, b$draws)
+})
+
+test_that("runtime errors report the Stan statement they arose in", {
+  m <- bayescomp_model("parameters { real y; }\nmodel {\n  y ~ normal(0, 1);\n  target += normal_lpdf(y | 0, -1);\n}")
+  expect_error(bayescomp_log_prob(m, 0), "Scale parameter is -1.*\\(line 4, column 3\\)", class = "bayescomp_domain_error")
+  expect_error(bayescomp_model("transformed data {\n  vector[2] a = [1, 2]';\n  vector[3] b = a;\n}"), "\\(line 3, column 13\\)", class = "bayescomp_shape_error")
+  r <- bayescomp_model("parameters { real y; } model { y ~ normal(0, 1); }\ngenerated quantities {\n  if (y > -100) reject(\"stop\");\n}")
+  expect_error(bayescomp_constrain(r, 0), "stop \\(line 3, column 3\\)", class = "bayescomp_reject_error")
+  # parameter transforms and checks after the statements carry no stale location
+  k <- bayescomp_model("transformed data { real a = 1; } parameters { real y; } transformed parameters { real<lower=0> z = y; } model { y ~ normal(0, 1); }")
+  e <- tryCatch(bayescomp_log_prob(k, -1), error = identity)
+  expect_null(e$loc)
+})

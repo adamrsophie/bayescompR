@@ -10,6 +10,10 @@
 #   bayescomp_data_error         data supplied by the user do not match the program
 #   bayescomp_reject_error       reject() or fatal_error() was called
 
+# location of the top level Stan statement being evaluated, set by the
+# generated code; runtime errors raised without a location report it
+.stmt <- new.env(parent = emptyenv())
+
 bc_condition <- function(class, message, loc = NULL, call = NULL) {
   if (!is.null(loc) && !is.null(loc$line)) {
     message <- sprintf("%s (line %d, column %d)", message, loc$line, loc$col)
@@ -23,13 +27,15 @@ bc_condition <- function(class, message, loc = NULL, call = NULL) {
 stop_syntax <- function(message, loc = NULL) stop(bc_condition("bayescomp_syntax_error", paste("Syntax error:", message), loc))
 stop_semantic <- function(message, loc = NULL) stop(bc_condition("bayescomp_semantic_error", paste("Semantic error:", message), loc))
 stop_unsupported <- function(message, loc = NULL) stop(bc_condition("bayescomp_unsupported_error", paste("Unsupported:", message), loc))
-stop_shape <- function(message, loc = NULL) stop(bc_condition("bayescomp_shape_error", paste("Shape error:", message), loc))
-stop_domain <- function(message, loc = NULL) stop(bc_condition("bayescomp_domain_error", paste("Domain error:", message), loc))
+stop_shape <- function(message, loc = .stmt$loc) stop(bc_condition("bayescomp_shape_error", paste("Shape error:", message), loc))
+stop_domain <- function(message, loc = .stmt$loc) stop(bc_condition("bayescomp_domain_error", paste("Domain error:", message), loc))
 stop_data <- function(message) stop(bc_condition("bayescomp_data_error", paste("Data error:", message)))
 stop_reject <- function(message, fatal = FALSE) {
   cls <- if (fatal) c("bayescomp_fatal_error", "bayescomp_reject_error") else "bayescomp_reject_error"
+  loc <- .stmt$loc
+  if (!is.null(loc)) message <- sprintf("%s (line %d, column %d)", message, loc$line, loc$col)
   stop(structure(class = c(cls, "bayescomp_error", "error", "condition"),
-                 list(message = message, call = NULL)))
+                 list(message = message, call = NULL, loc = loc)))
 }
 
 `%||%` <- function(a, b) if (is.null(a)) b else a

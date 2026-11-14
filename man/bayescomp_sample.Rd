@@ -11,15 +11,18 @@ bayescomp_sample(
   iter_sampling = 1000L,
   seed = NULL,
   init = 2,
-  algorithm = c("nuts", "hmc", "mala", "metropolis", "slice", "elliptical_slice"),
-  metric = c("diag_e", "dense_e"),
+  algorithm = c("nuts", "hmc", "mala", "metropolis", "slice", "elliptical_slice",
+    "fixed_param"),
+  metric = c("diag_e", "dense_e", "unit_e"),
   inv_metric = NULL,
   step_size = NULL,
   adapt_delta = NULL,
   block = TRUE,
   max_treedepth = 10L,
   int_time = 2 * pi,
+  step_size_jitter = 0,
   adapt_engaged = TRUE,
+  adapt_metric = TRUE,
   adapt_gamma = 0.05,
   adapt_kappa = 0.75,
   adapt_t0 = 10,
@@ -53,11 +56,14 @@ a list of such lists (one per chain), a function returning a list, or a
 are used as starting points.}
 
 \item{algorithm}{\code{"nuts"}, \code{"hmc"} (static integration time), \code{"mala"},
-\code{"metropolis"}, \code{"slice"} or \code{"elliptical_slice"} (generalized
+\code{"metropolis"}, \code{"slice"}, \code{"elliptical_slice"} (generalized
 elliptical slice sampling around a Gaussian whose mean and covariance
-are estimated during warmup).}
+are estimated during warmup) or \code{"fixed_param"} (parameters stay at
+their initial values; only generated quantities change, as Stan's
+fixed_param sampler).}
 
-\item{metric}{\code{"diag_e"} or \code{"dense_e"}.}
+\item{metric}{\code{"diag_e"}, \code{"dense_e"} or \code{"unit_e"} (identity metric,
+never adapted).}
 
 \item{inv_metric}{Optional initial inverse metric (vector or matrix).}
 
@@ -76,7 +82,13 @@ update one coordinate at a time.}
 
 \item{int_time}{Integration time for static HMC.}
 
+\item{step_size_jitter}{Uniform random jitter of the step size in each
+transition, as a fraction in [0, 1] (Stan's \code{stepsize_jitter}).}
+
 \item{adapt_engaged}{Adapt during warmup.}
+
+\item{adapt_metric}{Adapt the metric during warmup (when
+\code{adapt_engaged}); \code{FALSE} adapts the step size only.}
 
 \item{adapt_gamma, adapt_kappa, adapt_t0}{Dual averaging constants.}
 
@@ -88,9 +100,12 @@ update one coordinate at a time.}
 
 \item{refresh}{Report progress every \code{refresh} iterations (0 for quiet).}
 
-\item{cores}{Number of chains to run in parallel (forked processes, not
-available on Windows). Defaults to \code{getOption("mc.cores", 1L)}, so
-\code{options(mc.cores = 4)} makes every sampler use four cores.}
+\item{cores}{Number of chains to run in parallel. Defaults to
+\code{getOption("mc.cores", 1L)}, so \code{options(mc.cores = 4)} makes every
+sampler use four cores. Chains run in forked processes, or on Windows
+(and with \code{options(bayescompR.parallel = "psock")}) in a socket cluster
+whose workers load the installed package and print their progress
+when they finish.}
 
 \item{show_print}{Show output of Stan \code{print()} statements.}
 }

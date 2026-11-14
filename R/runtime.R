@@ -285,6 +285,8 @@ rt_truncate <- function(ctx, y, lo, hi, lcdf, lccdf, args, discrete, fam) {
   }
   lo_adj <- if (!is.null(lo) && discrete) lo - 1L else lo
   scalar_args <- all(vapply(args, function(a) length(val(a)) == 1L, TRUE))
+  if (!scalar_args && (isTRUE(attr(lcdf, "user")) || isTRUE(attr(lccdf, "user"))))
+    stop_unsupported(sprintf("truncation of %s with a user defined cumulative function needs scalar parameters", fam))
   one <- function(a) {
     if (!is.null(lo) && !is.null(hi)) {
       if (!is.null(vlo) && !is.null(vhi) && vlo > vhi) stop_domain(sprintf("truncation of %s: lower bound is greater than upper bound", fam))

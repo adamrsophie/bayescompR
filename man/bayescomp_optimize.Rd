@@ -11,8 +11,13 @@ bayescomp_optimize(
   init = 2,
   seed = NULL,
   iter = 2000L,
+  tol_obj = 1e-12,
+  tol_rel_obj = 10000,
+  tol_grad = 1e-08,
   tol_rel_grad = 1e+07,
-  tol_obj = 1e-12
+  tol_param = 1e-08,
+  history_size = 5L,
+  init_alpha = 0.001
 )
 }
 \arguments{
@@ -30,11 +35,22 @@ the posterior on the unconstrained scale, as for Laplace sampling;
 
 \item{iter}{Maximum number of iterations.}
 
-\item{tol_rel_grad, tol_obj}{Convergence tolerances passed to the optimizer.}
+\item{tol_obj, tol_rel_obj, tol_grad, tol_rel_grad, tol_param}{Stopping rules of
+Stan's optimizer (L-BFGS and BFGS): the absolute change in the objective,
+its relative change (in units of machine epsilon), the gradient norm,
+the relative gradient magnitude \eqn{g^T H^{-1} g / \max(|f|, 1)} (in
+units of machine epsilon) and the change in the parameters. The first
+rule met stops the iterations.}
+
+\item{history_size}{Number of updates L-BFGS keeps.}
+
+\item{init_alpha}{Initial step size of the first line search.}
 }
 \value{
 A \code{bayescomp_fit} with one draw holding the optimum, and elements
-\code{par} (named constrained values), \code{value} (the objective) and \code{code}.
+\code{par} (named constrained values), \code{value} (the objective), \code{code} (0
+converged, 1 iteration limit, 2 line search failure), \code{message} and
+\code{iterations}.
 }
 \description{
 Find a posterior mode or maximum likelihood estimate

@@ -164,7 +164,7 @@ rmhmc_dHdq_fun <- function(q, gq, geom, h = 1e-4) {
 # preserving only when the implicit equations hold, so a step whose fixed
 # point iterations have not converged to `tol` within `fp` iterations is
 # rejected (and counted as divergent) instead of entering the Metropolis test.
-rmhmc_step <- function(q, gq, eps, L, geom, gradV, fp, tol = 1e-9) {
+rmhmc_step <- function(q, gq, eps, L, geom, gradV, fp, tol = 1e-6) {
   conv <- function(new, old) max(abs(new - old)) <= tol * max(1, max(abs(new)))
   n <- length(q)
   Hfun <- function(gx, p) gx$V + 0.5 * gx$logdet + 0.5 * sum(p * as.vector(gx$Ginv %*% p))

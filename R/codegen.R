@@ -160,6 +160,17 @@ cg_call <- function(e) {
 
 # ---- statements ----------------------------------------------------------------------
 
+# top level statements of a block, each preceded by recording its location
+# (one assignment per statement, so runtime errors can say where they arose)
+cg_block <- function(stmts, ctx) {
+  out <- list(quote(.stmt$loc <- NULL))
+  for (st in stmts) {
+    if (!is.null(st$loc$line)) out <- c(out, list(cl(as.name("<-"), quote(.stmt$loc), list(line = st$loc$line, col = st$loc$col))))
+    out <- c(out, cg_stmt(st, ctx))
+  }
+  out
+}
+
 cg_stmts <- function(stmts, ctx) {
   out <- list()
   for (st in stmts) out <- c(out, cg_stmt(st, ctx))
@@ -272,14 +283,17 @@ cg_stmt <- function(st, ctx) {
         tr <- st$trunc
         mkfun <- function(sig) {
           if (is.null(sig)) return(NULL)
-          if (isTRUE(sig$user)) return(as.name(sig$mangled))
+          # a user function also takes the evaluation context; the closure is
+          # made where .ctx is in scope
+          if (isTRUE(sig$user))
+            return(cl(structure, cl_list(as.name("function"), list(as.pairlist(alist(... = )),
+                                                                  cl_list(as.name(sig$mangled), list(as.name("..."), CTX)))),
+                      user = TRUE))
           # the sampling statement has already checked the parameters
           attr(sig$impl, "unchecked") %||% sig$impl
         }
         lcdf_f <- mkfun(tr$lcdf_sig)
         lccdf_f <- mkfun(tr$lccdf_sig)
-        if (isTRUE(tr$lcdf_sig$user) || isTRUE(tr$lccdf_sig$user))
-          stop_unsupported("truncation with user defined cumulative distribution functions is not supported", st$loc)
         out <- c(out, list(cl(rt_truncate, CTX, lhs,
                               if (is.null(tr$lo)) NULL else cg_expr(tr$lo),
                               if (is.null(tr$hi)) NULL else cg_expr(tr$hi),

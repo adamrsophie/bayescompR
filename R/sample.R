@@ -31,10 +31,13 @@
 #'   `bayescomp_fit` (for example from [bayescomp_pathfinder()]) whose draws
 #'   are used as starting points.
 #' @param algorithm `"nuts"`, `"hmc"` (static integration time), `"mala"`,
-#'   `"metropolis"`, `"slice"` or `"elliptical_slice"` (generalized
+#'   `"metropolis"`, `"slice"`, `"elliptical_slice"` (generalized
 #'   elliptical slice sampling around a Gaussian whose mean and covariance
-#'   are estimated during warmup).
-#' @param metric `"diag_e"` or `"dense_e"`.
+#'   are estimated during warmup) or `"fixed_param"` (parameters stay at
+#'   their initial values; only generated quantities change, as Stan's
+#'   fixed_param sampler).
+#' @param metric `"diag_e"`, `"dense_e"` or `"unit_e"` (identity metric,
+#'   never adapted).
 #' @param inv_metric Optional initial inverse metric (vector or matrix).
 #' @param step_size Initial step size: leapfrog step for HMC, proposal scale
 #'   for Metropolis and MALA, bracket width in metric units for slice
@@ -46,15 +49,22 @@
 #'   update one coordinate at a time.
 #' @param max_treedepth Maximum tree depth for NUTS.
 #' @param int_time Integration time for static HMC.
+#' @param step_size_jitter Uniform random jitter of the step size in each
+#'   transition, as a fraction in \[0, 1\] (Stan's `stepsize_jitter`).
 #' @param adapt_engaged Adapt during warmup.
+#' @param adapt_metric Adapt the metric during warmup (when
+#'   `adapt_engaged`); `FALSE` adapts the step size only.
 #' @param adapt_gamma,adapt_kappa,adapt_t0 Dual averaging constants.
 #' @param adapt_init_buffer,adapt_term_buffer,adapt_window Warmup windows.
 #' @param thin Keep every `thin`th draw.
 #' @param save_warmup Keep warmup draws.
 #' @param refresh Report progress every `refresh` iterations (0 for quiet).
-#' @param cores Number of chains to run in parallel (forked processes, not
-#'   available on Windows). Defaults to `getOption("mc.cores", 1L)`, so
-#'   `options(mc.cores = 4)` makes every sampler use four cores.
+#' @param cores Number of chains to run in parallel. Defaults to
+#'   `getOption("mc.cores", 1L)`, so `options(mc.cores = 4)` makes every
+#'   sampler use four cores. Chains run in forked processes, or on Windows
+#'   (and with `options(bayescompR.parallel = "psock")`) in a socket cluster
+#'   whose workers load the installed package and print their progress
+#'   when they finish.
 #' @param show_print Show output of Stan `print()` statements.
 #' @return A `bayescomp_fit` object.
 #' @examples
@@ -66,10 +76,10 @@
 #' }
 #' @export
 bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampling = 1000L,
-                             seed = NULL, init = 2, algorithm = c("nuts", "hmc", "mala", "metropolis", "slice", "elliptical_slice"),
-                             metric = c("diag_e", "dense_e"), inv_metric = NULL,
+                             seed = NULL, init = 2, algorithm = c("nuts", "hmc", "mala", "metropolis", "slice", "elliptical_slice", "fixed_param"),
+                             metric = c("diag_e", "dense_e", "unit_e"), inv_metric = NULL,
                              step_size = NULL, adapt_delta = NULL, block = TRUE, max_treedepth = 10L,
-                             int_time = 2 * pi, adapt_engaged = TRUE, adapt_gamma = 0.05,
+                             int_time = 2 * pi, step_size_jitter = 0, adapt_engaged = TRUE, adapt_metric = TRUE, adapt_gamma = 0.05,
                              adapt_kappa = 0.75, adapt_t0 = 10, adapt_init_buffer = 75L,
                              adapt_term_buffer = 50L, adapt_window = 25L, thin = 1L,
                              save_warmup = FALSE, refresh = 200L, cores = getOption("mc.cores", 1L), show_print = TRUE) {
@@ -81,10 +91,17 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   iter_sampling <- as_count(iter_sampling, "iter_sampling")
   thin <- as_count(thin, "thin", min = 1L)
   n <- model$dim
+  if (!(is.numeric(step_size_jitter) && length(step_size_jitter) == 1L && step_size_jitter >= 0 && step_size_jitter <= 1))
+    stop("'step_size_jitter' must be in [0, 1]", call. = FALSE)
+  if (metric == "unit_e") {
+    if (!is.null(inv_metric)) stop("'inv_metric' cannot be given with metric = \"unit_e\"", call. = FALSE)
+    metric <- "diag_e"; inv_metric <- rep(1, n); adapt_metric <- FALSE
+  }
+  if (algorithm == "fixed_param") adapt_engaged <- FALSE
   if (is.null(adapt_delta)) adapt_delta <- default_adapt_delta(algorithm, block)
-  if (!(algorithm %in% c("slice", "elliptical_slice")) && !(adapt_delta > 0 && adapt_delta < 1)) stop("'adapt_delta' must be in (0, 1)", call. = FALSE)
+  if (!(algorithm %in% c("slice", "elliptical_slice", "fixed_param")) && !(adapt_delta > 0 && adapt_delta < 1)) stop("'adapt_delta' must be in (0, 1)", call. = FALSE)
   if (is.null(step_size)) {
-    step_size <- switch(algorithm, nuts = 1, hmc = 1, slice = 2, elliptical_slice = 1, mala = 1 / max(1, n)^(1 / 6),
+    step_size <- switch(algorithm, nuts = 1, hmc = 1, slice = 2, elliptical_slice = 1, fixed_param = 1, mala = 1 / max(1, n)^(1 / 6),
                         metropolis = if (block) 2.38 / sqrt(max(1, n)) else 2.4)
   }
   if (!(is.numeric(step_size) && length(step_size) == 1L && step_size > 0)) stop("'step_size' must be positive", call. = FALSE)
@@ -96,15 +113,15 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   }
   cfg <- list(algorithm = algorithm, block = block, metric = metric, inv_metric = inv_metric, step_size = step_size,
               adapt_delta = adapt_delta, max_treedepth = as_count(max_treedepth, "max_treedepth", 1L),
-              int_time = int_time, adapt_engaged = adapt_engaged, adapt_metric = TRUE,
+              int_time = int_time, step_size_jitter = step_size_jitter, adapt_engaged = adapt_engaged, adapt_metric = isTRUE(adapt_metric),
               adapt_gamma = adapt_gamma, adapt_kappa = adapt_kappa, adapt_t0 = adapt_t0,
               adapt_init_buffer = as.integer(adapt_init_buffer), adapt_term_buffer = as.integer(adapt_term_buffer),
               adapt_window = as.integer(adapt_window), iter_warmup = iter_warmup, iter_sampling = iter_sampling,
               thin = thin, save_warmup = save_warmup, refresh = as.integer(refresh), print = show_print)
   t0 <- proc.time()[["elapsed"]]
   res <- run_chains(model, chains, seed, cores, function(id) {
-    q0 <- find_init(model, init, id, gradient = !(algorithm %in% c("metropolis", "slice", "elliptical_slice")))
-    out <- if (n == 0L) fixed_param_chain(cfg) else run_hmc_chain(model, q0, cfg, id)
+    q0 <- find_init(model, init, id, gradient = !(algorithm %in% c("metropolis", "slice", "elliptical_slice", "fixed_param")))
+    out <- if (n == 0L || algorithm == "fixed_param") fixed_param_chain(cfg, q0) else run_hmc_chain(model, q0, cfg, id)
     out$gq <- chain_write_draws(model, out$q, show_print)
     out
   })
@@ -121,11 +138,12 @@ check_model <- function(model) {
   if (!inherits(model, "bayescomp_model")) stop("'model' must be a bayescomp_model", call. = FALSE)
 }
 
-# models without parameters: only generated quantities are produced
-fixed_param_chain <- function(cfg) {
+# fixed_param (and models without parameters): the parameters stay at q0
+# and only generated quantities are produced; lp__ is 0 as in Stan
+fixed_param_chain <- function(cfg, q0 = numeric(0)) {
   ns <- length(seq_len(cfg$iter_sampling)[(seq_len(cfg$iter_sampling) - 1L) %% cfg$thin == 0L])
   dg <- matrix(0, ns, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
-  list(q = matrix(0, ns, 0L), diag = dg, step_size = NA_real_, inv_metric = numeric(0), n_warmup_saved = 0L,
+  list(q = matrix(q0, ns, length(q0), byrow = TRUE), diag = dg, step_size = NA_real_, inv_metric = numeric(0), n_warmup_saved = 0L,
        time = c(warmup = 0, sampling = 0))
 }
 
@@ -175,6 +193,28 @@ run_forked <- function(n, cores, f) {
   out
 }
 
+# forked processes where available; socket clusters on Windows (or when
+# options(bayescompR.parallel = "psock"))
+parallel_backend <- function() {
+  b <- getOption("bayescompR.parallel", if (.Platform$OS.type == "windows") "psock" else "fork")
+  match.arg(b, c("fork", "psock"))
+}
+
+# run f(1), ..., f(n) on a socket cluster of `cores` R processes, which
+# load the installed bayescompR; progress is printed when the chains finish
+run_psock <- function(n, cores, f) {
+  files <- vapply(seq_len(n), function(i) tempfile(sprintf("chain%d_", i)), "")
+  on.exit(unlink(files), add = TRUE)
+  cl <- parallel::makePSOCKcluster(cores)
+  on.exit(parallel::stopCluster(cl), add = TRUE)
+  out <- parallel::clusterApplyLB(cl, seq_len(n), function(i, chain_fun, files) {
+    assign("file", files[i], envir = get(".progress", envir = asNamespace("bayescompR")))
+    try(chain_fun(i), silent = TRUE)
+  }, chain_fun = f, files = files)
+  for (fl in files) if (file.exists(fl)) message(paste(readLines(fl, warn = FALSE), collapse = "\n"))
+  out
+}
+
 bind_chain_id <- function(model, id) {
   if (identical(model$env$V.CHAIN_ID, as.integer(id))) return(invisible())
   d <- model$data
@@ -209,8 +249,9 @@ run_chains <- function(model, chains, seed, cores, f) {
     assign(".Random.seed", streams[[i]], envir = globalenv())
     f(i)
   }
-  if (cores > 1L && chains > 1L && .Platform$OS.type != "windows") {
-    out <- run_forked(chains, min(cores, chains), one)
+  if (cores > 1L && chains > 1L) {
+    out <- if (parallel_backend() == "fork") run_forked(chains, min(cores, chains), one)
+           else run_psock(chains, min(cores, chains), one)
     bad <- vapply(out, inherits, TRUE, what = "try-error")
     if (any(bad)) stop(sprintf("chain %d failed: %s", which(bad)[1L], attr(out[[which(bad)[1L]]], "condition")$message), call. = FALSE)
   } else {

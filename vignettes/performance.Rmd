@@ -88,9 +88,11 @@ small models with expensive gradients they can be competitive.
 ## Parallel chains
 
 Chains run one after another by default. Pass `cores` to run them in
-parallel in forked processes, or set the `mc.cores` option once per session,
-which every function that takes `cores` uses as its default. Forking is not available on Windows,
-where chains always run sequentially, whatever the value of `cores`. Each
+parallel, or set the `mc.cores` option once per session, which every
+function that takes `cores` uses as its default. Chains run in forked
+processes; on Windows, where forking is not available, they run in a socket
+cluster whose workers load the installed package and print their progress
+when they finish. Each
 chain has its own random number stream derived from `seed`, so the draws are
 identical whether the chains run in parallel or not.
 
