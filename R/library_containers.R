@@ -62,10 +62,10 @@ def("min", "container", "real", function(x) {
   if (!nelem(x)) return(Inf)
   ad_select(flat(as_dbl(x)), which.min(as.vector(val(x))))
 })
-def("norm1", "vectors", "real", function(x) ad_sum(abs(as_dbl(x))))
-def("norm2", "vectors", "real", function(x) sqrt(ad_sum(as_dbl(x) * as_dbl(x))))
+def("norm1", "vecs1", "real", function(x) ad_sum(abs(as_dbl(x))))
+def("norm2", "vecs1", "real", function(x) sqrt(ad_sum(as_dbl(x) * as_dbl(x))))
 def("dot_self", "vectors", "real", function(x) ad_sum(as_dbl(x) * as_dbl(x)))
-def("dot_product", c("vectors", "vectors"), "real", function(a, b) {
+def("dot_product", c("vecs1", "vecs1"), "real", function(a, b) {
   if (nelem(a) != nelem(b)) stop_shape("dot_product: arguments must have the same size")
   ad_sum(flat(as_dbl(a)) * flat(as_dbl(b)))
 })
@@ -184,7 +184,7 @@ def("rep_matrix", c("row_vector", "int"), "matrix", function(v, m) {
 rep_array_impl <- function(x, ds, base) {
   for (d in ds) chk_size("rep_array", d)
   v <- val(x)
-  es <- switch(base, int = , real = integer(0), vector = , row_vector = length(v), matrix = dim(v))
+  es <- if (base %in% c("int", "real")) integer(0) else if (is.null(dim(v))) length(v) else dim(v)
   ne <- length(v)
   idx <- rep(seq_len(ne), each = prod(ds))
   shp <- c(ds, es)
@@ -200,6 +200,14 @@ for (b in c("int", "real", "vector", "row_vector", "matrix")) local({
   def("rep_array", c(bb, "int"), paste0(bb, "[]"), function(x, n) rep_array_impl(x, n, bb))
   def("rep_array", c(bb, "int", "int"), paste0(bb, "[,]"), function(x, n, m) rep_array_impl(x, c(n, m), bb))
   def("rep_array", c(bb, "int", "int", "int"), paste0(bb, "[,,]"), function(x, n, m, k) rep_array_impl(x, c(n, m, k), bb))
+  # arrays of arrays: the new dimensions come first
+  for (nd in 1:2) local({
+    at <- paste0(bb, "[", strrep(",", nd - 1L), "]")
+    rt <- function(k) paste0(bb, "[", strrep(",", nd + k - 1L), "]")
+    def("rep_array", c(at, "int"), rt(1L), function(x, n) rep_array_impl(x, n, "array"))
+    def("rep_array", c(at, "int", "int"), rt(2L), function(x, n, m) rep_array_impl(x, c(n, m), "array"))
+    def("rep_array", c(at, "int", "int", "int"), rt(3L), function(x, n, m, k) rep_array_impl(x, c(n, m, k), "array"))
+  })
 })
 
 chk_size <- function(f, n) {
@@ -303,6 +311,11 @@ def("to_array_1d", "int[,,]", "int[]", function(x) as.integer(val(row_major_flat
 def("to_array_1d", "real[]", "real[]", function(x) as_dbl(x))
 def("to_array_1d", "real[,]", "real[]", function(x) row_major_flat(as_dbl(x)))
 def("to_array_1d", "real[,,]", "real[]", function(x) row_major_flat(as_dbl(x)))
+for (nd in 4:8) local({
+  cm <- strrep(",", nd - 1L)
+  def("to_array_1d", sprintf("int[%s]", cm), "int[]", function(x) as.integer(val(row_major_flat(x))))
+  def("to_array_1d", sprintf("real[%s]", cm), "real[]", function(x) row_major_flat(as_dbl(x)))
+})
 def("to_array_2d", "matrix", "real[,]", function(x) as_dbl(x))
 def("to_vector_array", "matrix", "vector[]", function(x) ad_transpose(as_dbl(x)))
 def("to_row_vector_array", "matrix", "row_vector[]", function(x) as_dbl(x))
@@ -483,6 +496,8 @@ def("quantile", c("vector", "real"), "real", function(x, p) quantile_stan(val(x)
 def("quantile", c("row_vector", "real"), "real", function(x, p) quantile_stan(val(x), val(p)))
 def("quantile", c("real[]", "real[]"), "real[]", function(x, p) quantile_stan(val(x), val(p)))
 def("quantile", c("vector", "vector"), "vector", function(x, p) quantile_stan(val(x), val(p)))
+def("quantile", c("vector", "real[]"), "real[]", function(x, p) quantile_stan(val(x), val(p)))
+def("quantile", c("row_vector", "real[]"), "real[]", function(x, p) quantile_stan(val(x), val(p)))
 quantile_stan <- function(x, p) {
   if (!length(x)) stop_domain("quantile: container has size zero")
   if (any(p < 0 | p > 1)) stop_domain("quantile: probabilities must be in [0, 1]")

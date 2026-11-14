@@ -125,5 +125,5 @@ test_that("edge cases of special functions and densities", {
   bad <- bayescomp_model("generated quantities { real h = hypergeometric_2F1(1, 1, 2, 1.5); }")
   expect_error(bayescomp_constrain(bad, numeric(0)), class = "bayescomp_domain_error")
   expect_error(bayescomp_model("parameters { real x; } model { target += lower_bound_jacobian(x, 0); }"),
-               class = "bayescomp_unsupported_error")
+               class = "bayescomp_semantic_error")
 })

@@ -705,7 +705,7 @@ sem_call <- function(s, e) {
   }
   if (is.null(s$ufuns[[uname]]) && is.null(.lib[[uname]])) {
     # the transform functions of Stan 2.36 (lower_bound_jacobian, simplex_constrain, ...)
-    if (nm %in% unsupported_functions || grepl("_(constrain|unconstrain|jacobian)$", nm)) stop_unsupported(sprintf("function '%s' is not implemented in this version of bayescompR", nm), e$loc)
+    if (nm %in% unsupported_functions) stop_unsupported(sprintf("function '%s' is not implemented in this version of bayescompR", nm), e$loc)
     stop_semantic(sprintf("unknown function '%s'", nm), e$loc)
   }
   res <- resolve_call(s, uname, types)
@@ -724,7 +724,7 @@ sem_call <- function(s, e) {
     ok <- s$block %in% c("model", "transformed parameters") || (!is.null(s$fun) && endsWith(s$fun$name, "_lp"))
     if (!ok) stop_semantic(sprintf("'%s' (an _lp function) is only allowed in the model block, the transformed parameters block or other _lp functions", nm), e$loc)
   }
-  if (endsWith(nm, "_jacobian") && isTRUE(sg$user)) {
+  if (endsWith(nm, "_jacobian")) {
     ok <- s$block == "transformed parameters" || (!is.null(s$fun) && endsWith(s$fun$name, "_jacobian"))
     if (!ok) stop_semantic(sprintf("'%s' (a _jacobian function) is only allowed in transformed parameters or other _jacobian functions", nm), e$loc)
   }
@@ -786,19 +786,12 @@ unsupported_functions <- c(
   "algebra_solver_newton", "solve_newton", "solve_newton_tol", "solve_powell", "solve_powell_tol",
   "integrate_1d", "integrate_1d_gauss_kronrod", "integrate_1d_gauss_kronrod_tol",
   "integrate_1d_double_exponential", "integrate_1d_double_exponential_tol",
-  "map_rect", "reduce_sum", "reduce_sum_static", "hmm_marginal", "hmm_latent_rng",
-  "hmm_hidden_state_prob", "laplace_marginal", "laplace_marginal_tol", "laplace_latent_rng",
+  "map_rect", "reduce_sum", "reduce_sum_static", "laplace_marginal", "laplace_marginal_tol", "laplace_latent_rng",
   "laplace_latent_tol_rng", "laplace_latent_solve", "laplace_latent_solve_tol",
   "complex_schur_decompose", "fft", "inv_fft", "fft2", "inv_fft2", "eigendecompose",
   "eigendecompose_sym", "svd", "csr_extract",
   "get_real", "get_imag", "to_complex",
   "wiener_lpdf", "wiener_lcdf_defective", "wiener_lccdf_defective",
-  "symmetrize_from_lower_tri",
-  "matrix_normal_prec_lpdf", "matrix_normal_prec_lupdf", "lkj_cov_lpdf", "lkj_cov_lupdf", "norm",
-  "neg_binomial_cdf", "neg_binomial_lcdf", "neg_binomial_lccdf",
-  "skew_normal_cdf", "skew_normal_lcdf", "skew_normal_lccdf",
-  "exp_mod_normal_cdf", "exp_mod_normal_lcdf", "exp_mod_normal_lccdf",
-  "von_mises_cdf", "von_mises_lcdf", "von_mises_lccdf",
-  "skew_double_exponential_cdf", "skew_double_exponential_lcdf", "skew_double_exponential_lccdf")
+  "norm")
 unsupported_distributions <- c("wiener", "gaussian_dlm_obs", "multi_gp", "multi_gp_cholesky",
                                "multi_student_t_cholesky_dummy", "beta_neg_binomial")

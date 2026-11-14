@@ -272,8 +272,30 @@ tf_sum_to_zero <- list(
   }
 )
 
-# Sum to zero matrix (Stan 2.37): the vector transform applied along both
-# margins, Z = V_N X t(V_M), with X the (N - 1) x (M - 1) free matrix.
+# Sum to zero matrix (Stan 2.37): Z = B_N X t(B_M) with X the (N - 1) x
+# (M - 1) free matrix. Stan Math builds the matrix with its own recursion,
+# whose orthonormal basis B_K differs from the one of the vector transform:
+# column c of B_K is e_c mapped by that recursion with a single column.
+stz_matrix_basis <- function(K) {
+  key <- paste0("m", K)
+  if (!is.null(.stz_cache[[key]])) return(.stz_cache[[key]])
+  N <- K - 1L
+  B <- matrix(0, K, N)
+  a <- 1 / sqrt((seq_len(N)) * (seq_len(N) + 1))
+  b <- seq_len(N) * a
+  for (c in seq_len(N)) {
+    x <- numeric(N); x[c] <- 1
+    z <- numeric(K)
+    axp <- 0
+    for (i in N:1) {
+      z[i] <- b[i] * x[i] - axp
+      z[K] <- z[K] - z[i]
+      axp <- axp + a[i] * x[i]
+    }
+    B[, c] <- z
+  }
+  .stz_cache[[key]] <- B
+}
 tf_sum_to_zero_matrix <- list(
   free_size = function(shape) (shape[1L] - 1L) * (shape[2L] - 1L),
   constrain = function(u, shape, a) {
@@ -281,14 +303,14 @@ tf_sum_to_zero_matrix <- list(
     M <- shape[2L]
     if (N <= 1L || M <= 1L) return(list(x = matrix(0, N, M), lj = 0))
     X <- ad_reshape(u, c(N - 1L, M - 1L))
-    Z <- ad_matmul(ad_matmul(sum_to_zero_basis(N), X), t(sum_to_zero_basis(M)))
+    Z <- ad_matmul(ad_matmul(stz_matrix_basis(N), X), t(stz_matrix_basis(M)))
     list(x = Z, lj = 0)
   },
   unconstrain = function(x, shape, a) {
     N <- shape[1L]
     M <- shape[2L]
     if (N <= 1L || M <= 1L) return(numeric(0))
-    as.vector(crossprod(sum_to_zero_basis(N), as.matrix(x)) %*% sum_to_zero_basis(M))
+    as.vector(crossprod(stz_matrix_basis(N), as.matrix(x)) %*% stz_matrix_basis(M))
   },
   check = function(x, shape, a) {
     X <- as.matrix(x)

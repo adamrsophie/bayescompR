@@ -50,7 +50,7 @@ zmul <- function(c, x) {
 
 # register the density family for a distribution
 defdist <- function(name, args, lpdf = NULL, discrete = FALSE, cdf = NULL, lcdf = NULL,
-                    lccdf = NULL, rng = NULL, rng_ret = NULL, ret = "real") {
+                    lccdf = NULL, rng = NULL, rng_ret = NULL, ret = "real", densities = TRUE) {
   suf <- if (discrete) c("_lpmf", "_lupmf") else c("_lpdf", "_lupdf")
   # the cumulative functions share the density's parameter checks (values
   # only, no AD); the variable itself is left to the cumulative function,
@@ -100,7 +100,7 @@ defdist <- function(name, args, lpdf = NULL, discrete = FALSE, cdf = NULL, lcdf 
     if (!is.null(cdf)) cdf <- checked(cdf, paste0(name, "_cdf"))
     if (!is.null(lccdf)) lccdf <- checked(lccdf, paste0(name, "_lccdf"))
   }
-  if (!is.null(lpdf)) {
+  if (!is.null(lpdf) && densities) {
     f1 <- lpdf
     def(paste0(name, suf[1L]), args, ret, function(...) f1(..., propto = FALSE), density = TRUE, dist = name)
     def(paste0(name, suf[2L]), args, ret, function(...) f1(..., propto = TRUE), density = TRUE, dist = name)
@@ -262,11 +262,18 @@ defdist("student_t", c("reals", "reals", "reals", "reals"), lp_student_t,
   lcdf = function(y, nu, mu, s) st_cdf_ad(y, nu, mu, s, TRUE),
   lccdf = function(y, nu, mu, s) st_cdf_ad(y, nu, mu, s, FALSE),
   rng = function(nu, mu, s) vrng(function(n, nu, m, s) m + s * stats::rt(n, nu), nu, mu, s))
-def("student_t_qf", c("real", "real", "real", "real"), "real", function(p, nu, mu, s) {
+# vectorized: any container argument gives a vector
+def("student_t_qf", c("reals", "reals", "reals", "reals"), function(types) if (all(vapply(types, is_scalar_ty, TRUE))) T_real else ty("vector", 0L),
+    function(p, nu, mu, s) {
   if (any_ad(nu)) stop_unsupported("student_t_qf: gradient with respect to the degrees of freedom is not available")
-  p <- as_dbl(p); mu <- as_dbl(mu); s <- as_dbl(s)
-  q <- ad_unary(p, function(pp) stats::qt(pp, val(nu)), function(pp, y) 1 / stats::dt(y, val(nu)))
-  mu + s * q
+  N <- vlen_check("student_t_qf", p, nu, mu, s)
+  scalar <- all(vapply(list(p, nu, mu, s), function(a) length(val(a)) == 1L, TRUE))
+  p <- flat(as_dbl(p)); mu <- flat(as_dbl(mu)); s <- flat(as_dbl(s))
+  if (length(val(p)) == 1L && N > 1L) p <- p + numeric(N)
+  nv <- rep_len(as.vector(val(nu)), N)
+  q <- ad_unary(p, function(pp) stats::qt(pp, nv), function(pp, y) 1 / stats::dt(y, nv))
+  out <- mu + s * q
+  if (scalar) out else flat(out)
 })
 
 lp_cauchy <- function(y, mu, sigma, propto) {
@@ -839,7 +846,7 @@ for (xt in c("matrix", "row_vector", "vector")) {
   def("bernoulli_logit_glm_lpmf", c("ints", xt, "reals", "vector"), "real", function(y, x, a, b) lp_bernoulli_logit(y, glm_linpred("bernoulli_logit_glm_lpmf", x, a, b), FALSE), density = TRUE, dist = "bernoulli_logit_glm")
   def("bernoulli_logit_glm_lupmf", c("ints", xt, "reals", "vector"), "real", function(y, x, a, b) lp_bernoulli_logit(y, glm_linpred("bernoulli_logit_glm_lpmf", x, a, b), TRUE), density = TRUE, dist = "bernoulli_logit_glm")
 }
-def("bernoulli_logit_glm_rng", c("matrix", "reals", "vector"), "int[]", function(x, a, b) {
+for (xt in c("matrix", "row_vector")) def("bernoulli_logit_glm_rng", c(xt, "reals", "vector"), "int[]", function(x, a, b) {
   eta <- val(glm_linpred("bernoulli_logit_glm_rng", x, a, b))
   as.integer(stats::rbinom(length(eta), 1L, stats::plogis(eta)))
 }, rng = TRUE)
@@ -1012,9 +1019,24 @@ defdist("discrete_range", c("ints", "ints", "ints"), lp_discrete_range, discrete
   rng = function(lo, hi) vrng(function(n, l, h) as.integer(l + floor(stats::runif(n) * (h - l + 1))), lo, hi))
 
 ordered_core <- function(f, k, eta, cuts, link_lcdf, link_lccdf) {
+  cv <- val(cuts)
+  # an array of cut point vectors: one per observation
+  if (!is.null(dim(cv))) {
+    if (nrow(cv) != length(k)) stop_shape(sprintf("%s: the number of cut point vectors must equal the number of observations", f))
+    eta <- flat(as_dbl(eta))
+    # as Stan Math: one location per cut point vector, also for a real location
+    if (length(val(eta)) != nrow(cv)) stop_shape(sprintf("%s: the number of locations must equal the number of cut point vectors", f))
+    cuts <- as_dbl(cuts)
+    lp <- 0
+    for (i in seq_along(k)) {
+      ci <- ad_gather(cuts, i + (seq_len(ncol(cv)) - 1L) * nrow(cv))
+      e <- if (length(val(eta)) == 1L) eta else ad_select(eta, i)
+      lp <- lp + ordered_core(f, k[i], e, ci, link_lcdf, link_lccdf)
+    }
+    return(lp)
+  }
   K <- nelem(cuts) + 1L
   chk_int_range(f, "Random variable", k, 1L, K)
-  cv <- val(cuts)
   if (K > 2L && any(!(diff(cv) > 0))) stop_domain(sprintf("%s: Cut-points is not a valid ordered vector", f))
   eta <- flat(as_dbl(eta))
   N <- vlen_check(f, k, eta)
@@ -1041,12 +1063,12 @@ lp_ordered_logistic <- function(k, eta, cuts, propto) {
 lp_ordered_probit <- function(k, eta, cuts, propto) {
   ordered_core("ordered_probit_lpmf", k, eta, cuts, ad_log_Phi, function(x) ad_log1m_Phi(x))
 }
-defdist("ordered_logistic", c("ints", "reals", "vector"), lp_ordered_logistic, discrete = TRUE,
+defdist("ordered_logistic", c("ints", "reals", "vecarr"), lp_ordered_logistic, discrete = TRUE,
   rng = function(eta, c) {
     p <- -diff(c(1, stats::plogis(val(eta) - val(c)), 0))
     sample.int(length(p), 1L, prob = pmax(p, 0))
   })
-defdist("ordered_probit", c("ints", "reals", "vector"), lp_ordered_probit, discrete = TRUE,
+defdist("ordered_probit", c("ints", "reals", "vecarr"), lp_ordered_probit, discrete = TRUE,
   rng = function(eta, c) {
     p <- -diff(c(1, stats::pnorm(val(eta) - val(c)), 0))
     sample.int(length(p), 1L, prob = pmax(p, 0))
@@ -1230,7 +1252,7 @@ lp_poisson_binomial <- function(y, theta, propto) {
   lps <- pb_logprobs(theta)
   ad_sum(ad_gather(lps, as.integer(y) + 1L))
 }
-defdist("poisson_binomial", c("ints", "vector"), lp_poisson_binomial, discrete = TRUE,
+defdist("poisson_binomial", c("ints", "vecs1"), lp_poisson_binomial, discrete = TRUE,
   lcdf = function(y, theta) {
     lps <- pb_logprobs(theta)
     out <- 0
@@ -1607,3 +1629,351 @@ def("inv_wishart_cholesky_rng", c("real", "matrix"), "matrix", function(nu, LS) 
 # names that defdist() registers but Stan 2.40 does not define
 for (nm in c("beta_proportion_cdf", "loglogistic_lcdf", "binomial_logit_rng"))
   if (exists(nm, envir = .lib, inherits = FALSE)) rm(list = nm, envir = .lib)
+
+# ---- cumulative functions of families defined above ------------------------------
+
+defdist("neg_binomial", c("ints", "reals", "reals"), lp_neg_binomial, discrete = TRUE, densities = FALSE,
+  lcdf = function(n, a, b) nb2_cdf_ad(n, as_dbl(a) / as_dbl(b), a, TRUE),
+  lccdf = function(n, a, b) nb2_cdf_ad(n, as_dbl(a) / as_dbl(b), a, FALSE))
+
+skew_normal_cdf_terms <- function(y, xi, om, al) {
+  z <- (as_dbl(y) - as_dbl(xi)) / as_dbl(om)
+  ad_Phi(z) - 2 * owens_t_ad(z, as_dbl(al) + 0 * z)
+}
+defdist("skew_normal", c("reals", "reals", "reals", "reals"), lp_skew_normal, densities = FALSE,
+  lcdf = function(y, xi, om, al) ad_sum_v(log(skew_normal_cdf_terms(y, xi, om, al)), y, xi, om, al),
+  lccdf = function(y, xi, om, al) ad_sum_v(ad_log1m(skew_normal_cdf_terms(y, xi, om, al)), y, xi, om, al))
+
+# Phi(u) - exp(-v u + v^2 / 2 + log Phi(u - v)) with u = (y - mu) / sigma, v = lambda sigma
+exp_mod_normal_cdf_terms <- function(y, mu, s, l) {
+  s <- as_dbl(s)
+  u <- (as_dbl(y) - as_dbl(mu)) / s
+  v <- as_dbl(l) * s
+  ad_Phi(u) - exp(-v * u + 0.5 * v * v + ad_log_Phi(u - v))
+}
+defdist("exp_mod_normal", c("reals", "reals", "reals", "reals"), lp_exp_mod_normal, densities = FALSE,
+  lcdf = function(y, mu, s, l) ad_sum_v(log(exp_mod_normal_cdf_terms(y, mu, s, l)), y, mu, s, l),
+  lccdf = function(y, mu, s, l) ad_sum_v(ad_log1m(exp_mod_normal_cdf_terms(y, mu, s, l)), y, mu, s, l))
+
+# below mu: log(tau) - 2 (1 - tau) (mu - y) / sigma; above: log1m((1 - tau) exp(-2 tau (y - mu) / sigma))
+sde_terms <- function(y, mu, s, t, lower) {
+  y <- as_dbl(y); mu <- as_dbl(mu); s <- as_dbl(s); t <- as_dbl(t)
+  below <- val(y) <= val(mu)
+  d1 <- ad_ifelse(below, mu - y, 0 * y)
+  d2 <- ad_ifelse(below, 0 * y, y - mu)
+  if (lower) ad_ifelse(below, log(t) - 2 * (1 - t) * d1 / s, ad_log1m((1 - t) * exp(-2 * t * d2 / s)))
+  else ad_ifelse(below, ad_log1m(t * exp(-2 * (1 - t) * d1 / s)), ad_log1m(t) - 2 * t * d2 / s)
+}
+defdist("skew_double_exponential", c("reals", "reals", "reals", "reals"), lp_skew_double_exponential, densities = FALSE,
+  lcdf = function(y, mu, s, t) ad_sum_v(sde_terms(y, mu, s, t, TRUE), y, mu, s, t),
+  lccdf = function(y, mu, s, t) ad_sum_v(sde_terms(y, mu, s, t, FALSE), y, mu, s, t))
+
+# von Mises cumulative distribution on [-pi, pi], as in Stan Math: a
+# continued fraction series for kappa < 49 and a normal approximation above 50
+# (the cut and boundary follow Stan Math, including their dependence on mu)
+vm_series <- function(x, k) {
+  p <- as.integer(28 + 0.5 * val(k) - 100 / (val(k) + 5) + 1)
+  s <- sin(x); c <- cos(x); sn <- sin(p * x); cn <- cos(p * x)
+  R <- 0; V <- 0
+  for (n in seq_len(p - 1L)) {
+    sn_tmp <- sn * c - cn * s
+    cn <- cn * c + sn * s
+    sn <- sn_tmp
+    R <- 1 / (2 * (p - n) / k + R)
+    V <- R * (sn / (p - n) + V)
+  }
+  0.5 + x / (2 * pi) + V / pi
+}
+vm_normal <- function(x, k) {
+  b <- sqrt(2 / pi) / ad_unary(k, function(k) besselI(k, 0, expon.scaled = TRUE),
+                               function(k, y) besselI(k, 1, expon.scaled = TRUE) - y)
+  ad_Phi(b * sin(x / 2))
+}
+vm_centered <- function(x, k) {
+  kv <- val(k)
+  if (kv < 49) {
+    f <- vm_series(x, k)
+    if (val(f) < 0) return(0)
+    if (val(f) > 1) return(1)
+    return(f)
+  }
+  if (kv < 50) return((50 - k) * vm_series(x, 49) + (k - 49) * vm_normal(x, 50))
+  vm_normal(x, k)
+}
+vm_cdf_terms <- function(f, y, mu, k) {
+  chk_bounded(f, "Random variable", y, -pi, pi); chk_finite(f, "Location parameter", mu); chk_positive(f, "Scale parameter", k)
+  N <- vlen_check(f, y, mu, k)
+  y <- flat(as_dbl(y)); mu <- flat(as_dbl(mu)); k <- flat(as_dbl(k))
+  pick <- function(a, i) if (length(val(a)) == 1L) a else ad_select(a, i)
+  lapply(seq_len(N), function(i) {
+    yi <- pick(y, i); mi <- pick(mu, i); ki <- pick(k, i)
+    if (val(yi) == -pi) return(0)
+    if (val(yi) == pi) return(1)
+    # center at mu and wrap both into [-pi, pi)
+    x2 <- yi - mi
+    x2 <- x2 - 2 * pi * floor((val(x2) + pi) / (2 * pi))
+    mu2 <- mi - floor((val(mi) + pi) / (2 * pi)) * 2 * pi
+    if (val(mu2) < 0) { cut <- val(mu2) + pi; bound <- -pi - mu2 } else { cut <- val(mu2) - pi; bound <- pi - mu2 }
+    fb <- vm_centered(bound, ki)
+    cdf <- if (val(yi) <= cut) vm_centered(x2, ki) - fb else vm_centered(x2, ki) + 1 - fb
+    if (val(cdf) < 0) 0 else cdf
+  })
+}
+defdist("von_mises", c("reals", "reals", "reals"), lp_von_mises, densities = FALSE,
+  cdf = function(y, mu, k) {
+    out <- 1
+    for (t in vm_cdf_terms("von_mises_cdf", y, mu, k)) out <- out * t
+    out
+  },
+  lccdf = function(y, mu, k) {
+    out <- 0
+    for (t in vm_cdf_terms("von_mises_lccdf", y, mu, k)) out <- out + ad_log1m(t)
+    out
+  })
+# von_mises_lcdf sums the log terms instead of taking the log of the product
+.lib$von_mises_lcdf <- NULL
+def("von_mises_lcdf", c("reals", "reals", "reals"), "real", function(y, mu, k) {
+  out <- 0
+  for (t in vm_cdf_terms("von_mises_lcdf", y, mu, k)) out <- out + log(t)
+  out
+}, dist = "von_mises")
+
+def("bernoulli_lccdf", c("ints", "reals"), "real", function(n, th) {
+  chk_prob("bernoulli_lccdf", "Probability parameter", th)
+  N <- vlen_check("bernoulli_lccdf", n, th)
+  nn <- rep_len(as.integer(n), N)
+  if (any(nn < 0L)) return(0)
+  if (any(nn >= 1L)) return(-Inf)
+  ad_sum_v(log(flat(as_dbl(th))), n, th)
+}, dist = "bernoulli")
+
+# ---- beta negative binomial ----------------------------------------------------
+
+lp_beta_neg_binomial <- function(n, r, a, b, propto) {
+  f <- "beta_neg_binomial_lpmf"
+  chk_int_range(f, "Failures variable", n, 0L)
+  chk_positive_finite(f, "Number of successes parameter", r)
+  chk_positive_finite(f, "Prior success parameter", a)
+  chk_positive_finite(f, "Prior failure parameter", b)
+  N <- vlen_check(f, n, r, a, b)
+  nn <- rep_len(as.numeric(n), N)
+  r <- flat(as_dbl(r)); a <- flat(as_dbl(a)); b <- flat(as_dbl(b))
+  lp <- 0
+  if (!propto) lp <- lp - sum(lgamma(nn + 1))
+  if (inc(propto, r, a, b))
+    lp <- lp + bsum(flat(ad_lbeta(nn + r, a + b) + lgamma(nn + b) - ad_lbeta(r, a) - lgamma(b) + 0 * nn), N)
+  lp
+}
+# log P(N <= n) per element by summing the mass function
+# ponytail: O(n) per element; Stan uses a 3F2 closed form, switch if large counts matter
+bnb_lcdf_terms <- function(n, r, a, b) {
+  N <- vlen_check("beta_neg_binomial_lcdf", n, r, a, b)
+  nn <- rep_len(as.integer(n), N)
+  r <- flat(as_dbl(r)); a <- flat(as_dbl(a)); b <- flat(as_dbl(b))
+  pick <- function(x, i) if (length(val(x)) == 1L) x else ad_select(x, i)
+  lapply(seq_len(N), function(i) {
+    if (nn[i] < 0L) return(-Inf)
+    k <- 0:nn[i]
+    ri <- pick(r, i); ai <- pick(a, i); bi <- pick(b, i)
+    ad_log_sum_exp(ad_lbeta(k + ri, ai + bi) + lgamma(k + bi) - ad_lbeta(ri, ai) - lgamma(bi) - lgamma(k + 1))
+  })
+}
+defdist("beta_neg_binomial", c("ints", "reals", "reals", "reals"), lp_beta_neg_binomial, discrete = TRUE,
+  lcdf = function(n, r, a, b) ad_sum_list(bnb_lcdf_terms(n, r, a, b)),
+  lccdf = function(n, r, a, b) ad_sum_list(lapply(bnb_lcdf_terms(n, r, a, b), ad_log1m_exp)),
+  rng = function(r, a, b) vrng(function(n, r, a, b) as.integer(stats::rnbinom(n, size = r, prob = stats::rbeta(n, a, b))), r, a, b))
+
+# ---- multivariate Gaussian process and dynamic linear models ---------------------
+
+# rows of y (K x N) are independent normal with covariance Sigma / w[k]
+multi_gp_core <- function(f, y, w, logdet, quad, propto, N) {
+  chk_positive_finite(f, "Kernel scales", w)
+  chk_finite(f, "Random variable", y)
+  K <- nrow(val(y))
+  if (nelem(w) != K) stop_shape(sprintf("%s: the size of the kernel scales must equal the number of rows of y", f))
+  w <- flat(as_dbl(w))
+  lp <- 0
+  if (!propto) lp <- lp - 0.5 * K * N * log(2 * pi)
+  if (inc(propto, logdet)) lp <- lp - 0.5 * K * logdet
+  if (inc(propto, w)) lp <- lp + 0.5 * N * ad_sum(log(w))
+  lp - 0.5 * ad_sum(w * quad)
+}
+lp_multi_gp <- function(y, Sigma, w, propto) {
+  f <- "multi_gp_lpdf"
+  sym_check(f, Sigma)
+  N <- ncol(val(y))
+  if (any(dim(val(Sigma)) != N)) stop_shape(sprintf("%s: Sigma must be N x N with N the number of columns of y", f))
+  L <- ad_cholesky(as_dbl(Sigma))
+  Z <- ad_tri_solve(L, ad_transpose(as_dbl(y)), f)
+  quad <- ad_matmul(matrix(1, 1L, N), Z * Z)
+  multi_gp_core(f, y, w, 2 * ad_sum(log(.lib$diagonal[[1L]]$impl(L))), quad, propto, N)
+}
+lp_multi_gp_cholesky <- function(y, L, w, propto) {
+  f <- "multi_gp_cholesky_lpdf"
+  N <- ncol(val(y))
+  if (any(dim(val(L)) != N)) stop_shape(sprintf("%s: L must be N x N with N the number of columns of y", f))
+  Z <- ad_tri_solve(as_dbl(L), ad_transpose(as_dbl(y)), f)
+  quad <- ad_matmul(matrix(1, 1L, N), Z * Z)
+  multi_gp_core(f, y, w, 2 * ad_sum(log(.lib$diagonal[[1L]]$impl(L))), quad, propto, N)
+}
+defdist("multi_gp", c("matrix", "matrix", "vector"), lp_multi_gp)
+defdist("multi_gp_cholesky", c("matrix", "matrix", "vector"), lp_multi_gp_cholesky)
+
+# Kalman filter likelihood of y (r x T) for the state space model
+#   y_t ~ N(F' theta_t, V), theta_t ~ N(G theta_{t-1}, W), theta_0 ~ N(m0, C0)
+lp_gaussian_dlm_obs <- function(y, Fm, G, V, W, m0, C0, propto) {
+  f <- "gaussian_dlm_obs_lpdf"
+  chk_finite(f, "y", y); chk_finite(f, "F", Fm); chk_finite(f, "G", G); chk_finite(f, "m0", m0)
+  sym_check(f, W); sym_check(f, C0)
+  r <- nrow(val(y)); Tn <- ncol(val(y)); n <- nrow(val(G))
+  if (any(dim(val(Fm)) != c(n, r)) || ncol(val(G)) != n || any(dim(val(W)) != n) || nelem(m0) != n || any(dim(val(C0)) != n))
+    stop_shape(sprintf("%s: size mismatch", f))
+  if (is.null(dim(val(V)))) {
+    chk_nonnegative(f, "V", V)
+    if (nelem(V) != r) stop_shape(sprintf("%s: size mismatch", f))
+    Vm <- ad_scatter(matrix(0, r, r), (seq_len(r) - 1L) * (r + 1L) + 1L, as_dbl(V))
+  } else {
+    sym_check(f, V)
+    if (any(dim(val(V)) != r)) stop_shape(sprintf("%s: size mismatch", f))
+    Vm <- as_dbl(V)
+  }
+  y <- as_dbl(y); Fm <- as_dbl(Fm); G <- as_dbl(G); W <- as_dbl(W)
+  Ft <- ad_transpose(Fm); Gt <- ad_transpose(G)
+  m <- ad_reshape(as_dbl(m0), c(n, 1L)); C <- as_dbl(C0)
+  lp <- if (propto) 0 else -0.5 * log(2 * pi) * r * Tn
+  for (t in seq_len(Tn)) {
+    a <- ad_matmul(G, m)
+    R <- ad_matmul(ad_matmul(G, C), Gt) + W
+    fc <- ad_matmul(Ft, a)
+    FR <- ad_matmul(Ft, R)
+    Q <- ad_matmul(FR, Fm) + Vm
+    Q <- 0.5 * (Q + ad_transpose(Q))
+    e <- ad_gather(y, (t - 1L) * r + seq_len(r), c(r, 1L)) - fc
+    Qe <- ad_solve(Q, e)
+    QFR <- ad_solve(Q, FR)
+    m <- a + ad_matmul(ad_transpose(FR), Qe)
+    C <- R - ad_matmul(ad_transpose(FR), QFR)
+    C <- 0.5 * (C + ad_transpose(C))
+    lp <- lp - 0.5 * (ad_log_det(Q) + ad_sum(e * Qe))
+  }
+  lp
+}
+for (vt in c("vector", "matrix")) local({
+  v_t <- vt
+  def("gaussian_dlm_obs_lpdf", c("matrix", "matrix", "matrix", v_t, "matrix", "vector", "matrix"), "real",
+      function(...) lp_gaussian_dlm_obs(..., propto = FALSE), density = TRUE, dist = "gaussian_dlm_obs")
+  def("gaussian_dlm_obs_lupdf", c("matrix", "matrix", "matrix", v_t, "matrix", "vector", "matrix"), "real",
+      function(...) lp_gaussian_dlm_obs(..., propto = TRUE), density = TRUE, dist = "gaussian_dlm_obs")
+})
+
+# lognormal standard deviations and an LKJ correlation (deprecated in Stan)
+lp_lkj_cov <- function(y, mu, sigma, eta, propto) {
+  f <- "lkj_cov_lpdf"
+  sym_check(f, y)
+  K <- nrow(val(y))
+  if (nelem(mu) != K || nelem(sigma) != K) stop_shape(sprintf("%s: size mismatch", f))
+  y <- as_dbl(y)
+  d <- .lib$diagonal[[1L]]$impl(y)
+  sds <- sqrt(d)
+  lp <- lp_lognormal(sds, mu, sigma, propto)
+  isd <- 1 / sds
+  D <- ad_gather(isd, rep(seq_len(K), K), c(K, K)) * ad_gather(isd, rep(seq_len(K), each = K), c(K, K))
+  lp + lp_lkj_corr(D * y, eta, propto)
+}
+defdist("lkj_cov", c("matrix", "vector", "vector", "real"), lp_lkj_cov)
+
+# ---- hidden Markov models -------------------------------------------------------
+# log_omega[k, n]: log density of observation n in state k; Gamma[i, j]:
+# probability of moving from state i to state j; rho: initial distribution.
+
+hmm_check <- function(f, lo, G, rho) {
+  K <- nrow(val(lo))
+  if (any(dim(val(G)) != K) || nelem(rho) != K) stop_shape(sprintf("%s: Gamma must be K x K and rho of size K, with K the rows of log_omega", f))
+  vG <- val(G)
+  if (any(vG < 0) || any(abs(rowSums(vG) - 1) > 1e-8)) stop_domain(sprintf("%s: the rows of Gamma must be simplexes", f))
+  m <- simplex_check(val(rho))
+  if (!is.null(m)) stop_domain(sprintf("%s: rho %s", f, m))
+  chk_not_nan(f, "log_omega", lo)
+}
+
+# scaled forward pass; alphas[, n] are the filtered state probabilities
+hmm_forward <- function(lo, G, rho) {
+  K <- nrow(val(lo)); N <- ncol(val(lo))
+  lo <- as_dbl(lo); Gt <- ad_transpose(as_dbl(G))
+  col <- function(n) ad_gather(lo, (n - 1L) * K + seq_len(K))
+  lp <- 0
+  a <- flat(as_dbl(rho))
+  alphas <- vector("list", N)
+  for (n in seq_len(N)) {
+    if (n > 1L) a <- flat(ad_matmul(Gt, ad_reshape(a, c(K, 1L))))
+    ln <- col(n)
+    mx <- max(val(ln))
+    w <- a * exp(ln - mx)
+    s <- ad_sum(w)
+    lp <- lp + log(s) + mx
+    a <- w / s
+    alphas[[n]] <- a
+  }
+  list(lp = lp, alphas = alphas)
+}
+
+def("hmm_marginal", c("matrix", "matrix", "vector"), "real", function(lo, G, rho) {
+  hmm_check("hmm_marginal", lo, G, rho)
+  if (ncol(val(lo)) == 0L) return(0)
+  hmm_forward(lo, G, rho)$lp
+})
+
+def("hmm_hidden_state_prob", c("matrix", "matrix", "vector"), "matrix", function(lo, G, rho) {
+  hmm_check("hmm_hidden_state_prob", lo, G, rho)
+  vlo <- val(lo); vG <- val(G)
+  K <- nrow(vlo); N <- ncol(vlo)
+  if (!N) return(matrix(0, K, 0L))
+  al <- vapply(hmm_forward(vlo, vG, val(rho))$alphas, val, numeric(K))
+  if (K == 1L) al <- matrix(al, 1L)
+  out <- matrix(0, K, N)
+  beta <- rep(1, K)
+  out[, N] <- al[, N]
+  if (N > 1L) for (n in (N - 1L):1L) {
+    om <- exp(vlo[, n + 1L] - max(vlo[, n + 1L]))
+    beta <- as.vector(vG %*% (om * beta))
+    beta <- beta / sum(beta)
+    p <- al[, n] * beta
+    out[, n] <- p / sum(p)
+  }
+  out
+})
+
+def("hmm_latent_rng", c("matrix", "matrix", "vector"), "int[]", function(lo, G, rho) {
+  hmm_check("hmm_latent_rng", lo, G, rho)
+  vlo <- val(lo); vG <- val(G)
+  K <- nrow(vlo); N <- ncol(vlo)
+  if (!N) return(integer(0))
+  al <- vapply(hmm_forward(vlo, vG, val(rho))$alphas, val, numeric(K))
+  if (K == 1L) al <- matrix(al, 1L)
+  z <- integer(N)
+  z[N] <- sample.int(K, 1L, prob = al[, N])
+  if (N > 1L) for (n in (N - 1L):1L) {
+    p <- al[, n] * vG[, z[n + 1L]]
+    z[n] <- sample.int(K, 1L, prob = p)
+  }
+  z
+}, rng = TRUE)
+
+# matrix normal with precision matrices Sigma (rows) and D (columns); the
+# log determinant weights follow Stan Math
+lp_matrix_normal_prec <- function(y, Mu, Sigma, D, propto) {
+  f <- "matrix_normal_prec_lpdf"
+  sym_check(f, Sigma); sym_check(f, D)
+  chk_finite(f, "Random variable", y); chk_finite(f, "Location parameter", Mu)
+  N <- nrow(val(y)); P <- ncol(val(y))
+  if (any(dim(val(Mu)) != c(N, P)) || any(dim(val(Sigma)) != N) || any(dim(val(D)) != P)) stop_shape(sprintf("%s: size mismatch", f))
+  lp <- if (propto) 0 else -0.5 * log(2 * pi) * N * P
+  if (inc(propto, Sigma)) lp <- lp + 0.5 * N * ad_log_det(as_dbl(Sigma))
+  if (inc(propto, D)) lp <- lp + 0.5 * P * ad_log_det(as_dbl(D))
+  if (inc(propto, y, Mu, Sigma, D)) {
+    E <- as_dbl(y) - as_dbl(Mu)
+    lp <- lp - 0.5 * ad_sum(as_dbl(D) * ad_matmul(ad_matmul(ad_transpose(E), as_dbl(Sigma)), E))
+  }
+  lp
+}
+defdist("matrix_normal_prec", c("matrix", "matrix", "matrix", "matrix"), lp_matrix_normal_prec)

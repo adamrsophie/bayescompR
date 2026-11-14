@@ -209,6 +209,26 @@ def("trace_quad_form", c("matrix", "matrix"), "real", function(A, B) {
   B <- as_dbl(B)
   ad_sum(B * ad_matmul(as_dbl(A), B))
 })
+def("trace_quad_form", c("matrix", "vector"), "real", function(A, b) {
+  b <- as_dbl(b)
+  if (nrow(val(A)) != ncol(val(A)) || ncol(val(A)) != nelem(b)) stop_shape("trace_quad_form: size mismatch")
+  ad_sum(b * op_mat_vec(A, b))
+})
+# trace(A * B)
+def("trace_dot", c("matrix", "matrix"), "real", function(A, B) {
+  dA <- dim(val(A)); dB <- dim(val(B))
+  if (dA[2L] != dB[1L] || dA[1L] != dB[2L]) stop_shape("trace_dot: size mismatch")
+  ad_sum(as_dbl(A) * ad_transpose(as_dbl(B)))
+})
+def("symmetrize_from_lower_tri", "matrix", "matrix", function(A) {
+  d <- dim(val(A))
+  if (d[1L] != d[2L]) stop_shape("symmetrize_from_lower_tri: the matrix must be square")
+  n <- d[1L]
+  i <- rep(seq_len(n), n); j <- rep(seq_len(n), each = n)
+  # entry (i, j) above the diagonal takes (j, i)
+  src <- ifelse(i >= j, i + (j - 1L) * n, j + (i - 1L) * n)
+  if (is_ad(A)) ad_gather(A, src, d) else { out <- val(A)[src]; dim(out) <- d; out }
+})
 def("trace_gen_quad_form", c("matrix", "matrix", "matrix"), "real", function(D, A, B) {
   B <- as_dbl(B)
   ad_sum(.lib$diagonal[[1L]]$impl(ad_matmul(ad_matmul(as_dbl(D), ad_transpose(B)), ad_matmul(as_dbl(A), B))))
@@ -433,21 +453,58 @@ k_m52 <- function(d2, s, l) {
   r <- gp_dist(d2) * sqrt(5) / l
   s * s * (1 + r + r * r / 3) * exp(-r)
 }
+# automatic relevance determination: one length scale per input dimension,
+# applied by scaling the inputs and using a unit length scale
+gp_ard_scale <- function(name, x, l) {
+  v <- val(x)
+  chk_positive(name, "length scale", l)
+  if (ncol(v) != nelem(l)) stop_shape(sprintf("%s: the number of length scales must equal the dimension of the inputs", name))
+  as_dbl(x) / ad_gather(as_dbl(l), rep(seq_len(ncol(v)), each = nrow(v)), dim(v))
+}
+gp_kernel_ard <- function(name, kfun) {
+  def(name, c("vector[]", "real", "real[]"), "matrix", function(x, s, l) {
+    chk_positive(name, "magnitude", s)
+    xs <- gp_ard_scale(name, x, l)
+    kfun(gp_sqdist(xs, xs), as_dbl(s), 1)
+  })
+  def(name, c("vector[]", "vector[]", "real", "real[]"), "matrix", function(x1, x2, s, l) {
+    chk_positive(name, "magnitude", s)
+    kfun(gp_sqdist(gp_ard_scale(name, x1, l), gp_ard_scale(name, x2, l)), as_dbl(s), 1)
+  })
+}
+gp_kernel_ard("gp_exp_quad_cov", k_sqexp)
+gp_kernel_ard("gp_exponential_cov", k_exp)
+gp_kernel_ard("gp_matern32_cov", k_m32)
+gp_kernel_ard("gp_matern52_cov", k_m52)
 gp_kernel("gp_exp_quad_cov", k_sqexp)
 gp_kernel("gp_exponential_cov", k_exp)
 gp_kernel("gp_matern32_cov", k_m32)
 gp_kernel("gp_matern52_cov", k_m52)
-def("gp_periodic_cov", c("real[]", "real", "real", "real"), "matrix", function(x, s, l, p) {
-  d <- gp_dist(gp_sqdist(x, x))
+k_periodic <- function(d2, s, l, p) {
+  chk_positive("gp_periodic_cov", "signal standard deviation", s); chk_positive("gp_periodic_cov", "length scale", l)
+  chk_positive("gp_periodic_cov", "period", p)
+  d <- gp_dist(d2)
   s <- as_dbl(s); l <- as_dbl(l); p <- as_dbl(p)
   sn <- sin(pi * d / p)
   s * s * exp(-2 * sn * sn / (l * l))
-})
-def("gp_dot_prod_cov", c("real[]", "real"), "matrix", function(x, sigma) {
-  x <- as_dbl(x)
-  n <- nelem(x)
-  X <- ad_reshape(x, c(n, 1L))
-  as_dbl(sigma) * as_dbl(sigma) + ad_matmul(X, ad_transpose(X))
+}
+# points as an n x d matrix
+gp_matrix <- function(x) {
+  v <- val(x)
+  if (is.null(dim(v))) ad_reshape(as_dbl(x), c(length(v), 1L)) else as_dbl(x)
+}
+k_dot_prod <- function(x1, x2, sigma) {
+  chk_nonnegative("gp_dot_prod_cov", "sigma", sigma)
+  A <- gp_matrix(x1); B <- gp_matrix(x2)
+  if (ncol(val(A)) != ncol(val(B))) stop_shape("gp_dot_prod_cov: points have different dimensions")
+  as_dbl(sigma) * as_dbl(sigma) + ad_matmul(A, ad_transpose(B))
+}
+for (xt in c("real[]", "vector[]")) local({
+  x_t <- xt
+  def("gp_periodic_cov", c(x_t, "real", "real", "real"), "matrix", function(x, s, l, p) k_periodic(gp_sqdist(x, x), s, l, p))
+  def("gp_periodic_cov", c(x_t, x_t, "real", "real", "real"), "matrix", function(x1, x2, s, l, p) k_periodic(gp_sqdist(x1, x2), s, l, p))
+  def("gp_dot_prod_cov", c(x_t, "real"), "matrix", function(x, sigma) k_dot_prod(x, x, sigma))
+  def("gp_dot_prod_cov", c(x_t, x_t, "real"), "matrix", function(x1, x2, sigma) k_dot_prod(x1, x2, sigma))
 })
 
 # ---- compressed sparse row (CSR) matrices -----------------------------------------

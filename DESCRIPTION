@@ -69,6 +69,7 @@ Collate:
     'library_containers.R'
     'library_linalg.R'
     'library_dist.R'
+    'library_transforms.R'
     'semantic.R'
     'runtime.R'
     'codegen.R'

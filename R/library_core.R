@@ -45,6 +45,10 @@ pat_ok <- function(p, t) {
       (t$nd == 1L && t$base %in% c("int", "real")),
     ints = t$base == "int" && t$nd <= 1L,
     vectors = t$nd <= 1L && t$base %in% c("vector", "row_vector"),
+    # a vector, row vector or array of reals (Stan's 1 dimensional real containers)
+    vecs1 = (t$nd == 0L && t$base %in% c("vector", "row_vector")) || (t$nd == 1L && t$base == "real"),
+    intany = t$base == "int",
+    vecarr = t$base == "vector" && t$nd <= 1L,
     string = t$base == "string",
     ty_assignable(parse_ty_string(p), t))
 }
@@ -70,12 +74,19 @@ r_promote1 <- function(types) {
 }
 r_same1 <- function(types) types[[1L]]
 # binary vectorized: the container argument decides
+# dimensions of a type counting vectors as one and matrices as two
+total_dims <- function(t) t$nd + switch(t$base, vector = , row_vector = 1L, matrix = 2L, 0L)
 r_bcast2 <- function(types) {
   a <- types[[1L]]
   b <- types[[2L]]
   if (!is_scalar_ty(a)) {
-    if (!is_scalar_ty(b) && !(ty_assignable(r_promote1(list(a)), b) || ty_assignable(r_promote1(list(b)), a)))
+    if (!is_scalar_ty(b) && !(ty_assignable(r_promote1(list(a)), b) || ty_assignable(r_promote1(list(b)), a))) {
+      # an integer array pairs with a real container of as many dimensions
+      # (binary_log_loss(array[] int, vector), lmgamma(array[,] int, matrix))
+      if (a$base == "int" && b$base != "int" && total_dims(a) == total_dims(b)) return(b)
+      if (b$base == "int" && a$base != "int" && total_dims(a) == total_dims(b)) return(a)
       return(NULL)
+    }
     return(r_promote1(list(a)))
   }
   if (!is_scalar_ty(b)) return(r_promote1(list(b)))
@@ -359,6 +370,17 @@ def("to_int", "real", "int", function(x) {
   if (!is.finite(v) || abs(v) > .Machine$integer.max) stop_domain("to_int: argument is out of the range of a 32 bit integer")
   as.integer(v)
 })
+for (nd in 2:8) local({
+  at <- function(b) paste0(b, "[", strrep(",", nd - 1L), "]")
+  def("to_int", at("int"), at("int"), function(x) x)
+  def("to_int", at("real"), at("int"), function(x) {
+    v <- trunc(val(x))
+    if (any(!is.finite(v) | abs(v) > .Machine$integer.max)) stop_domain("to_int: argument is out of the range of a 32 bit integer")
+    storage.mode(v) <- "integer"
+    v
+  })
+})
+def("to_int", "int[]", "int[]", function(x) x)
 def("to_int", "real[]", "int[]", function(x) {
   v <- trunc(val(x))
   if (any(!is.finite(v) | abs(v) > .Machine$integer.max)) stop_domain("to_int: argument is out of the range of a 32 bit integer")
@@ -411,23 +433,50 @@ bin2("log_modified_bessel_first_kind", function(v, z) ad_binary(v, z,
   function(v, z) log(besselI(z, v, expon.scaled = TRUE)) + z,
   function(v, z, y) num_partial(function(vv) log(besselI(z, vv, expon.scaled = TRUE)), v),
   function(v, z, y) besselI(z, v + 1, expon.scaled = TRUE) / besselI(z, v, expon.scaled = TRUE) + v / z))
-def("log_sum_exp", c("real", "real"), "real", function(a, b) ad_log_sum_exp2(as_dbl(a), as_dbl(b)))
-def("choose", c("int", "int"), "int", function(n, k) {
-  if (k > n) return(0L)
-  r <- choose(n, k)
-  if (r > .Machine$integer.max) stop_domain("choose: result overflows a 32 bit integer")
-  as.integer(round(r))
-})
-def("lmgamma", c("int", "real"), "real", function(k, x) {
-  x <- as_dbl(x)
-  out <- k * (k - 1) / 4 * log(pi)
-  for (j in seq_len(k)) out <- out + lgamma(x + (1 - j) / 2)
+bin2("log_sum_exp", ad_log_sum_exp2)
+# integer first argument, vectorized: f(n, x) with n data
+bin_int <- function(nm, f) {
+  def(nm, c("intany", "any"), r_bcast2, function(n, x) {
+    same_shape(n, x, nm)
+    x <- as_dbl(x)
+    vn <- val(n)
+    # spread a scalar x over an integer array
+    if (length(val(x)) == 1L && length(vn) > 1L) x <- x + array(0, if (is.null(dim(vn))) length(vn) else dim(vn))
+    f(rep_len(as.integer(vn), length(val(x))), x)
+  })
+}
+# J and I of negative arguments: J_v(-z) = (-1)^v J_v(z), likewise I_v
+odd_sign <- function(z, v) ifelse(z < 0 & v %% 2L == 1L, -1, 1)
+bessel_j <- function(z, v) odd_sign(z, v) * besselJ(abs(z), v)
+bessel_i <- function(z, v) odd_sign(z, v) * besselI(abs(z), v)
+bin_int("bessel_first_kind", function(v, z) ad_unary(z, function(z) bessel_j(z, v), function(z, y) ifelse(z == 0, ifelse(v == 1L, 0.5, 0), bessel_j(z, v - 1L) - v / z * y)))
+bin_int("bessel_second_kind", function(v, z) ad_unary(z, function(z) besselY(z, v), function(z, y) besselY(z, v - 1) - v / z * y))
+bin_int("modified_bessel_first_kind", function(v, z) ad_unary(z, function(z) bessel_i(z, v), function(z, y) ifelse(z == 0, ifelse(v == 1L, 0.5, 0), bessel_i(z, v + 1L) + v / z * y)))
+bin_int("modified_bessel_second_kind", function(v, z) ad_unary(z, function(z) besselK(z, v), function(z, y) -besselK(z, v - 1) - v / z * y))
+bin_int("lmgamma", function(k, x) {
+  out <- k * (k - 1) / 4 * log(pi) + 0 * x
+  for (j in seq_len(max(c(k, 0L)))) {
+    # terms past an element's own k use lgamma(1) = 0
+    out <- out + lgamma(ad_ifelse(j <= k, x + (1 - j) / 2, 1 + 0 * x))
+  }
   out
 })
-def("bessel_first_kind", c("int", "real"), "real", function(v, z) ad_unary(as_dbl(z), function(z) besselJ(z, v), function(z, y) besselJ(z, v - 1) - v / z * y))
-def("bessel_second_kind", c("int", "real"), "real", function(v, z) ad_unary(as_dbl(z), function(z) besselY(z, v), function(z, y) besselY(z, v - 1) - v / z * y))
-def("modified_bessel_first_kind", c("int", "real"), "real", function(v, z) ad_unary(as_dbl(z), function(z) besselI(z, v), function(z, y) besselI(z, v + 1) + v / z * y))
-def("modified_bessel_second_kind", c("int", "real"), "real", function(v, z) ad_unary(as_dbl(z), function(z) besselK(z, v), function(z, y) -besselK(z, v - 1) - v / z * y))
+def("ldexp", c("any", "intany"), r_bcast2, function(x, n) {
+  same_shape(x, n, "ldexp")
+  as_dbl(x) * 2^as.numeric(val(n))
+})
+def("choose", c("intany", "intany"), function(types) { r <- r_bcast2(types); if (is.null(r)) NULL else ty("int", r$nd) },
+    function(n, k) {
+  same_shape(n, k, "choose")
+  n <- val(n); k <- val(k)
+  if (any(n < 0L | k < 0L)) stop_domain("choose: arguments must be nonnegative")
+  r <- ifelse(k > n, 0, round(choose(n, k)))
+  if (any(r > .Machine$integer.max)) stop_domain("choose: result overflows a 32 bit integer")
+  d <- if (length(n) >= length(k)) dim(n) else dim(k)
+  out <- as.integer(r)
+  if (!is.null(d)) dim(out) <- d
+  out
+})
 def("inc_beta", c("real", "real", "real"), "real", function(a, b, x) {
   inc_beta_ad(as_dbl(a), as_dbl(b), as_dbl(x))
 })
@@ -442,14 +491,29 @@ def("inv_inc_beta", c("real", "real", "real"), "real", function(a, b, p) {
     if (is_ad(b)) -g * num_partial(function(bb) stats::pbeta(x, val(a), bb), val(b)) / dens,
     if (is_ad(p)) g / dens))
 })
-def("fma", c("real", "real", "real"), "real", function(x, y, z) as_dbl(x) * as_dbl(y) + as_dbl(z))
+def("fma", c("any", "any", "any"), r_bcast_n, function(x, y, z) {
+  same_shape(x, y, "fma"); same_shape(x, z, "fma"); same_shape(y, z, "fma")
+  as_dbl(x) * as_dbl(y) + as_dbl(z)
+})
 def("log_mix", c("real", "real", "real"), "real", function(th, a, b) {
   th <- as_dbl(th)
   chk_prob("log_mix", "theta", th)
   ad_log_sum_exp2(log(th) + as_dbl(a), ad_log1m(th) + as_dbl(b))
 })
-def("log_mix", c("vectors", "vectors"), "real", function(th, lp) {
+def("log_mix", c("vecs1", "vecs1"), "real", function(th, lp) {
+  if (nelem(th) != nelem(lp)) stop_shape("log_mix: theta and lambda must have the same size")
   ad_log_sum_exp(log(flat(as_dbl(th))) + flat(as_dbl(lp)))
+})
+# an array of densities: the sum of the mixtures of its elements
+for (lt in c("vector[]", "row_vector[]")) def("log_mix", c("vecs1", lt), "real", function(th, lp) {
+  K <- nelem(th)
+  vl <- val(lp)
+  if (ncol(vl) != K) stop_shape("log_mix: theta and each lambda must have the same size")
+  lth <- log(flat(as_dbl(th)))
+  lp <- as_dbl(lp)
+  out <- 0
+  for (n in seq_len(nrow(vl))) out <- out + ad_log_sum_exp(lth + ad_gather(lp, n + (seq_len(K) - 1L) * nrow(vl)))
+  out
 })
 def("hypergeometric_2F1", c("real", "real", "real", "real"), "real", function(a, b, c, z) {
   # the series converges for |z| < 1; for z < -1/2 the Pfaff transformation

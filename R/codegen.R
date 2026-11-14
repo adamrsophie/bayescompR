@@ -155,6 +155,8 @@ cg_call <- function(e) {
               cg_size_guard(e$name, sg, types, cl_list(sg$impl, unname(args))),
               cg_size_guard(e$name, sg, types, cl_list(full, unname(args)))))
   }
+  # library functions that touch the target (the _jacobian transforms)
+  if (isTRUE(sg$ctx)) return(cl_list(sg$impl, c(unname(args), list(.ctx = CTX))))
   cg_size_guard(e$name, sg, types, cl_list(sg$impl, unname(args)))
 }
 

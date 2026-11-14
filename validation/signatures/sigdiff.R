@@ -43,7 +43,7 @@ for (l in lines) {
   if (any(grepl("complex|tuple|\\(|=>", s$args)) || grepl("complex|tuple", s$ret)) next
   ds <- vapply(seq_along(s$args), function(i) decl(s$args[i], paste0("a", i)), "")
   if (anyNA(ds)) next
-  argn <- paste0("a", seq_along(s$args))
+  argn <- if (length(s$args)) paste0("a", seq_along(s$args)) else character()
   density <- grepl("_(lpdf|lpmf|lupdf|lupmf)$", s$name)
   cdf <- grepl("_(lcdf|lccdf|cdf)$", s$name)
   call <- if ((density || cdf) && length(argn)) sprintf("%s(%s | %s)", s$name, argn[1], paste(argn[-1], collapse = ", ")) else sprintf("%s(%s)", s$name, paste(argn, collapse = ", "))
