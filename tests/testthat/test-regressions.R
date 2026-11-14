@@ -98,11 +98,9 @@ test_that("Gibbs slice kernel leaves a bounded uniform invariant", {
 })
 
 test_that("gradient free samplers initialize without gradients", {
-  # svd_U of a parameter dependent matrix has a value but no gradient
   m <- bayescomp_model("parameters { real x; } model { matrix[2, 2] A = [[x, 1], [0, 2]];
                         target += -0.5 * square(x) + 0 * svd_U(A)[1, 1]; }")
-  expect_error(bayescomp_sample(m, chains = 1, iter_warmup = 5, iter_sampling = 5, seed = 1, refresh = 0),
-               class = "bayescomp_unsupported_error")
+  local_mocked_bindings(ad_value_grad = function(...) stop("gradient called"))
   f <- bayescomp_sample(m, algorithm = "slice", chains = 1, iter_warmup = 20, iter_sampling = 20, seed = 1, refresh = 0)
   expect_equal(dim(f$draws)[1:2], c(20L, 1L))
 })

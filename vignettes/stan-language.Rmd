@@ -207,15 +207,22 @@ bayescomp_check("parameters { real x; } model { x ~ normal(0); }")
 During sampling, domain and reject errors reject the proposal, as in
 Stan.
 
-## Not supported
+## Coverage
 
-The following Stan features raise `bayescomp_unsupported_error`:
+Every function and distribution of Stan 2.40 is available, with
+gradients. Singular vectors and eigenvectors are unique only up to sign
+(and, for repeated values, rotation), so `svd_U()`, `svd_V()` and the
+eigenvector functions can differ from CmdStan by column signs; their
+gradients assume distinct singular values or eigenvalues, as in Stan Math.
 
-* the `wiener` distribution.
+## Drift diffusion models
 
-```{r, error = TRUE}
-bayescomp_check("parameters { real<lower=0> y; } model { 0.5 ~ wiener(1, y, 0.5, 0.2); }")
-```
+`wiener_lpdf()` has Stan's four, five (with drift variability `sv`) and
+seven (with `sw` and `st0`) parameter forms, with an optional precision
+argument, and `wiener_lcdf_unnorm()` and `wiener_lccdf_unnorm()` give the
+defective distribution functions of the upper boundary. The four parameter
+density uses Stan Math's series and truncation; the others are summed to
+about double precision.
 
 ## Solvers and integrators
 

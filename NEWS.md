@@ -8,6 +8,10 @@ First release.
   differentiation tape with fused density kernels.
 * All constrained types of Stan 2.40 with Stan's transforms and Jacobians.
 * Math, container, linear algebra and distribution library.
+* The `wiener` distribution with four, five and seven parameters and its
+  defective distribution functions.
+* Exact gradients of `svd_U()`, `svd_V()`, `qr_Q()` and `qr_R()` of tall
+  matrices, and of `student_t_qf()` in the degrees of freedom.
 * Embedded Laplace approximation (`laplace_marginal` and related
   functions, including the built in Poisson, Bernoulli and negative
   binomial forms).
@@ -60,8 +64,7 @@ First release.
 * Without `seed`, a seed is drawn from the global stream (so repeated calls
   differ and `set.seed()` reproduces them) and recorded in `fit$seed`.
 * Bounds may mix finite and infinite values elementwise.
-* `inv_erfc()`; `hypergeometric_2F1()` for all `z < 1`. Stan functions that
-  are not implemented yet raise `bayescomp_unsupported_error`.
+* `inv_erfc()`; `hypergeometric_2F1()` for all `z < 1`.
 * Gibbs conjugate blocks are always Metropolis corrected, and the slice
   kernel splits its stepping out budget at random, so both are exact.
 * SG-MCMC scales minibatch gradients by the number of batches, which is

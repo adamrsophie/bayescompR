@@ -72,9 +72,8 @@ bayescomp_diagnose(fit)
 | Diagnostics | rank normalized split R-hat, bulk, tail and quantile ESS, MCSE, divergences, tree depth, E-BFMI; trace, density, rank and ESS plots |
 | Backends | typed versioned IR (`bayescomp_ir()`), backend registry with explicit fallback and `bayescomp_validate_backend()`; native backends bayescompRCranelift and bayescompRLLVM in [bayescomp-native-rs](https://github.com/adamrsophie/bayescomp-native-rs) |
 
-Features of Stan that are not implemented yet (the `wiener` distribution)
-give a clear
-`bayescomp_unsupported_error` when the program is checked. See `vignette("stan-language")` for the full list.
+Every function and distribution of Stan 2.40 is available, with
+gradients. See `vignette("stan-language")` for details.
 
 ## Speed
 

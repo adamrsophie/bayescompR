@@ -275,17 +275,36 @@ def("singular_values", "matrix", "vector", function(A) {
   if (!is_ad(A)) return(s$d)
   ad_node(s$d, list(A), function(g) list(s$u %*% (g * t(s$v))))
 })
+# reverse mode adjoints of the thin SVD (Townsend 2016), with
+# F[i, j] = 1 / (s_j^2 - s_i^2); singular values must be distinct
+svd_F <- function(d) {
+  F <- outer(d^2, d^2, function(a, b) 1 / (b - a))
+  diag(F) <- 0
+  F
+}
 def("svd_U", "matrix", "matrix", function(A) {
   A <- as_dbl(A)
-  s <- svd(val(A))
-  if (is_ad(A)) stop_unsupported("svd_U with a parameter dependent argument has no gradient in this version")
-  s$u
+  vA <- val(A)
+  s <- svd(vA)
+  if (!is_ad(A)) return(s$u)
+  U <- s$u; V <- s$v; d <- s$d
+  ad_node(U, list(A), function(G) {
+    UG <- crossprod(U, G)
+    list(U %*% ((svd_F(d) * (UG - t(UG))) %*% diag(d, length(d))) %*% t(V) +
+           (G - U %*% UG) %*% diag(1 / d, length(d)) %*% t(V))
+  })
 })
 def("svd_V", "matrix", "matrix", function(A) {
   A <- as_dbl(A)
-  s <- svd(val(A))
-  if (is_ad(A)) stop_unsupported("svd_V with a parameter dependent argument has no gradient in this version")
-  s$v
+  vA <- val(A)
+  s <- svd(vA)
+  if (!is_ad(A)) return(s$v)
+  U <- s$u; V <- s$v; d <- s$d
+  ad_node(V, list(A), function(G) {
+    VG <- crossprod(V, G)
+    list(U %*% (diag(d, length(d)) %*% (svd_F(d) * (VG - t(VG)))) %*% t(V) +
+           U %*% diag(1 / d, length(d)) %*% t(G - V %*% VG))
+  })
 })
 
 # matrix exponential through Matrix::expm; the adjoint uses the block matrix
@@ -343,32 +362,59 @@ qr_thin <- function(A) {
 }
 def("qr_thin_Q", "matrix", "matrix", function(A) qr_thin(A)$Q)
 def("qr_thin_R", "matrix", "matrix", function(A) qr_thin(A)$R)
-def("qr_Q", "matrix", "matrix", function(A) {
-  if (is_ad(A)) {
-    d <- dim(val(A))
-    if (d[1L] > d[2L]) stop_unsupported("qr_Q of a tall parameter dependent matrix is not differentiable in this version; use qr_thin_Q")
-    return(qr_thin(A)$Q)
-  }
-  q <- qr(val(A))
+qr_full_value <- function(vA) {
+  q <- qr(vA)
   Q <- qr.Q(q, complete = TRUE)
   R <- qr.R(q, complete = TRUE)
   s <- sign(diag(R))
   s[s == 0] <- 1
   Q[, seq_along(s)] <- sweep(Q[, seq_along(s), drop = FALSE], 2L, s, `*`)
-  Q
+  R[seq_along(s), ] <- R[seq_along(s), , drop = FALSE] * s
+  list(Q = Q, R = R)
+}
+# full QR of a tall parameter dependent matrix by Householder reflections
+# as LAPACK's dgeqrf forms them (so the complement columns of Q are the
+# same smooth function of A as in the data case), then Stan's signs
+qr_householder <- function(A) {
+  vA <- val(A)
+  m <- nrow(vA); n <- ncol(vA)
+  R <- A
+  Q <- diag(m)
+  for (k in seq_len(min(m - 1L, n))) {
+    rows <- k:m
+    x <- ad_gather(R, (k - 1L) * m + rows)
+    xv <- val(x)
+    nx <- sqrt(ad_sum(x * x))
+    sg <- if (xv[1L] >= 0) 1 else -1
+    v <- x + ad_scatter(numeric(length(rows)), 1L, sg * nx)
+    vv <- ad_sum(v * v)
+    Hk <- diag(m) + 0 * nx
+    blk <- diag(length(rows)) - 2 * ad_matmul(ad_reshape(v, c(length(rows), 1L)), ad_reshape(v, c(1L, length(rows)))) / vv
+    idx <- as.vector(outer(rows, (rows - 1L) * m, `+`))
+    Hk <- ad_scatter(Hk, idx, blk)
+    R <- ad_matmul(Hk, R)
+    Q <- ad_matmul(Q, Hk)
+  }
+  s <- sign(diag(val(R))[seq_len(min(m, n))])
+  s[s == 0] <- 1
+  sQ <- c(s, rep(1, m - length(s)))
+  list(Q = ad_matmul(Q, diag(sQ, m)), R = ad_matmul(diag(sQ, m), R))
+}
+def("qr_Q", "matrix", "matrix", function(A) {
+  A <- as_dbl(A)
+  vA <- val(A)
+  if (!is_ad(A)) return(qr_full_value(vA)$Q)
+  if (nrow(vA) <= ncol(vA)) return(qr_thin(A)$Q)
+  qr_householder(A)$Q
 })
 def("qr_R", "matrix", "matrix", function(A) {
-  if (is_ad(A)) {
-    d <- dim(val(A))
-    if (d[1L] > d[2L]) stop_unsupported("qr_R of a tall parameter dependent matrix is not differentiable in this version; use qr_thin_R")
-    return(qr_thin(A)$R)
-  }
-  q <- qr(val(A))
-  R <- qr.R(q, complete = TRUE)
-  s <- sign(diag(R))
-  s[s == 0] <- 1
-  R[seq_along(s), ] <- R[seq_along(s), , drop = FALSE] * s
-  R
+  A <- as_dbl(A)
+  vA <- val(A)
+  if (!is_ad(A)) return(qr_full_value(vA)$R)
+  R1 <- qr_thin(A)$R
+  m <- nrow(vA); n <- ncol(vA)
+  if (m <= n) return(R1)
+  ad_scatter(matrix(0, m, n), as.vector(outer(seq_len(n), (seq_len(n) - 1L) * m, `+`)), R1)
 })
 def("generalized_inverse", "matrix", "matrix", function(A) {
   A <- as_dbl(A)

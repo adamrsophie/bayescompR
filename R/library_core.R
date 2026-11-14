@@ -528,12 +528,10 @@ def("hypergeometric_2F1", c("real", "real", "real", "real"), "real", function(a,
   }
   num_ad4(f, as_dbl(a), as_dbl(b), as_dbl(c), as_dbl(z))
 })
-def("hypergeometric_3F2", c("vector", "vector", "real"), "real", function(a, b, z) {
-  hyper_pfq_ad(as_dbl(a), as_dbl(b), as_dbl(z))
-})
-def("hypergeometric_pFq", c("vector", "vector", "real"), "real", function(a, b, z) {
-  hyper_pfq_ad(as_dbl(a), as_dbl(b), as_dbl(z))
-})
+for (ta in c("vector", "row_vector", "real[]")) for (tb in c("vector", "row_vector", "real[]")) {
+  def("hypergeometric_3F2", c(ta, tb, "real"), "real", function(a, b, z) hyper_pfq_ad(flat(as_dbl(a)), flat(as_dbl(b)), as_dbl(z)))
+  def("hypergeometric_pFq", c(ta, tb, "real"), "real", function(a, b, z) hyper_pfq_ad(flat(as_dbl(a)), flat(as_dbl(b)), as_dbl(z)))
+}
 def("hypergeometric_1F0", c("real", "real"), "real", function(a, z) {
   # 1F0(a; ; z) = (1 - z)^(-a)
   (1 - as_dbl(z))^(-as_dbl(a))

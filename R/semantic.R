@@ -898,10 +898,5 @@ data_only_functions <- c("linspaced_array", "linspaced_int_array", "linspaced_ve
                          "ones_array", "ones_int_array", "ones_vector", "ones_row_vector",
                          "uniform_simplex", "quantile", "to_int")
 
-unsupported_functions <- c(
-  "integrate_1d_gauss_kronrod", "integrate_1d_gauss_kronrod_tol",
-  "integrate_1d_double_exponential", "integrate_1d_double_exponential_tol",
-  "wiener_lpdf", "wiener_lcdf_defective", "wiener_lccdf_defective",
-  NULL)
-unsupported_distributions <- c("wiener", "gaussian_dlm_obs", "multi_gp", "multi_gp_cholesky",
-                               "multi_student_t_cholesky_dummy", "beta_neg_binomial")
+unsupported_functions <- character(0)
+unsupported_distributions <- character(0)

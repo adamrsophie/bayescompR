@@ -40,9 +40,8 @@ test_that("syntax errors carry the right class and location", {
   expect_match(conditionMessage(err), "line")
 })
 
-test_that("unsupported features raise bayescomp_unsupported_error", {
-  expect_error(bayescomp_check("parameters { real<lower=0> y; } model { 0.5 ~ wiener(1, y, 0.5, 0.2); }"),
-               class = "bayescomp_unsupported_error")
+test_that("newer language features check", {
+  expect_silent(bayescomp_check("parameters { real<lower=0> y; } model { 0.5 ~ wiener(1, y, 0.5, 0.2); }"))
   # stanc rejects complex parameters
   expect_error(bayescomp_check("parameters { complex z; }"), class = "bayescomp_semantic_error")
   expect_silent(bayescomp_check("data { tuple(real, int) x; }"))

@@ -265,13 +265,22 @@ defdist("student_t", c("reals", "reals", "reals", "reals"), lp_student_t,
 # vectorized: any container argument gives a vector
 def("student_t_qf", c("reals", "reals", "reals", "reals"), function(types) if (all(vapply(types, is_scalar_ty, TRUE))) T_real else ty("vector", 0L),
     function(p, nu, mu, s) {
-  if (any_ad(nu)) stop_unsupported("student_t_qf: gradient with respect to the degrees of freedom is not available")
   N <- vlen_check("student_t_qf", p, nu, mu, s)
   scalar <- all(vapply(list(p, nu, mu, s), function(a) length(val(a)) == 1L, TRUE))
   p <- flat(as_dbl(p)); mu <- flat(as_dbl(mu)); s <- flat(as_dbl(s))
   if (length(val(p)) == 1L && N > 1L) p <- p + numeric(N)
   nv <- rep_len(as.vector(val(nu)), N)
-  q <- ad_unary(p, function(pp) stats::qt(pp, nv), function(pp, y) 1 / stats::dt(y, nv))
+  q <- if (!is_ad(nu)) ad_unary(p, function(pp) stats::qt(pp, nv), function(pp, y) 1 / stats::dt(y, nv)) else {
+    nu <- flat(nu)
+    vp <- rep_len(as.vector(val(p)), N)
+    qv <- stats::qt(vp, nv)
+    d <- stats::dt(qv, nv)
+    # implicit function theorem: dq/dnu = -dF(q; nu)/dnu / f(q; nu)
+    dnu <- -num_partial(function(t) stats::pt(qv, t), nv) / d
+    ad_node(qv, list(p, nu), function(g) list(
+      if (is_ad(p)) unbroadcast(g / d, val(p)),
+      unbroadcast(g * dnu, val(nu))))
+  }
   out <- mu + s * q
   if (scalar) out else flat(out)
 })

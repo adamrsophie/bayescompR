@@ -317,7 +317,7 @@ def("to_array_1d", "int[,,]", "int[]", function(x) as.integer(val(row_major_flat
 def("to_array_1d", "real[]", "real[]", function(x) as_dbl(x))
 def("to_array_1d", "real[,]", "real[]", function(x) row_major_flat(as_dbl(x)))
 def("to_array_1d", "real[,,]", "real[]", function(x) row_major_flat(as_dbl(x)))
-for (nd in 4:8) local({
+for (nd in 4:9) local({
   cm <- strrep(",", nd - 1L)
   def("to_array_1d", sprintf("int[%s]", cm), "int[]", function(x) as.integer(val(row_major_flat(x))))
   def("to_array_1d", sprintf("real[%s]", cm), "real[]", function(x) row_major_flat(as_dbl(x)))
