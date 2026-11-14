@@ -30,7 +30,7 @@
 #' @export
 bayescomp_diffusion <- function(model, num_samples = 300L, steps = 40L, horizon = 4, inner_samples = 32L,
                                 reference = c("pathfinder", "standard"), reference_scale = 1.5, seed = NULL,
-                                cores = 1L) {
+                                cores = getOption("mc.cores", 1L)) {
   check_model(model)
   reference <- match.arg(reference)
   n <- model$dim

@@ -37,7 +37,8 @@
 #'   `"multinomial"`.
 #' @param max_stages Maximum number of temperatures.
 #' @param seed Random seed.
-#' @param cores Workers for the particle moves (forked, not on Windows).
+#' @param cores Workers for the particle moves (forked, not on Windows);
+#'   defaults to `getOption("mc.cores", 1L)`.
 #' @return A `bayescomp_fit` with method `"smc"` and elements
 #'   `log_evidence` (log normalizing constant estimate), `betas`
 #'   (temperatures) and `acceptance` (mean Metropolis acceptance per stage).
@@ -56,7 +57,7 @@ bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinde
                           reference_scale = 1.5, ess_threshold = 0.5, num_mcmc_steps = 10L,
                           kernel = c("metropolis", "mala", "hmc"), hmc_steps = 5L,
                           resampling = c("systematic", "stratified", "residual", "multinomial"),
-                          max_stages = 200L, seed = NULL, cores = 1L) {
+                          max_stages = 200L, seed = NULL, cores = getOption("mc.cores", 1L)) {
   check_model(model)
   reference <- match.arg(reference)
   kernel <- match.arg(kernel)

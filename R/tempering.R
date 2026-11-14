@@ -35,7 +35,7 @@ bayescomp_parallel_tempering <- function(model, num_temps = 10L, chains = 2L, it
                                          iter_sampling = 1000L, explore_steps = 3L,
                                          swap = c("nonreversible", "reversible"), adapt_schedule = TRUE,
                                          reference = c("pathfinder", "standard"), reference_scale = 1.5,
-                                         init = 2, seed = NULL, cores = 1L, refresh = 0L) {
+                                         init = 2, seed = NULL, cores = getOption("mc.cores", 1L), refresh = 0L) {
   check_model(model)
   swap <- match.arg(swap)
   reference <- match.arg(reference)
@@ -127,7 +127,7 @@ bayescomp_parallel_tempering <- function(model, num_temps = 10L, chains = 2L, it
         ss[i, ] <- (betas[-1L] - betas[-K]) * d[-K]
       }
       if (refresh > 0L && it %% refresh == 0L)
-        message(sprintf("Chain %d: Iteration %d / %d (%s)", id, it, total, if (warm) "Warmup" else "Sampling"))
+        chain_message(sprintf("Chain %d: Iteration %d / %d (%s)", id, it, total, if (warm) "Warmup" else "Sampling"))
     }
     r <- ifelse(tries > 0, rej / pmax(tries, 1), NA_real_)
     log_z <- sum(apply(ss, 2L, function(v) { m <- max(v); m + log(mean(exp(v - m))) }))

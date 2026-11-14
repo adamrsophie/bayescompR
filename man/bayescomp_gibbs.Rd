@@ -13,7 +13,7 @@ bayescomp_gibbs(
   thin = 1L,
   init = 2,
   seed = NULL,
-  cores = 1L,
+  cores = getOption("mc.cores", 1L),
   refresh = 0L
 )
 }

@@ -17,7 +17,7 @@ bayescomp_riemannian(
   fixed_point_steps = 6L,
   init = 2,
   seed = NULL,
-  cores = 1L,
+  cores = getOption("mc.cores", 1L),
   refresh = 0L
 )
 }

@@ -15,7 +15,7 @@ bayescomp_pmcmc(
   theta_steps = 5L,
   init = 2,
   seed = NULL,
-  cores = 1L,
+  cores = getOption("mc.cores", 1L),
   refresh = 0L
 )
 }

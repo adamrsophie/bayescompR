@@ -16,7 +16,7 @@ bayescomp_pathfinder(
   tol_grad = 1e-08,
   init = 2,
   seed = NULL,
-  cores = 1L
+  cores = getOption("mc.cores", 1L)
 )
 }
 \arguments{
@@ -38,7 +38,7 @@ bayescomp_pathfinder(
 
 \item{init, seed}{As in \code{\link[=bayescomp_sample]{bayescomp_sample()}}.}
 
-\item{cores}{Paths to run in parallel.}
+\item{cores}{Paths to run in parallel; defaults to \code{getOption("mc.cores", 1L)}.}
 }
 \value{
 A \code{bayescomp_fit} with method \code{"pathfinder"}, extra columns

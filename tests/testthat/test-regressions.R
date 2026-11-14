@@ -210,3 +210,14 @@ test_that("elementwise ^, unary minus on arrays and unsupported higher order cal
                                 data { array[2] real y; } parameters { real x; } model { target += reduce_sum(ps, y, 1); }"),
                class = "bayescomp_unsupported_error")
 })
+
+test_that("parallel chains print progress and match sequential draws", {
+  skip_on_cran()
+  skip_on_os("windows")
+  m <- bayescomp_model("parameters { real y; } model { y ~ normal(0, 1); }")
+  a <- bayescomp_sample(m, chains = 2, iter_warmup = 20, iter_sampling = 20, seed = 1, refresh = 0)
+  expect_message(b <- bayescomp_sample(m, chains = 2, iter_warmup = 20, iter_sampling = 20, seed = 1,
+                                       cores = 2, refresh = 20), "Chain 2: Iteration")
+  expect_identical(bayescomp_extract(a, "y"), bayescomp_extract(b, "y"))
+  expect_identical(formals(bayescomp_sample)$cores, quote(getOption("mc.cores", 1L)))
+})

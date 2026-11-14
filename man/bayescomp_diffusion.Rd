@@ -13,7 +13,7 @@ bayescomp_diffusion(
   reference = c("pathfinder", "standard"),
   reference_scale = 1.5,
   seed = NULL,
-  cores = 1L
+  cores = getOption("mc.cores", 1L)
 )
 }
 \arguments{

@@ -14,7 +14,7 @@ bayescomp_ep(
   subset = NULL,
   output_samples = 1000L,
   seed = NULL,
-  cores = 1L
+  cores = getOption("mc.cores", 1L)
 )
 }
 \arguments{

@@ -53,7 +53,8 @@
 #' @param save_warmup Keep warmup draws.
 #' @param refresh Report progress every `refresh` iterations (0 for quiet).
 #' @param cores Number of chains to run in parallel (forked processes, not
-#'   available on Windows).
+#'   available on Windows). Defaults to `getOption("mc.cores", 1L)`, so
+#'   `options(mc.cores = 4)` makes every sampler use four cores.
 #' @param show_print Show output of Stan `print()` statements.
 #' @return A `bayescomp_fit` object.
 #' @examples
@@ -71,7 +72,7 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
                              int_time = 2 * pi, adapt_engaged = TRUE, adapt_gamma = 0.05,
                              adapt_kappa = 0.75, adapt_t0 = 10, adapt_init_buffer = 75L,
                              adapt_term_buffer = 50L, adapt_window = 25L, thin = 1L,
-                             save_warmup = FALSE, refresh = 200L, cores = 1L, show_print = TRUE) {
+                             save_warmup = FALSE, refresh = 200L, cores = getOption("mc.cores", 1L), show_print = TRUE) {
   check_model(model)
   algorithm <- match.arg(algorithm)
   metric <- match.arg(metric)
@@ -132,6 +133,48 @@ fixed_param_chain <- function(cfg) {
 # Without a seed, one is drawn from the caller's stream (which therefore
 # advances, so repeated calls differ); the drawn seed is returned as the
 # "seed" attribute and recorded in the fit.
+# progress lines of a chain: forked chains write them to a file that the
+# parent prints, since R GUIs such as RStudio do not show a child's output
+.progress <- new.env(parent = emptyenv())
+chain_message <- function(text) {
+  if (is.null(.progress$file)) message(text) else cat(text, "\n", sep = "", file = .progress$file, append = TRUE)
+}
+
+# run f(1), ..., f(n) in at most `cores` forked processes, relaying progress
+run_forked <- function(n, cores, f) {
+  files <- vapply(seq_len(n), function(i) tempfile(sprintf("chain%d_", i)), "")
+  on.exit(unlink(files), add = TRUE)
+  seen <- integer(n)
+  relay <- function() for (i in seq_len(n)) if (file.exists(files[i])) {
+    lines <- readLines(files[i], warn = FALSE)
+    if (length(lines) > seen[i]) {
+      # an unfinished last line is printed on the next pass
+      done <- length(lines) - if (grepl("\n$", readChar(files[i], file.size(files[i]), useBytes = TRUE))) 0L else 1L
+      if (done > seen[i]) message(paste(lines[(seen[i] + 1L):done], collapse = "\n"))
+      seen[i] <<- max(seen[i], done)
+    }
+  }
+  out <- vector("list", n)
+  todo <- seq_len(n)
+  running <- list()
+  while (length(todo) || length(running)) {
+    while (length(todo) && length(running) < cores) {
+      i <- todo[1L]
+      todo <- todo[-1L]
+      job <- parallel::mcparallel({ .progress$file <- files[i]; f(i) }, silent = FALSE)
+      running[[as.character(job$pid)]] <- list(job = job, i = i)
+    }
+    res <- parallel::mccollect(lapply(running, `[[`, "job"), wait = FALSE, timeout = 0.25)
+    relay()
+    for (pid in names(res)) {
+      out[[running[[pid]]$i]] <- res[[pid]]
+      running[[pid]] <- NULL
+    }
+  }
+  relay()
+  out
+}
+
 run_chains <- function(model, chains, seed, cores, f) {
   old_kind <- RNGkind()
   if (is.null(seed)) seed <- sample.int(.Machine$integer.max, 1L)
@@ -154,7 +197,7 @@ run_chains <- function(model, chains, seed, cores, f) {
     f(i)
   }
   if (cores > 1L && chains > 1L && .Platform$OS.type != "windows") {
-    out <- parallel::mclapply(seq_len(chains), one, mc.cores = min(cores, chains), mc.preschedule = FALSE)
+    out <- run_forked(chains, min(cores, chains), one)
     bad <- vapply(out, inherits, TRUE, what = "try-error")
     if (any(bad)) stop(sprintf("chain %d failed: %s", which(bad)[1L], attr(out[[which(bad)[1L]]], "condition")$message), call. = FALSE)
   } else {

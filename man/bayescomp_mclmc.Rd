@@ -12,7 +12,7 @@ bayescomp_mclmc(
   energy_var = 5e-04,
   init = 2,
   seed = NULL,
-  cores = 1L,
+  cores = getOption("mc.cores", 1L),
   refresh = 0L
 )
 }

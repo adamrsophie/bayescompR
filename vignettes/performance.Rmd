@@ -87,18 +87,22 @@ small models with expensive gradients they can be competitive.
 
 ## Parallel chains
 
-Chains run one after another by default (`cores = 1`). Set `cores` to run
-them in parallel in forked processes. Forking is not available on Windows,
+Chains run one after another by default. Pass `cores` to run them in
+parallel in forked processes, or set the `mc.cores` option once per session,
+which every function that takes `cores` uses as its default. Forking is not available on Windows,
 where chains always run sequentially, whatever the value of `cores`. Each
 chain has its own random number stream derived from `seed`, so the draws are
 identical whether the chains run in parallel or not.
 
 ```{r, eval = FALSE}
 fit <- bayescomp_sample(model, chains = 4, cores = 4, seed = 1)
+# or, for the whole session
+options(mc.cores = 4)
+fit <- bayescomp_sample(model, chains = 4, seed = 1)
 ```
 
 The other samplers that take `cores` (for example `bayescomp_gibbs()`,
-`bayescomp_pdmp()` and `bayescomp_riemannian()`) also default to 1, and
+`bayescomp_pdmp()` and `bayescomp_riemannian()`) follow the same default, and
 `bayescomp_smc()` and `bayescomp_ep()` use it for the particle moves and the
 site updates.
 

@@ -351,7 +351,7 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
       diag_out[row, ] <- c(s$lp, s$accept_stat, eps_used, s$treedepth, s$n_leapfrog, as.numeric(s$divergent), s$energy)
     }
     if (cfg$refresh > 0L && (it %% cfg$refresh == 0L || it == 1L || it == total)) {
-      message(sprintf("Chain %d: Iteration: %*d / %d [%3.0f%%]  (%s)", chain_id, nchar(total), it, total,
+      chain_message(sprintf("Chain %d: Iteration: %*d / %d [%3.0f%%]  (%s)", chain_id, nchar(total), it, total,
                       100 * it / total, if (it <= nw) "Warmup" else "Sampling"))
     }
   }

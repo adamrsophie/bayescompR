@@ -30,7 +30,7 @@
 #' @export
 bayescomp_pdmp <- function(model, method = c("zigzag", "bps"), chains = 4L, iter_warmup = 500L,
                            iter_sampling = 1000L, refresh_rate = NULL, dt = 0.05, init = 2, seed = NULL,
-                           cores = 1L, refresh = 0L) {
+                           cores = getOption("mc.cores", 1L), refresh = 0L) {
   check_model(model)
   method <- match.arg(method)
   if (!is.numeric(dt) || length(dt) != 1L || !is.finite(dt) || dt <= 0)
@@ -132,7 +132,7 @@ bayescomp_pdmp <- function(model, method = c("zigzag", "bps"), chains = 4L, iter
         qs[i, ] <- x
         dg[i, c("lp__", "accept_stat__", "n_leapfrog__")] <- c(-r$V, 1, evals)
       }
-      if (refresh > 0L && it %% refresh == 0L) message(sprintf("Chain %d: Iteration %d / %d", id, it, nw + ns))
+      if (refresh > 0L && it %% refresh == 0L) chain_message(sprintf("Chain %d: Iteration %d / %d", id, it, nw + ns))
     }
     list(q = qs, gq = chain_write_draws(model, qs, FALSE), diag = dg, step_size = dt, inv_metric = sc^2,
          n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0), events = n_events / (nw + ns))

@@ -64,7 +64,7 @@ softabs <- function(H, alpha) {
 bayescomp_riemannian <- function(model, method = c("smmala", "rmhmc"), chains = 4L, iter_warmup = 500L,
                                  iter_sampling = 500L, step_size = 0.5, int_time = 1.5, alpha = 1e6,
                                  adapt_delta = NULL, fixed_point_steps = 6L, init = 2, seed = NULL,
-                                 cores = 1L, refresh = 0L) {
+                                 cores = getOption("mc.cores", 1L), refresh = 0L) {
   check_model(model)
   method <- match.arg(method)
   n <- model$dim
@@ -111,7 +111,7 @@ bayescomp_riemannian <- function(model, method = c("smmala", "rmhmc"), chains = 
         qs[i, ] <- q
         dg[i, ] <- c(-gq$V, r$acc, eps, 0, nl, as.numeric(isTRUE(r$div)), r$H %||% NA_real_)
       }
-      if (refresh > 0L && it %% refresh == 0L) message(sprintf("Chain %d: Iteration %d / %d", id, it, nw + ns))
+      if (refresh > 0L && it %% refresh == 0L) chain_message(sprintf("Chain %d: Iteration %d / %d", id, it, nw + ns))
     }
     list(q = qs, gq = chain_write_draws(model, qs, FALSE), diag = dg, step_size = eps, inv_metric = gq$Ginv,
          n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0))
@@ -218,7 +218,7 @@ rmhmc_step <- function(q, gq, eps, L, geom, gradV, fp) {
 #'   Learning Research* 24, 1 to 34.
 #' @export
 bayescomp_mclmc <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampling = 1000L,
-                            energy_var = 5e-4, init = 2, seed = NULL, cores = 1L, refresh = 0L) {
+                            energy_var = 5e-4, init = 2, seed = NULL, cores = getOption("mc.cores", 1L), refresh = 0L) {
   check_model(model)
   n <- model$dim
   if (n < 2L) stop("MCLMC needs at least two parameters", call. = FALSE)
@@ -290,7 +290,7 @@ bayescomp_mclmc <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampli
         qs[i, ] <- x
         dg[i, ] <- c(-r$V, NA_real_, eps, 0, 1, 0, dE)
       }
-      if (refresh > 0L && it %% refresh == 0L) message(sprintf("Chain %d: Iteration %d / %d", id, it, nw + ns))
+      if (refresh > 0L && it %% refresh == 0L) chain_message(sprintf("Chain %d: Iteration %d / %d", id, it, nw + ns))
     }
     list(q = qs, gq = chain_write_draws(model, qs, FALSE), diag = dg, step_size = eps, inv_metric = sig^2,
          n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0), L = L)

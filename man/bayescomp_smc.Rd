@@ -16,7 +16,7 @@ bayescomp_smc(
   resampling = c("systematic", "stratified", "residual", "multinomial"),
   max_stages = 200L,
   seed = NULL,
-  cores = 1L
+  cores = getOption("mc.cores", 1L)
 )
 }
 \arguments{
@@ -50,7 +50,8 @@ optimal acceptance rates between stages.}
 
 \item{seed}{Random seed.}
 
-\item{cores}{Workers for the particle moves (forked, not on Windows).}
+\item{cores}{Workers for the particle moves (forked, not on Windows);
+defaults to \code{getOption("mc.cores", 1L)}.}
 }
 \value{
 A \code{bayescomp_fit} with method \code{"smc"} and elements

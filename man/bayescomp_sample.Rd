@@ -29,7 +29,7 @@ bayescomp_sample(
   thin = 1L,
   save_warmup = FALSE,
   refresh = 200L,
-  cores = 1L,
+  cores = getOption("mc.cores", 1L),
   show_print = TRUE
 )
 }
@@ -89,7 +89,8 @@ update one coordinate at a time.}
 \item{refresh}{Report progress every \code{refresh} iterations (0 for quiet).}
 
 \item{cores}{Number of chains to run in parallel (forked processes, not
-available on Windows).}
+available on Windows). Defaults to \code{getOption("mc.cores", 1L)}, so
+\code{options(mc.cores = 4)} makes every sampler use four cores.}
 
 \item{show_print}{Show output of Stan \code{print()} statements.}
 }

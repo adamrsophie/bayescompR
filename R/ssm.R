@@ -161,7 +161,7 @@ ssm_theta <- function(model, u) {
 #' @export
 bayescomp_pmcmc <- function(model, ssm, method = c("pmmh", "pgibbs"), num_particles = 200L, chains = 2L,
                             iter_warmup = 500L, iter_sampling = 1000L, theta_steps = 5L, init = 2,
-                            seed = NULL, cores = 1L, refresh = 0L) {
+                            seed = NULL, cores = getOption("mc.cores", 1L), refresh = 0L) {
   check_model(model)
   if (!inherits(ssm, "bayescomp_ssm")) stop("'ssm' must come from bayescomp_ssm()", call. = FALSE)
   method <- match.arg(method)
@@ -234,7 +234,7 @@ bayescomp_pmcmc <- function(model, ssm, method = c("pmmh", "pgibbs"), num_partic
         dg[i, c("lp__", "accept_stat__")] <- c(cur, a_mean)
         acc_n <- acc_n + a_mean
       }
-      if (refresh > 0L && it %% refresh == 0L) message(sprintf("Chain %d: Iteration %d / %d", id, it, nw + ns))
+      if (refresh > 0L && it %% refresh == 0L) chain_message(sprintf("Chain %d: Iteration %d / %d", id, it, nw + ns))
     }
     list(q = qs, gq = chain_write_draws(model, qs, FALSE), diag = dg, step_size = sc, inv_metric = C,
          n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0), states = states, acc = acc_n / ns)

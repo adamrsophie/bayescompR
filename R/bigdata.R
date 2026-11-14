@@ -78,7 +78,7 @@ split_setup <- function(model, n_name, subset) {
 #' @export
 bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32L, step_size = NULL,
                              friction = 0.1, n_name = "N", subset = NULL, chains = 4L, iter_warmup = 500L,
-                             iter_sampling = 2000L, thin = 1L, init = 2, seed = NULL, cores = 1L) {
+                             iter_sampling = 2000L, thin = 1L, init = 2, seed = NULL, cores = getOption("mc.cores", 1L)) {
   check_model(model)
   method <- match.arg(method)
   n <- model$dim
@@ -174,7 +174,7 @@ bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32
 #'   Research* 21, 1 to 53.
 #' @export
 bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-3, n_name = "N", subset = NULL,
-                         output_samples = 1000L, seed = NULL, cores = 1L) {
+                         output_samples = 1000L, seed = NULL, cores = getOption("mc.cores", 1L)) {
   check_model(model)
   n <- model$dim
   sp <- split_setup(model, n_name, subset)

@@ -278,13 +278,13 @@ gpd_quantile <- function(p, k, sigma) sigma * expm1(-k * log1p(-p)) / k
 #' @param psis_resample Resample with Pareto smoothed importance weights.
 #' @param tol_rel_obj,tol_grad L-BFGS convergence tolerances.
 #' @param init,seed As in [bayescomp_sample()].
-#' @param cores Paths to run in parallel.
+#' @param cores Paths to run in parallel; defaults to `getOption("mc.cores", 1L)`.
 #' @return A `bayescomp_fit` with method `"pathfinder"`, extra columns
 #'   `log_p__` and `log_q__`, and element `pareto_k`.
 #' @export
 bayescomp_pathfinder <- function(model, num_paths = 4L, num_draws = 1000L, history_size = 5L,
                                  max_lbfgs_iters = 1000L, num_elbo_draws = 25L, psis_resample = TRUE,
-                                 tol_rel_obj = 1e-12, tol_grad = 1e-8, init = 2, seed = NULL, cores = 1L) {
+                                 tol_rel_obj = 1e-12, tol_grad = 1e-8, init = 2, seed = NULL, cores = getOption("mc.cores", 1L)) {
   check_model(model)
   if (model$dim == 0L) stop("the model has no parameters", call. = FALSE)
   t0 <- proc.time()[["elapsed"]]

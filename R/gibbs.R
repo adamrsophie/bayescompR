@@ -49,7 +49,7 @@
 #' }
 #' @export
 bayescomp_gibbs <- function(model, blocks = NULL, chains = 4L, iter_warmup = 1000L, iter_sampling = 1000L,
-                            thin = 1L, init = 2, seed = NULL, cores = 1L, refresh = 0L) {
+                            thin = 1L, init = 2, seed = NULL, cores = getOption("mc.cores", 1L), refresh = 0L) {
   check_model(model)
   n <- model$dim
   if (n == 0L) stop("the model has no parameters", call. = FALSE)
@@ -85,7 +85,7 @@ bayescomp_gibbs <- function(model, blocks = NULL, chains = 4L, iter_warmup = 100
         dg[row, c("lp__", "accept_stat__")] <- c(lp, mean(acc_it))
       }
       if (refresh > 0L && it %% refresh == 0L)
-        message(sprintf("Chain %d: Iteration %d / %d", id, it, nw + ns))
+        chain_message(sprintf("Chain %d: Iteration %d / %d", id, it, nw + ns))
     }
     info <- data.frame(block = vapply(bs, `[[`, "", "label"), kernel = vapply(bs, `[[`, "", "kernel"),
                        family = vapply(bs, function(b) b$family %||% NA_character_, ""),

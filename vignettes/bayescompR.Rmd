@@ -87,7 +87,8 @@ bayescomp_model(code, data = bad)
 `bayescomp_sample()` runs the No-U-Turn sampler with Stan's adaptation.
 Each chain gets its own random number stream derived from `seed`, so the
 results are reproducible and do not depend on `cores`. Chains run
-sequentially unless you set `cores` (see `vignette("performance")`). Short chains keep
+sequentially unless you pass `cores` or set `options(mc.cores = 4)` (see
+`vignette("performance")`). Short chains keep
 this vignette fast; use the defaults (1000 warmup and 1000 sampling
 iterations) for real analyses.
 
