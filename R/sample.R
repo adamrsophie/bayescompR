@@ -88,8 +88,9 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   }
   if (!(is.numeric(step_size) && length(step_size) == 1L && step_size > 0)) stop("'step_size' must be positive", call. = FALSE)
   if (!is.null(inv_metric)) {
-    ok <- if (metric == "diag_e") is.numeric(inv_metric) && length(inv_metric) == n && all(inv_metric > 0)
-          else is.matrix(inv_metric) && all(dim(inv_metric) == n) && is_pos_def(inv_metric)
+    ok <- if (metric == "diag_e") is.numeric(inv_metric) && length(inv_metric) == n && all(is.finite(inv_metric)) && all(inv_metric > 0)
+          else is.matrix(inv_metric) && all(dim(inv_metric) == n) && all(is.finite(inv_metric)) &&
+            isSymmetric(unname(inv_metric)) && is_pos_def(inv_metric)
     if (!ok) stop("'inv_metric' does not match the metric type and model dimension", call. = FALSE)
   }
   cfg <- list(algorithm = algorithm, block = block, metric = metric, inv_metric = inv_metric, step_size = step_size,

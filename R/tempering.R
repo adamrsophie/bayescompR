@@ -133,9 +133,8 @@ bayescomp_parallel_tempering <- function(model, num_temps = 10L, chains = 2L, it
     log_z <- sum(apply(ss, 2L, function(v) { m <- max(v); m + log(mean(exp(v - m))) }))
     list(q = qs, diag = dg, step_size = sc[K], inv_metric = tcrossprod(Ls[[K]]), n_warmup_saved = 0L,
          time = c(warmup = 0, sampling = 0), betas = betas, swap_rate = 1 - r, barrier = sum(r, na.rm = TRUE),
-         log_evidence = log_z)
+         log_evidence = log_z, gq = chain_write_draws(model, qs, FALSE))
   })
-  for (i in seq_along(res)) res[[i]]$gq <- chain_write_draws(model, res[[i]]$q, FALSE)
   fit <- make_fit(model, res, list(algorithm = "parallel_tempering", num_temps = K, swap = swap),
                   "parallel_tempering", seed, proc.time()[["elapsed"]] - t0)
   fit$betas <- lapply(res, `[[`, "betas")

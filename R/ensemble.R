@@ -47,7 +47,7 @@ bayescomp_ensemble <- function(model, method = c("stretch", "de"), walkers = NUL
   thin <- as_count(thin, "thin", 1L)
   if (is.null(gamma)) gamma <- 2.38 / sqrt(2 * n)
   t0 <- proc.time()[["elapsed"]]
-  out <- run_chains(model, 1L, seed, 1L, function(id) {
+  rc <- run_chains(model, 1L, seed, 1L, function(id) {
     lpf <- lp_value_fun(model)
     X <- t(vapply(seq_len(W), function(w) find_init(model, init, w, gradient = FALSE), numeric(n)))
     if (n == 1L) X <- matrix(X, ncol = 1L)
@@ -92,15 +92,17 @@ bayescomp_ensemble <- function(model, method = c("stretch", "de"), walkers = NUL
       }
     }
     list(Q = Q, LP = LP, acc = acc / ns)
-  })[[1L]]
-  res <- lapply(seq_len(W), function(w) {
+  })
+  out <- rc[[1L]]
+  # generated quantities draw from a stream derived from the run's seed
+  res <- with_seed(attr(rc, "seed") %% 2147483646L + 1L, lapply(seq_len(W), function(w) {
     q <- matrix(out$Q[, w, ], ncol = n)
     dg <- matrix(0, nrow(q), 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
     dg[, "lp__"] <- out$LP[, w]
     dg[, "energy__"] <- NA_real_
     list(q = q, gq = chain_write_draws(model, q, FALSE), diag = dg, step_size = NA_real_, inv_metric = NULL,
          n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0))
-  })
+  }))
   fit <- make_fit(model, res, list(algorithm = method, walkers = W), "ensemble", seed, proc.time()[["elapsed"]] - t0)
   fit$acceptance <- out$acc
   fit

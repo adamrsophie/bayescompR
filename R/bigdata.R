@@ -192,6 +192,8 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
     m_old <- solve(Q, r)
     Q_old <- Q
     it_done <- 0L
+    n_updates <- 0L
+    converged <- FALSE
     tilted <- function(k, Qc, rc) {
       f <- function(u) {
         a <- lk[[k]](u); p <- pr(u)
@@ -217,13 +219,18 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
       for (k in seq_len(K)) if (!is.null(upd[[k]])) {
         Qn <- (1 - damping) * Qs[[k]] + damping * upd[[k]]$Q
         rn <- (1 - damping) * rs[[k]] + damping * upd[[k]]$r
-        if (!inherits(tryCatch(chol(Q - Qs[[k]] + Qn), error = function(e) e), "error")) { Qs[[k]] <- Qn; rs[[k]] <- rn }
+        if (!inherits(tryCatch(chol(Q - Qs[[k]] + Qn), error = function(e) e), "error")) {
+          Qs[[k]] <- Qn; rs[[k]] <- rn; n_updates <- n_updates + 1L
+        }
       }
+      # without a single accepted site update the "fit" would be the initial guess
+      if (n_updates == 0L)
+        stop("expectation propagation failed: no site update succeeded in the first sweep", call. = FALSE)
       Q <- Reduce(`+`, Qs); r <- Reduce(`+`, rs)
       m <- solve(Q, r)
       dQ <- max(abs(Q - Q_old)) / max(abs(Q))
       Q_old <- Q
-      if (max(abs(m - m_old)) < tol && dQ < tol) { m_old <- m; break }
+      if (max(abs(m - m_old)) < tol && dQ < tol) { m_old <- m; converged <- TRUE; break }
       m_old <- m
     }
     Sig <- solve(Q); Sig <- 0.5 * (Sig + t(Sig))
@@ -231,7 +238,8 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
     qs <- sweep(matrix(stats::rnorm(S * n), S, n) %*% t(L), 2L, m_old, "+")
     full <- lp_value_fun(model)
     lp <- apply(qs, 1L, full)
-    info <<- list(mean = m_old, cov = Sig, iterations = it_done)
+    if (!converged) warning(sprintf("expectation propagation did not converge in %d sweeps", it_done), call. = FALSE)
+    info <<- list(mean = m_old, cov = Sig, iterations = it_done, converged = converged, site_updates = n_updates)
     dg <- matrix(0, S, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
     dg[, "lp__"] <- lp
     list(q = qs, gq = chain_write_draws(model, qs, FALSE), diag = dg, step_size = NA_real_, inv_metric = Sig,

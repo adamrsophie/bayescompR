@@ -120,3 +120,64 @@ test_that("the compatibility matrix is well formed and its test files exist", {
   files <- unique(unlist(strsplit(cm$tests[nzchar(cm$tests)], ";")))
   expect_true(all(file.exists(test_path(files))))
 })
+
+test_that("random number generators have Stan's return types and check parameters", {
+  gq <- function(code) bayescomp_constrain(bayescomp_model(paste("generated quantities {", code, "}")), numeric(0))
+  expect_true(gq("int y = categorical_rng([0.5, 0.5]');")$y %in% 1:2)
+  expect_true(gq("int y = ordered_logistic_rng(0, [-1, 1]');")$y %in% 1:3)
+  expect_length(gq("array[2] real y = normal_rng({0, 1}, 1);")$y, 2L)
+  expect_error(gq("real a = student_t_rng(3, 0, -1);"), "Scale parameter", class = "bayescomp_domain_error")
+})
+
+test_that("cumulative functions and densities at the edge of the support", {
+  v <- function(code) bayescomp_constrain(bayescomp_model(paste("generated quantities { real a =", code, "; }")), numeric(0))$a
+  expect_equal(v("exponential_lccdf(-1 | 1)"), 0)
+  expect_equal(v("exponential_lcdf(-1 | 1)"), -Inf)
+  expect_equal(v("inv_gamma_lcdf(-1 | 2, 1)"), -Inf)
+  expect_equal(v("inv_gamma_lccdf(-1 | 2, 1)"), 0)
+  expect_equal(v("weibull_lccdf(-1 | 2, 1)"), 0)
+  expect_equal(v("chi_square_lpdf(0 | 2)"), log(0.5))
+  expect_equal(v("weibull_lpdf(0 | 1, 1)"), 0)
+  expect_equal(v("std_normal_log_qf(-1000)"), stats::qnorm(-1000, log.p = TRUE))
+  expect_equal(v("cauchy_lccdf(1e20 | 0, 1)"), log(stats::pcauchy(1e20, lower.tail = FALSE)), tolerance = 1e-12)
+  expect_equal(v("cauchy_lcdf(-3 | 0, 1)"), stats::pcauchy(-3, log.p = TRUE))
+  expect_equal(v("yule_simon_lcdf(0 | 2)"), -Inf)
+  expect_equal(v("yule_simon_lccdf(0 | 2)"), 0)
+  expect_equal(v("poisson_binomial_lcdf(5 | [0.5, 0.5]')"), 0)
+  expect_equal(v("poisson_binomial_lccdf(-1 | [0.5, 0.5]')"), 0)
+  expect_error(v("dirichlet_multinomial_lpmf({-1, 1} | [1, 1]')"), class = "bayescomp_domain_error")
+  expect_error(v("hypergeometric_2F1(1, 1, 2, 0.9999999)"), "did not converge", class = "bayescomp_domain_error")
+  expect_error(v("multi_student_t_lpdf({[0, 0]', [1, 1]'} | 3, {[0, 0]', [0, 0]', [0, 0]'}, diag_matrix(rep_vector(1, 2)))"),
+               class = "bayescomp_shape_error")
+})
+
+test_that("gradients of the rewritten tails and densities match finite differences", {
+  m <- bayescomp_model("parameters { real<lower=0> s; } model { target += cauchy_lccdf(30 | 0, s) + cauchy_lcdf(-30 | 0, s) + std_normal_log_qf(-s - 5) + chi_square_lpdf(1 | s + 2) + weibull_lpdf(0.5 | s + 1, 1); }")
+  for (u in c(-1, 0.5)) {
+    fd <- (bayescomp_log_prob(m, u + 1e-6) - bayescomp_log_prob(m, u - 1e-6)) / 2e-6
+    expect_equal(as.vector(bayescomp_grad_log_prob(m, u)), fd, tolerance = 1e-5)
+  }
+})
+
+test_that("functions bodies enforce data only arguments of library functions", {
+  expect_error(bayescomp_model("functions { int f(real x) { return to_int(x); } } parameters { real x; } model { x ~ normal(f(x), 1); }"),
+               "data only", class = "bayescomp_semantic_error")
+  expect_s3_class(bayescomp_model("functions { int f(data real x) { return to_int(x); } } data { real d; } parameters { real x; } model { x ~ normal(f(d), 1); }",
+                                  data = list(d = 1)), "bayescomp_model")
+})
+
+test_that("invalid sampler controls are refused", {
+  m <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 1); }")
+  expect_error(bayescomp_sample(m, metric = "dense_e", inv_metric = matrix(c(1, 0.5, 0, 1), 2), chains = 1, seed = 1, refresh = 0),
+               "inv_metric")
+  expect_error(bayescomp_pdmp(m, dt = 0), "dt")
+})
+
+test_that("generated quantities of tempering, ensembles and RJMCMC are reproducible", {
+  skip_on_cran()
+  m <- bayescomp_model("parameters { real x; } model { x ~ normal(0, 1); } generated quantities { real z = normal_rng(0, 1); }")
+  run <- function() bayescomp_extract(bayescomp_parallel_tempering(m, chains = 1, iter_warmup = 20, iter_sampling = 5, seed = 1), "z")
+  expect_identical(run(), run())
+  ens <- function() bayescomp_extract(bayescomp_ensemble(m, iter_warmup = 20, iter_sampling = 5, seed = 2), "z")
+  expect_identical(ens(), ens())
+})

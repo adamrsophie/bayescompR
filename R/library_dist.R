@@ -77,6 +77,25 @@ defdist <- function(name, args, lpdf = NULL, discrete = FALSE, cdf = NULL, lcdf 
         fun(...)
       }, unchecked = fun)
     }
+    # random number generators of univariate families check their parameters
+    # the same way, with a scalar variable in the support
+    if (!is.null(rng) && args[[1L]] %in% c("reals", "ints")) {
+      rng_fun <- rng
+      rng <- function(...) {
+        a <- lapply(list(...), val)
+        pv <- unlist(lapply(a, function(x) as.vector(x)[1L]))
+        cand <- c(0.5, 1, 0, 2, -0.5, pv, if (length(pv) >= 2L) mean(pv[1:2]))
+        if (discrete) cand <- unique(as.integer(round(c(0, 1, pv))))
+        err <- NULL
+        for (y in cand) {
+          r <- tryCatch({ do.call(lpdf, c(list(y), a, list(propto = TRUE))); TRUE },
+                        bayescomp_domain_error = function(e) e, bayescomp_shape_error = function(e) TRUE)
+          if (isTRUE(r)) return(rng_fun(...))
+          err <- r
+        }
+        stop_domain(sub("^Domain error: ", "", gsub(dens_name, paste0(name, "_rng"), conditionMessage(err), fixed = TRUE)))
+      }
+    }
     if (!is.null(lcdf)) lcdf <- checked(lcdf, paste0(name, "_lcdf"))
     if (!is.null(cdf)) cdf <- checked(cdf, paste0(name, "_cdf"))
     if (!is.null(lccdf)) lccdf <- checked(lccdf, paste0(name, "_lccdf"))
@@ -102,8 +121,16 @@ defdist <- function(name, args, lpdf = NULL, discrete = FALSE, cdf = NULL, lcdf 
   if (!is.null(rng)) {
     f5 <- rng
     rr <- rng_ret %||% (if (discrete) "int" else "real")
-    def(paste0(name, "_rng"), args[-1L], function(types) {
-      if (all(vapply(types, is_scalar_ty, TRUE))) parse_ty_string(rr) else ty(rr, 1L)
+    decl <- args[-1L]
+    def(paste0(name, "_rng"), decl, function(types) {
+      # only vectorized argument families batch draws: a container passed for
+      # "reals" or "ints", or an array passed for "vectors"; a fixed vector
+      # argument (categorical, ordered_logistic) does not
+      batch <- vapply(seq_along(types), function(i) {
+        d <- decl[[i]]; t <- types[[i]]
+        (d %in% c("reals", "ints") && !is_scalar_ty(t)) || (d %in% c("vectors", "row_vectors") && t$nd > 0L)
+      }, TRUE)
+      if (!any(batch)) parse_ty_string(rr) else ty(rr, 1L)
     }, function(...) f5(...), rng = TRUE, dist = name)
   }
   invisible(NULL)
@@ -145,6 +172,10 @@ defdist("normal", c("reals", "reals", "reals"), lp_normal,
   })
 
 # sum of an elementwise term; scalar terms are counted N times
+# y raised to the lower end of the support, so cumulative functions of values
+# below the support give cdf 0 and ccdf 1 (the gradient there is zero)
+clamp_lo <- function(y, lo = 0) ad_ifelse(val(y) >= lo | is.na(val(y)), y, lo)
+
 ad_sum_v <- function(term, ...) {
   N <- vlen_check("cdf", ...)
   bsum(flat(term), N)
@@ -256,9 +287,18 @@ lp_cauchy <- function(y, mu, sigma, propto) {
     list(dy, -dy, -1 / vs + 2 * z * z / (vs * (1 + z * z)))
   }, N)
 }
+# log of the Cauchy cdf (lower) or ccdf at z; in the far tail 0.5 - atan(z) / pi
+# cancels, so it is computed as atan(1 / z) / pi there
+cauchy_tail <- function(z, lower) {
+  zz <- if (lower) -z else z
+  far <- val(zz) > 1
+  if (!any(far)) return(log(0.5 - atan(zz) / pi))
+  safe <- ad_ifelse(far, zz, 2)
+  ad_ifelse(far, log(atan(1 / safe) / pi), log(0.5 - atan(ad_ifelse(far, 0, zz)) / pi))
+}
 defdist("cauchy", c("reals", "reals", "reals"), lp_cauchy,
-  lcdf = function(y, mu, s) ad_sum_v(log(0.5 + atan((as_dbl(y) - as_dbl(mu)) / as_dbl(s)) / pi), y, mu, s),
-  lccdf = function(y, mu, s) ad_sum_v(log(0.5 - atan((as_dbl(y) - as_dbl(mu)) / as_dbl(s)) / pi), y, mu, s),
+  lcdf = function(y, mu, s) ad_sum_v(cauchy_tail((as_dbl(y) - as_dbl(mu)) / as_dbl(s), TRUE), y, mu, s),
+  lccdf = function(y, mu, s) ad_sum_v(cauchy_tail((as_dbl(y) - as_dbl(mu)) / as_dbl(s), FALSE), y, mu, s),
   rng = function(mu, s) vrng(function(n, m, s) stats::rcauchy(n, m, s), mu, s))
 
 lp_double_exponential <- function(y, mu, sigma, propto) {
@@ -378,7 +418,7 @@ lp_chi_square <- function(y, nu, propto) {
   N <- vlen_check(f, y, nu)
   lp <- 0
   if (inc(propto, nu)) lp <- lp - bsum(lgamma(nu / 2) + nu / 2 * log(2), N)
-  if (inc(propto, y, nu)) lp <- lp + bsum((nu / 2 - 1) * log(y), N)
+  if (inc(propto, y, nu)) lp <- lp + bsum(ad_lmultiply(nu / 2 - 1, y), N)
   if (inc(propto, y)) lp <- lp - bsum(y / 2, N)
   lp
 }
@@ -451,8 +491,8 @@ lp_exponential <- function(y, beta, propto) {
   fused(lp, list(y, beta), function() list(-vb + 0 * vy, 1 / vb - vy), N)
 }
 defdist("exponential", c("reals", "reals"), lp_exponential,
-  lcdf = function(y, b) ad_sum_v(ad_log1m_exp(-as_dbl(b) * as_dbl(y)), y, b),
-  lccdf = function(y, b) ad_sum_v(-as_dbl(b) * as_dbl(y), y, b),
+  lcdf = function(y, b) ad_sum_v(ad_log1m_exp(-as_dbl(b) * clamp_lo(as_dbl(y))), y, b),
+  lccdf = function(y, b) ad_sum_v(-as_dbl(b) * clamp_lo(as_dbl(y)), y, b),
   rng = function(b) vrng(function(n, b) stats::rexp(n, b), b))
 
 lp_gamma <- function(y, alpha, beta, propto) {
@@ -491,8 +531,8 @@ lp_inv_gamma <- function(y, alpha, beta, propto) {
   lp
 }
 defdist("inv_gamma", c("reals", "reals", "reals"), lp_inv_gamma,
-  lcdf = function(y, a, b) gamma_cdf_ad(1 / as_dbl(y), a, b, FALSE),
-  lccdf = function(y, a, b) gamma_cdf_ad(1 / as_dbl(y), a, b, TRUE),
+  lcdf = function(y, a, b) gamma_cdf_ad(1 / clamp_lo(as_dbl(y)), a, b, FALSE),
+  lccdf = function(y, a, b) gamma_cdf_ad(1 / clamp_lo(as_dbl(y)), a, b, TRUE),
   rng = function(a, b) vrng(function(n, a, b) 1 / stats::rgamma(n, a, b), a, b))
 
 lp_weibull <- function(y, alpha, sigma, propto) {
@@ -503,14 +543,14 @@ lp_weibull <- function(y, alpha, sigma, propto) {
   if (any(val(y) < 0)) return(-Inf)
   lp <- 0
   if (inc(propto, alpha)) lp <- lp + bsum(log(alpha), N)
-  if (inc(propto, y, alpha)) lp <- lp + bsum((alpha - 1) * log(y), N)
+  if (inc(propto, y, alpha)) lp <- lp + bsum(ad_lmultiply(alpha - 1, y), N)
   if (inc(propto, alpha, sigma)) lp <- lp - bsum(alpha * log(sigma), N)
   if (inc(propto, y, alpha, sigma)) lp <- lp - bsum((y / sigma)^alpha, N)
   lp
 }
 defdist("weibull", c("reals", "reals", "reals"), lp_weibull,
-  lcdf = function(y, a, s) ad_sum_v(ad_log1m_exp(-(as_dbl(y) / as_dbl(s))^as_dbl(a)), y, a, s),
-  lccdf = function(y, a, s) ad_sum_v(-(as_dbl(y) / as_dbl(s))^as_dbl(a), y, a, s),
+  lcdf = function(y, a, s) ad_sum_v(ad_log1m_exp(-(clamp_lo(as_dbl(y)) / as_dbl(s))^as_dbl(a)), y, a, s),
+  lccdf = function(y, a, s) ad_sum_v(-(clamp_lo(as_dbl(y)) / as_dbl(s))^as_dbl(a), y, a, s),
   rng = function(a, s) vrng(function(n, a, s) stats::rweibull(n, a, s), a, s))
 
 lp_frechet <- function(y, alpha, sigma, propto) {
@@ -1172,7 +1212,11 @@ defdist("poisson_binomial", c("ints", "vector"), lp_poisson_binomial, discrete =
   lcdf = function(y, theta) {
     lps <- pb_logprobs(theta)
     out <- 0
-    for (yy in y) out <- out + ad_log_sum_exp(ad_gather(lps, seq_len(yy + 1L)))
+    K <- nelem(theta)
+    for (yy in y) {
+      if (yy < 0L) return(-Inf)
+      if (yy < K) out <- out + ad_log_sum_exp(ad_gather(lps, seq_len(yy + 1L)))
+    }
     out
   },
   lccdf = function(y, theta) {
@@ -1181,7 +1225,7 @@ defdist("poisson_binomial", c("ints", "vector"), lp_poisson_binomial, discrete =
     out <- 0
     for (yy in y) {
       if (yy >= K) return(-Inf)
-      out <- out + ad_log_sum_exp(ad_gather(lps, (yy + 2L):(K + 1L)))
+      if (yy >= 0L) out <- out + ad_log_sum_exp(ad_gather(lps, (yy + 2L):(K + 1L)))
     }
     out
   },
@@ -1201,7 +1245,10 @@ ys_lccdf <- function(y, alpha) {
   alpha <- flat(as_dbl(alpha))
   N <- vlen_check("yule_simon_lccdf", y, alpha)
   yy <- rep_len(as.numeric(y), N)
-  ad_sum(flat(log(yy) + ad_lbeta(yy, alpha + 1) + 0 * yy))
+  # the support starts at 1: P(Y > y) = 1 below it
+  if (all(yy < 1)) return(0)
+  keep <- yy >= 1
+  ad_sum(ad_gather(flat(log(pmax(yy, 1)) + ad_lbeta(pmax(yy, 1), alpha + 1) + 0 * yy), which(keep)))
 }
 defdist("yule_simon", c("ints", "reals"), lp_yule_simon, discrete = TRUE,
   lccdf = ys_lccdf,
@@ -1209,6 +1256,7 @@ defdist("yule_simon", c("ints", "reals"), lp_yule_simon, discrete = TRUE,
     alpha <- flat(as_dbl(alpha))
     N <- vlen_check("yule_simon_lcdf", y, alpha)
     yy <- rep_len(as.numeric(y), N)
+    if (any(yy < 1)) return(-Inf)
     ad_sum(flat(ad_log1m_exp(log(yy) + ad_lbeta(yy, alpha + 1))))
   },
   rng = function(alpha) vrng(function(n, a) {
@@ -1239,6 +1287,7 @@ def("multinomial_logit_rng", c("vector", "int"), "int[]", function(g, N) as.inte
 lp_dirichlet_multinomial <- function(ns, alpha, propto) {
   f <- "dirichlet_multinomial_lpmf"
   chk_positive_finite(f, "Prior size parameter", alpha)
+  if (any(ns < 0L)) stop_domain(sprintf("%s: Number of trials variable must be nonnegative", f))
   if (length(ns) != nelem(alpha)) stop_shape(sprintf("%s: size mismatch", f))
   alpha <- as_dbl(alpha)
   Ntot <- sum(ns)
@@ -1363,6 +1412,8 @@ mvt_core <- function(f, y, nu, mu, L, propto) {
   ys <- vec_rows(y)
   ms <- vec_rows(mu)
   N <- max(length(ys), length(ms))
+  if (!(length(ys) %in% c(1L, N) && length(ms) %in% c(1L, N)))
+    stop_shape(sprintf("%s: %d random variables and %d locations", f, length(ys), length(ms)))
   K <- nelem(ys[[1L]])
   chk_positive(f, "Degrees of freedom parameter", nu)
   nu <- as_dbl(nu)

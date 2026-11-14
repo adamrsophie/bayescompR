@@ -88,7 +88,9 @@ nuts_build_tree <- function(st, depth, sign, H0) {
 
 nuts_transition <- function(st, q) {
   m <- st$metric
-  r <- st$pot(q)
+  # the state a transition ends in is where the next one starts: reuse its
+  # potential and gradient instead of evaluating them again
+  r <- if (identical(st$last_q, q)) st$last_r else st$pot(q)
   z <- list(q = q, p = metric_sample_p(m, length(q)), V = r$V, g = r$g)
   H0 <- ps_H(m, z)
   z_fwd <- z; z_bck <- z; z_sample <- z
@@ -138,6 +140,8 @@ nuts_transition <- function(st, q) {
       nuts_criterion(ps_bck_fwd, ps_fwd_fwd, rho_fwd + p_bck_fwd)
     if (!persist) break
   }
+  st$last_q <- z_sample$q
+  st$last_r <- list(V = z_sample$V, g = z_sample$g)
   list(q = z_sample$q, lp = -z_sample$V, accept_stat = if (st$n_leapfrog > 0L) st$sum_metro / st$n_leapfrog else 0,
        treedepth = depth, n_leapfrog = st$n_leapfrog, divergent = st$divergent,
        energy = ps_H(m, z_sample))
@@ -301,6 +305,7 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   n_keep <- length(keep_w) + ns
   thin_idx <- c(keep_w[(seq_along(keep_w) - 1L) %% cfg$thin == 0L],
                 nw + seq_len(ns)[(seq_len(ns) - 1L) %% cfg$thin == 0L])
+  keep_it <- logical(nw + ns); keep_it[thin_idx] <- TRUE
   qs <- matrix(NA_real_, length(thin_idx), n)
   diag_out <- matrix(NA_real_, length(thin_idx), 7L,
                      dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
@@ -340,7 +345,7 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
         }
       }
     }
-    if (it %in% thin_idx) {
+    if (keep_it[it]) {
       row <- row + 1L
       qs[row, ] <- q
       diag_out[row, ] <- c(s$lp, s$accept_stat, eps_used, s$treedepth, s$n_leapfrog, as.numeric(s$divergent), s$energy)

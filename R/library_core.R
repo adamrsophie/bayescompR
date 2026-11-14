@@ -291,7 +291,9 @@ unary_defs <- list(
   },
   Phi_approx = function(x) ad_inv_logit(0.07056 * x * x * x + 1.5976 * x),
   log_Phi = function(x) ad_log_Phi(x),
-  std_normal_log_qf = function(x) ad_inv_Phi(exp(x)),
+  # quantile from the log probability directly, so it does not underflow
+  std_normal_log_qf = function(x) ad_unary(x, function(v) stats::qnorm(v, log.p = TRUE),
+                                           function(v, y) exp(v - stats::dnorm(y, log = TRUE))),
   std_normal_qf = function(x) ad_inv_Phi(x),
   lambert_w0 = function(x) ad_unary(x, lambert_w_v, function(v, y) ifelse(v == 0, 1, y / (v * (1 + y)))),
   lambert_wm1 = function(x) ad_unary(x, function(v) lambert_w_v(v, branch = -1), function(v, y) y / (v * (1 + y))),
@@ -380,12 +382,12 @@ bin2("lchoose", function(a, b) ad_lchoose(a, b))
 bin2("binomial_coefficient_log", function(a, b) ad_lchoose(a, b))
 bin2("log_diff_exp", function(a, b) ad_log_diff_exp(a, b))
 bin2("log_inv_logit_diff", function(a, b) ad_log_diff_exp(ad_log_inv_logit(a), ad_log_inv_logit(b)))
-bin2("lmultiply", function(a, b) ad_binary(a, b, function(x, y) ifelse(x == 0 & y == 0, 0, x * log(y)),
-                                           function(x, y, r) ifelse(x == 0 & y == 0, 0, log(y)),
-                                           function(x, y, r) x / y))
-bin2("multiply_log", function(a, b) ad_binary(a, b, function(x, y) ifelse(x == 0 & y == 0, 0, x * log(y)),
-                                              function(x, y, r) ifelse(x == 0 & y == 0, 0, log(y)),
-                                              function(x, y, r) x / y))
+# x * log(y) with 0 * log(0) = 0
+ad_lmultiply <- function(a, b) ad_binary(a, b, function(x, y) ifelse(x == 0 & y == 0, 0, x * log(y)),
+                                         function(x, y, r) ifelse(x == 0 & y == 0, 0, log(y)),
+                                         function(x, y, r) ifelse(x == 0 & y == 0, 0, x / y))
+bin2("lmultiply", ad_lmultiply)
+bin2("multiply_log", ad_lmultiply)
 bin2("falling_factorial", function(a, b) exp(lgamma(a + 1) - lgamma(a - b + 1)))
 bin2("log_falling_factorial", function(a, b) lgamma(a + 1) - lgamma(a - b + 1))
 bin2("rising_factorial", function(a, b) exp(lgamma(a + b) - lgamma(a)))
@@ -503,9 +505,11 @@ hyper_pfq <- function(a, b, z) {
   for (n in 0:100000) {
     term <- term * prod(a + n) / prod(b + n) * z / (n + 1)
     s <- s + term
-    if (abs(term) < 1e-15 * abs(s)) break
+    if (abs(term) <= 1e-15 * abs(s) || term == 0) return(s)
+    if (!is.finite(s)) break
   }
-  s
+  # a partial sum is not an answer: refuse rather than return it
+  stop_domain(sprintf("hypergeometric series did not converge for z = %.10g", z))
 }
 hyper_pfq_ad <- function(a, b, z) {
   va <- val(a); vb <- val(b); vz <- val(z)

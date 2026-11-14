@@ -84,8 +84,10 @@ optimize_u <- function(lpg, u0, algorithm, iter, tol_rel_grad, tol_obj) {
   ctl <- if (method == "L-BFGS-B") list(maxit = iter, factr = tol_rel_grad, pgtol = 1e-8, lmm = 5L)
          else list(maxit = iter, reltol = tol_obj)
   o <- stats::optim(u0, fn, gr, method = method, control = ctl)
-  if (o$convergence == 0L && method == "L-BFGS-B") {
-    # polish with BFGS to reach a tight gradient tolerance
+  if (o$convergence == 0L && method == "L-BFGS-B" && length(u0) <= 200L) {
+    # polish with BFGS to reach a tight gradient tolerance; dense BFGS stores a
+    # D x D matrix, so large models keep the limited memory solution
+    # ponytail: fixed 200 cutoff; a proper L-BFGS gradient stopping rule would remove it
     o2 <- stats::optim(o$par, fn, gr, method = "BFGS", control = list(maxit = iter, reltol = tol_obj))
     if (o2$value <= o$value) o <- o2
   }

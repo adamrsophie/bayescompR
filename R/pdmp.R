@@ -33,6 +33,8 @@ bayescomp_pdmp <- function(model, method = c("zigzag", "bps"), chains = 4L, iter
                            cores = 1L, refresh = 0L) {
   check_model(model)
   method <- match.arg(method)
+  if (!is.numeric(dt) || length(dt) != 1L || !is.finite(dt) || dt <= 0)
+    stop("'dt' must be one positive finite number", call. = FALSE)
   n <- model$dim
   if (n == 0L) stop("the model has no parameters", call. = FALSE)
   chains <- as_count(chains, "chains", 1L)

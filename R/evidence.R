@@ -137,7 +137,7 @@ bayescomp_rjmcmc <- function(models, prior_prob = NULL, iter_warmup = 500L, iter
   pp <- if (is.null(prior_prob)) rep(1 / J, J) else prior_prob / sum(prior_prob)
   nw <- as_count(iter_warmup, "iter_warmup"); ns <- as_count(iter_sampling, "iter_sampling", 1L)
   t0 <- proc.time()[["elapsed"]]
-  out <- run_chains(models[[1L]], 1L, seed, 1L, function(id) {
+  rc <- run_chains(models[[1L]], 1L, seed, 1L, function(id) {
     lps <- lapply(models, lp_value_fun)
     refs <- lapply(models, function(m) gaussian_reference(m, "pathfinder", proposal_scale))
     us <- lapply(refs, function(r) r$mu)
@@ -174,8 +174,10 @@ bayescomp_rjmcmc <- function(models, prior_prob = NULL, iter_warmup = 500L, iter
       }
     }
     list(trace = trace, draws = draws, jump = jumps / max(tries, 1))
-  })[[1L]]
-  fits <- lapply(seq_len(J), function(k) {
+  })
+  out <- rc[[1L]]
+  # generated quantities draw from a stream derived from the run's seed
+  fits <- with_seed(attr(rc, "seed") %% 2147483646L + 1L, lapply(seq_len(J), function(k) {
     d <- out$draws[[k]]
     if (!length(d)) return(NULL)
     M <- do.call(rbind, d)
@@ -185,7 +187,7 @@ bayescomp_rjmcmc <- function(models, prior_prob = NULL, iter_warmup = 500L, iter
     r <- list(q = q, gq = cbind(log_p__ = M[, 1L], chain_write_draws(models[[k]], q, FALSE)), diag = dg,
               step_size = NA_real_, inv_metric = NULL, n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0))
     make_fit_extra(models[[k]], list(r), list(), "rjmcmc", seed, 0)
-  })
+  }))
   names(fits) <- nms
   p <- tabulate(out$trace, J) / ns
   # batch means standard error of the model indicators

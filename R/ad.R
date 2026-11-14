@@ -308,7 +308,10 @@ ad_prod <- function(x) {
   y <- prod(vx)
   if (!inherits(x, "bcad")) return(y)
   ad_node(y, list(x), function(g) {
-    d <- vapply(seq_along(vx), function(i) prod(vx[-i]), 0)
+    # product of the other elements from prefix and suffix products: O(n), exact with zeros
+    n <- length(vx)
+    d <- c(1, cumprod(vx[-n])) * rev(c(1, cumprod(rev(vx)[-n])))
+    if (n == 0L) d <- numeric(0)
     r <- g * d
     if (!is.null(dim(vx))) dim(r) <- dim(vx)
     list(r)

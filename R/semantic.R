@@ -705,8 +705,10 @@ sem_call <- function(s, e) {
   if (isTRUE(sg$user)) {
     for (i in seq_along(args)) if (isTRUE(sg$data_only[i]) && !args[[i]]$data_only)
       stop_semantic(sprintf("argument %d of '%s' must be data only", i, nm), args[[i]]$loc)
-  } else if (nm %in% data_only_functions && s$block %in% c("transformed parameters", "model")) {
-    # in generated quantities every value is a double, so parameters qualify
+  } else if (nm %in% data_only_functions && (s$block %in% c("transformed parameters", "model") || !is.null(s$fun))) {
+    # in generated quantities every value is a double, so parameters qualify;
+    # in a function body only arguments declared data (and values built from
+    # them) do, since the function may be called with parameters
     for (i in seq_along(args)) if (!isTRUE(args[[i]]$data_only))
       stop_semantic(sprintf("argument %d of '%s' must be data only", i, nm), args[[i]]$loc)
   }
