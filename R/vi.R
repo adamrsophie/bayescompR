@@ -142,8 +142,42 @@ bayescomp_variational <- function(model, algorithm = c("meanfield", "fullrank"),
 
 # ---- Pathfinder -----------------------------------------------------------------------
 
-# L-BFGS inverse Hessian approximation as a dense matrix, with initial
-# diagonal `alpha` and curvature pairs (columns of S and Y).
+# L-BFGS inverse Hessian approximation in compact form (Byrd, Nocedal and
+# Schnabel 1994), H = diag(alpha) + B G t(B) with B = [diag(alpha) Y, S],
+# and the normal approximation it defines, drawn and evaluated in O(n m)
+# per draw as in Pathfinder (Zhang et al. 2022, Algorithm 4); no n x n
+# matrix is formed.
+lbfgs_normal <- function(x, g, alpha, S, Y) {
+  m <- ncol(S)
+  SY <- crossprod(S, Y)
+  Rm <- SY
+  Rm[lower.tri(Rm)] <- 0
+  Rinv <- backsolve(Rm, diag(m))
+  B <- cbind(alpha * Y, S)
+  G <- rbind(cbind(matrix(0, m, m), -Rinv),
+             cbind(-t(Rinv), t(Rinv) %*% (diag(diag(SY), m) + crossprod(Y, alpha * Y)) %*% Rinv))
+  mu <- x + alpha * g + as.vector(B %*% (G %*% crossprod(B, g)))
+  q <- qr(B / sqrt(alpha))
+  Q <- qr.Q(q)
+  R <- qr.R(q)[, order(q$pivot), drop = FALSE]
+  M <- diag(nrow(R)) + R %*% G %*% t(R)
+  Lt <- t(chol(0.5 * (M + t(M))))
+  if (!all(is.finite(mu)) || !all(is.finite(Lt))) stop("non finite approximation")
+  sa <- sqrt(alpha)
+  list(mu = mu, Q = Q, Lt = Lt, sa = sa,
+       logdet = sum(log(sa)) + sum(log(diag(Lt))),
+       # draws theta = mu + sqrt(alpha) (u + Q (Lt - I) t(Q) u), u ~ N(0, I)
+       draw = function(U) sweep(sweep(U + (U %*% Q) %*% t(Lt - diag(ncol(Q))) %*% t(Q), 2L, sa, "*"), 2L, mu, "+"))
+}
+
+# the covariance of an lbfgs_normal as a dense matrix
+lbfgs_normal_cov <- function(a) {
+  A <- diag(length(a$sa)) + a$Q %*% (a$Lt - diag(ncol(a$Q))) %*% t(a$Q)
+  A <- a$sa * A
+  tcrossprod(A)
+}
+
+# the same inverse Hessian as a dense matrix (reference for tests)
 lbfgs_inv_hessian <- function(alpha, S, Y) {
   n <- length(alpha)
   H <- diag(alpha, n)
@@ -158,6 +192,7 @@ lbfgs_inv_hessian <- function(alpha, S, Y) {
 
 pathfinder_path <- function(lpg, u0, history, max_iter, num_elbo_draws, num_draws, tol_rel_obj, tol_grad) {
   n <- length(u0)
+  lv <- attr(lpg, "value") %||% function(q) lpg(q)$value
   x <- u0
   r <- lpg(x)
   if (!is.finite(r$value)) stop("Pathfinder: the log density is not finite at the initial point", call. = FALSE)
@@ -165,17 +200,14 @@ pathfinder_path <- function(lpg, u0, history, max_iter, num_elbo_draws, num_draw
   alpha <- rep(1, n)
   best <- list(elbo = -Inf)
   evaluate <- function(x, g, alpha, S, Y) {
-    H <- tryCatch(lbfgs_inv_hessian(alpha, S, Y), error = function(e) NULL)
-    if (is.null(H)) return(NULL)
-    L <- tryCatch(t(chol(H)), error = function(e) NULL)
-    if (is.null(L)) return(NULL)
-    mu <- x + as.vector(H %*% g)
+    a <- tryCatch(lbfgs_normal(x, g, alpha, S, Y), error = function(e) NULL)
+    if (is.null(a)) return(NULL)
     z <- matrix(stats::rnorm(num_elbo_draws * n), num_elbo_draws, n)
-    th <- sweep(z %*% t(L), 2L, mu, "+")
-    lq <- -0.5 * rowSums(z^2) - 0.5 * n * log(2 * pi) - sum(log(diag(L)))
-    lp <- apply(th, 1L, function(q) lpg(q)$value)
+    th <- a$draw(z)
+    lq <- -0.5 * rowSums(z^2) - 0.5 * n * log(2 * pi) - a$logdet
+    lp <- apply(th, 1L, lv)
     e <- mean(ifelse(is.finite(lp), lp, -Inf) - lq)
-    list(elbo = if (is.nan(e)) -Inf else e, mu = mu, L = L)
+    list(elbo = if (is.nan(e)) -Inf else e, mu = a$mu, approx = a)
   }
   for (it in seq_len(max_iter)) {
     # L-BFGS direction on -log p
@@ -213,10 +245,10 @@ pathfinder_path <- function(lpg, u0, history, max_iter, num_elbo_draws, num_draw
   }
   if (!is.finite(best$elbo)) stop("Pathfinder: no usable normal approximation was found along the optimization path", call. = FALSE)
   z <- matrix(stats::rnorm(num_draws * n), num_draws, n)
-  th <- sweep(z %*% t(best$L), 2L, best$mu, "+")
-  lq <- -0.5 * rowSums(z^2) - 0.5 * n * log(2 * pi) - sum(log(diag(best$L)))
-  lp <- apply(th, 1L, function(q) lpg(q)$value)
-  list(q = th, log_p = lp, log_q = lq, elbo = best$elbo, mu = best$mu, L = best$L)
+  th <- best$approx$draw(z)
+  lq <- -0.5 * rowSums(z^2) - 0.5 * n * log(2 * pi) - best$approx$logdet
+  lp <- apply(th, 1L, lv)
+  list(q = th, log_p = lp, log_q = lq, elbo = best$elbo, mu = best$mu, approx = best$approx)
 }
 
 lbfgs_two_loop <- function(g, alpha, S, Y) {
@@ -332,5 +364,5 @@ bayescomp_pathfinder <- function(model, num_paths = 4L, num_draws = 1000L, histo
 # the best normal approximation along one Pathfinder path
 pathfinder_best_normal <- function(lpg, u0, history, max_iter, num_elbo_draws, tol_rel_obj, tol_grad) {
   r <- pathfinder_path(lpg, u0, history, max_iter, num_elbo_draws, 1L, tol_rel_obj, tol_grad)
-  list(mu = r$mu, L = r$L)
+  list(mu = r$mu, L = t(chol(lbfgs_normal_cov(r$approx))))
 }

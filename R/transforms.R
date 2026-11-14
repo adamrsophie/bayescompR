@@ -181,8 +181,7 @@ tf_positive_ordered <- list(
 # here so that lp__ matches.
 simplex_constrain <- function(u, K) {
   if (K == 1L) return(list(x = 1, lj = 0))
-  V <- sum_to_zero_basis(K)
-  z <- ad_reshape(ad_matmul(V, ad_reshape(u, c(K - 1L, 1L))), NULL)
+  z <- stz_apply(u, K)
   lse <- ad_log_sum_exp(z)
   lx <- z - lse
   list(x = exp(lx), lj = ad_sum(lx) + 0.5 * log(K))
@@ -191,7 +190,7 @@ simplex_constrain <- function(u, K) {
 simplex_free <- function(x) {
   K <- length(x)
   if (K <= 1L) return(numeric(0))
-  as.numeric(crossprod(sum_to_zero_basis(K), log(x)))
+  stz_apply_t(log(x), K)
 }
 
 simplex_check <- function(x, tol = 1e-8) {
@@ -224,7 +223,27 @@ tf_unit_vector <- list(
 )
 
 # Isometric sum to zero transform (Stan 2.36 and later). The map is linear with
-# orthonormal columns, so the log Jacobian is constant (zero).
+# orthonormal columns, so the log Jacobian is constant (zero). It is applied
+# in linear time as Stan Math's recursion: with w_i = y_i / sqrt(i (i + 1)),
+# z_k = sum_{i >= k} w_i - (k - 1) w_{k - 1}.
+stz_apply <- function(u, K) {
+  N <- K - 1L
+  vu <- as.vector(val(u))
+  i <- seq_len(N)
+  sc <- 1 / sqrt(i * (i + 1))
+  w <- vu * sc
+  z <- c(rev(cumsum(rev(w))), 0) - c(0, w * i)
+  if (!inherits(u, "bcad")) return(z)
+  ad_node(z, list(u), function(g) list(stz_apply_t(g, K)))
+}
+# transpose of the map (also its inverse on sum to zero vectors)
+stz_apply_t <- function(x, K) {
+  N <- K - 1L
+  i <- seq_len(N)
+  x <- as.vector(x)
+  (cumsum(x[i]) - i * x[i + 1L]) / sqrt(i * (i + 1))
+}
+
 .stz_cache <- new.env(parent = emptyenv())
 
 sum_to_zero_basis <- function(K) {
@@ -258,13 +277,12 @@ tf_sum_to_zero <- list(
   constrain = function(u, shape, a) {
     K <- shape[1L]
     if (K <= 1L) return(list(x = numeric(K), lj = 0))
-    V <- sum_to_zero_basis(K)
-    list(x = ad_reshape(ad_matmul(V, ad_reshape(u, c(K - 1L, 1L))), NULL), lj = 0)
+    list(x = stz_apply(u, K), lj = 0)
   },
   unconstrain = function(x, shape, a) {
     K <- shape[1L]
     if (K <= 1L) return(numeric(0))
-    as.numeric(crossprod(sum_to_zero_basis(K), as.numeric(x)))
+    stz_apply_t(x, K)
   },
   check = function(x, shape, a) {
     if (abs(sum(as.numeric(x))) > 1e-8) return("is not a valid sum_to_zero_vector: elements do not sum to zero")
@@ -698,10 +716,17 @@ full_shape <- function(adims, eshape) {
 #   decl   list(kind, adims, eshape)
 #   args   evaluated constraint arguments (lower, upper, offset, multiplier)
 constrain_variable <- function(u, decl, args) {
-  if (identical(decl$kind, "tuple")) return(tuple_constrain(u, decl, args))
-  tf <- transform_for(decl$kind)
+  kind <- decl$kind
   adims <- decl$adims
   eshape <- decl$eshape
+  # fast path: an unconstrained variable whose storage order is the
+  # element order (a scalar, a plain vector, matrix or array of reals)
+  if (kind == "none" && !length(args) && (!length(adims) || !length(eshape))) {
+    fs <- full_shape(adims, eshape)
+    return(list(x = if (is.null(fs) && is.null(dim(val(u)))) u else ad_reshape(u, fs), lj = 0))
+  }
+  if (identical(kind, "tuple")) return(tuple_constrain(u, decl, args))
+  tf <- transform_for(kind)
   n_elem <- if (length(adims)) prod(adims) else 1L
   fs <- tf$free_size(eshape)
   if (decl$kind %in% c("none", "bounds")) {

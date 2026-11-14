@@ -122,14 +122,20 @@ flat <- function(x) if (inherits(x, "bcad")) ad_reshape(x, NULL) else as.vector(
 nelem <- function(x) length(val(x))
 
 vlen_check <- function(fname, ...) {
-  args <- list(...)
-  ls <- vapply(args, function(a) length(val(a)), 1L)
-  big <- ls[ls != 1L]
-  if (length(big) && any(big != big[1L])) {
-    stop_shape(sprintf("%s: vectorized arguments have different sizes (%s)", fname,
-                       paste(ls, collapse = ", ")))
+  N <- 1L
+  for (k in seq_len(...length())) {
+    a <- ...elt(k)
+    l <- length(if (inherits(a, "bcad")) a$v else a)
+    if (l != 1L) {
+      if (N == 1L) N <- l
+      else if (l != N) {
+        ls <- vapply(list(...), function(a) length(val(a)), 1L)
+        stop_shape(sprintf("%s: vectorized arguments have different sizes (%s)", fname,
+                           paste(ls, collapse = ", ")))
+      }
+    }
   }
-  if (length(big)) big[1L] else 1L
+  N
 }
 
 # common shape check for elementwise operations

@@ -80,6 +80,39 @@ rt_index <- function(x, kinds, vals) {
   ad_gather(x, flat, if (length(shape) > 1L) shape else NULL)
 }
 
+# fast paths for x[i] on a one dimensional value and x[i, j] on a two
+# dimensional one; anything else goes through rt_index
+rt_index_s1 <- function(x, i) {
+  if (is.object(x)) {
+    if (!inherits(x, "bcad")) return(rt_index(x, "single", list(i)))
+    v <- x$v
+  } else v <- x
+  d <- dim(v)
+  if (length(d) > 1L) return(rt_index(x, "single", list(i)))
+  n <- length(v)
+  if (is.na(i) || i < 1L || i > n)
+    stop_domain(sprintf("index out of range: index %s for a dimension of size %d", i, n))
+  i <- as.integer(i)
+  if (!is.object(x)) return(v[[i]])
+  ad_node(v[[i]], list(x), function(g) list(ad_sparse(i, g, n, d)))
+}
+rt_index_s2 <- function(x, i, j) {
+  if (is.object(x)) {
+    if (!inherits(x, "bcad")) return(rt_index(x, c("single", "single"), list(i, j)))
+    v <- x$v
+  } else v <- x
+  d <- dim(v)
+  if (length(d) != 2L) return(rt_index(x, c("single", "single"), list(i, j)))
+  if (is.na(i) || i < 1L || i > d[1L])
+    stop_domain(sprintf("index out of range: index %s for a dimension of size %d", i, d[1L]))
+  if (is.na(j) || j < 1L || j > d[2L])
+    stop_domain(sprintf("index out of range: index %s for a dimension of size %d", j, d[2L]))
+  k <- as.integer(i + (j - 1L) * d[1L])
+  if (!is.object(x)) return(v[[k]])
+  n <- length(v)
+  ad_node(v[[k]], list(x), function(g) list(ad_sparse(k, g, n, d)))
+}
+
 rt_assign_index <- function(x, kinds, vals, rhs, name) {
   if (is_tarr(x)) return(tarr_assign(x, kinds, vals, rhs, name))
   D <- storage_dims(x)
@@ -184,7 +217,7 @@ rt_rowvec <- function(items, rows) {
 new_ctx <- function(jacobian = TRUE, print = TRUE, propto = FALSE) {
   ctx <- new.env(parent = emptyenv())
   ctx$propto <- propto
-  ctx$target <- vector("list", 64L)
+  ctx$target <- vector("list", 16L)
   ctx$n_target <- 0L
   ctx$jacobian <- jacobian
   ctx$print <- print

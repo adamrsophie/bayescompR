@@ -29,10 +29,10 @@ tape_start <- function() {
   old <- list(tape = .ad$tape, n = .ad$n, gr = .ad$gr, ids = .ad$ids, adj = .ad$adj, cap = .ad$cap)
   .ad$tape <- TRUE
   .ad$n <- 0L
-  .ad$gr <- vector("list", 256L)
-  .ad$ids <- vector("list", 256L)
-  .ad$adj <- vector("list", 256L)
-  .ad$cap <- 256L
+  .ad$gr <- vector("list", 64L)
+  .ad$ids <- vector("list", 64L)
+  .ad$adj <- vector("list", 64L)
+  .ad$cap <- 64L
   old
 }
 tape_restore <- function(old) {
@@ -117,7 +117,20 @@ ad_backward <- function(out) {
         ck <- cs[[k]]
         if (!is.null(ck)) {
           cur <- adj[[id]]
-          adj[[id]] <- if (is.null(cur)) ck else cur + ck
+          if (inherits(ck, "bcsp")) {
+            # sparse contribution (a selection): add into the parent's
+            # adjoint in place instead of building a dense array
+            if (is.null(cur)) {
+              cur <- numeric(ck$n)
+              if (!is.null(ck$d)) dim(cur) <- ck$d
+            } else {
+              adj[id] <- list(NULL)
+            }
+            cur[ck$i] <- cur[ck$i] + ck$g
+            adj[[id]] <- cur
+          } else {
+            adj[[id]] <- if (is.null(cur)) ck else cur + ck
+          }
         }
       }
     }
@@ -207,6 +220,18 @@ Ops.bcad <- function(e1, e2) {
       "+" = return(e1),
       "!" = return(!val(e1)),
       stop("unsupported unary operator ", .Generic, call. = FALSE))
+  }
+  # scalar arithmetic without the generic machinery (loops over scalars)
+  if (.Generic %in% c("+", "-", "*", "/")) {
+    ia <- inherits(e1, "bcad"); ib <- inherits(e2, "bcad")
+    va <- if (ia) e1$v else e1
+    vb <- if (ib) e2$v else e2
+    if (length(va) == 1L && length(vb) == 1L && is.null(dim(va)) && is.null(dim(vb)))
+      return(switch(.Generic,
+        "+" = ad_node(va + vb, list(e1, e2), function(g) list(if (ia) g, if (ib) g)),
+        "-" = ad_node(va - vb, list(e1, e2), function(g) list(if (ia) g, if (ib) -g)),
+        "*" = ad_node(va * vb, list(e1, e2), function(g) list(if (ia) g * vb, if (ib) g * va)),
+        "/" = { y <- va / vb; ad_node(y, list(e1, e2), function(g) list(if (ia) g / vb, if (ib) -g * y / vb)) }))
   }
   switch(.Generic,
     "+" = ad_binary(e1, e2, `+`, function(a, b, y) 1, function(a, b, y) 1),
@@ -332,12 +357,17 @@ ad_select <- function(x, i) {
   vx <- val(x)
   y <- vx[i]
   if (!inherits(x, "bcad")) return(y)
-  ad_node(y, list(x), function(g) {
-    r <- numeric(length(vx))
-    r[i] <- g
-    if (!is.null(dim(vx))) dim(r) <- dim(vx)
-    list(r)
-  })
+  n <- length(vx)
+  d <- dim(vx)
+  ad_node(y, list(x), function(g) list(ad_sparse(i, g, n, d)))
+}
+
+# sparse adjoint contribution g at the distinct flat indices i of a parent
+# of length n and dimensions d, accumulated in place by ad_backward
+ad_sparse <- function(i, g, n, d) {
+  x <- list(i = i, g = as.vector(g), n = n, d = d)
+  class(x) <- "bcsp"
+  x
 }
 
 # Gather: y = x[idx] for a flat integer index vector, reshaped to `shape`.
@@ -348,6 +378,8 @@ ad_gather <- function(x, idx, shape = NULL) {
   if (!inherits(x, "bcad")) return(y)
   n <- length(vx)
   d <- dim(vx)
+  if (4L * length(idx) < n && !anyDuplicated(idx))
+    return(ad_node(y, list(x), function(g) list(ad_sparse(idx, g, n, d))))
   ad_node(y, list(x), function(g) {
     r <- numeric(n)
     if (anyDuplicated(idx)) {
@@ -577,9 +609,12 @@ num_partial <- function(f, x, ...) {
 
 # sum of a list of scalars as a single node
 ad_sum_list <- function(xs) {
-  vals <- vapply(xs, function(a) sum(val(a)), 0)
-  y <- sum(vals)
-  isad <- vapply(xs, inherits, TRUE, what = "bcad")
+  y <- 0
+  isad <- logical(length(xs))
+  for (k in seq_along(xs)) {
+    a <- xs[[k]]
+    if (inherits(a, "bcad")) { isad[k] <- TRUE; y <- y + sum(a$v) } else y <- y + sum(a)
+  }
   if (!any(isad)) return(y)
   ops <- xs[isad]
   ad_node(y, ops, function(g) lapply(ops, function(o) {

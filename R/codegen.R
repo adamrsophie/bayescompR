@@ -93,6 +93,11 @@ cg_index_parts <- function(e) {
 }
 
 cg_index <- function(e) {
+  kinds <- vapply(e$idx, `[[`, "", "kind")
+  if (length(kinds) == 1L && kinds == "single")
+    return(cl(rt_index_s1, cg_expr(e$x), cg_expr(e$idx[[1L]]$e)))
+  if (length(kinds) == 2L && all(kinds == "single"))
+    return(cl(rt_index_s2, cg_expr(e$x), cg_expr(e$idx[[1L]]$e), cg_expr(e$idx[[2L]]$e)))
   p <- cg_index_parts(e)
   cl(rt_index, cg_expr(e$x), p$kinds, p$vals)
 }

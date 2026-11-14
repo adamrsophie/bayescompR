@@ -10,6 +10,12 @@ First release.
 * Math, container, linear algebra and distribution library.
 * The `wiener` distribution with four, five and seven parameters and its
   defective distribution functions.
+* Faster gradients: scalar arithmetic and single indexes skip the generic
+  machinery, selections accumulate adjoints in place, sum to zero and
+  simplex transforms run in linear time, multivariate densities and ordered
+  and categorical likelihoods evaluate all observations at once, Pathfinder
+  uses the compact L-BFGS form, and `bayescomp_log_prob()` skips the
+  gradient.
 * `rstantools::log_lik()` and `rstantools::posterior_predict()` methods.
 * Exact gradients of `svd_U()`, `svd_V()`, `qr_Q()` and `qr_R()` of tall
   matrices, and of `student_t_qf()` in the degrees of freedom.

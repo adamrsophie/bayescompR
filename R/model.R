@@ -131,6 +131,29 @@ bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL
 
 # log density and gradient on the unconstrained scale from the model's
 # backend: list(value, grad). Errors propagate with their classes.
+# value only log density: the same code without a tape
+model_lp <- function(model, jacobian, propto, print = FALSE) {
+  nat <- model$native
+  if (!is.null(nat)) return(function(u) nat$log_density_gradient(u, jacobian, propto)$value)
+  f <- model_fun(model, "log_prob")
+  # with propto, which terms are kept depends on which arguments are
+  # parameters, so the tape still records (only the backward sweep is
+  # skipped); without it the code runs with no tape at all
+  if (propto) return(function(u) {
+    ctx <- new_ctx(jacobian = jacobian, print = print, propto = TRUE)
+    old <- tape_start()
+    on.exit(tape_restore(old))
+    as.numeric(val(f(ad_leaf(as.numeric(u)), ctx)))
+  })
+  function(u) {
+    ctx <- new_ctx(jacobian = jacobian, print = print, propto = FALSE)
+    old <- .ad$tape
+    .ad$tape <- NULL
+    on.exit(.ad$tape <- old)
+    as.numeric(val(f(as.numeric(u), ctx)))
+  }
+}
+
 model_lpg <- function(model, jacobian, propto, print = FALSE) {
   nat <- model$native
   if (!is.null(nat)) return(function(u) nat$log_density_gradient(u, jacobian, propto))
@@ -403,7 +426,7 @@ lp_grad <- function(model, upars, jacobian = TRUE, propto = TRUE, print = TRUE) 
 #'   gradient with the log density in attribute `"log_prob"`.
 #' @export
 bayescomp_log_prob <- function(model, upars, jacobian = TRUE, propto = FALSE) {
-  lp_grad(model, check_upars(model, upars), jacobian, propto)$value
+  model_lp(model, jacobian, propto, TRUE)(check_upars(model, upars))
 }
 
 #' @rdname bayescomp_log_prob

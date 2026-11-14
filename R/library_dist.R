@@ -25,19 +25,24 @@ bsum <- function(term, N) {
 # array per operand, of length 1 or N; contributions are summed down to the
 # operand's shape. Only differentiable operands receive adjoints.
 fused <- function(value, ops, parts, N) {
-  keep <- which(vapply(ops, is_ad, TRUE))
+  keep <- integer(0)
+  for (k in seq_along(ops)) if (inherits(ops[[k]], "bcad")) keep <- c(keep, k)
   if (!length(keep)) return(value)
   ad_node(value, ops[keep], function(g) {
     pp <- parts()
-    lapply(keep, function(k) {
+    out <- vector("list", length(keep))
+    for (j in seq_along(keep)) {
+      k <- keep[j]
       d <- pp[[k]]
       vx <- ops[[k]]$v
-      if (length(vx) == 1L) return(g * (if (length(d) == 1L) N * d else sum(d)))
-      if (length(d) == 1L) d <- rep(d, length(vx))
-      d <- g * d
-      dim(d) <- dim(vx)
-      d
-    })
+      out[[j]] <- if (length(vx) == 1L) g * (if (length(d) == 1L) N * d else sum(d)) else {
+        if (length(d) == 1L) d <- rep(d, length(vx))
+        d <- g * d
+        dim(d) <- dim(vx)
+        d
+      }
+    }
+    out
   })
 }
 
@@ -997,9 +1002,19 @@ cat_logit_glm <- function(y, x, alpha, beta, propto) {
   eta <- eta + ad_gather(as_dbl(alpha), rep(seq_len(K), each = n), c(n, K))
   yy <- rep_len(as.integer(y), n)
   chk_int_range("categorical_logit_glm_lpmf", "categorical outcome", yy, 1L, K)
-  lp <- ad_sum(ad_gather(eta, (yy - 1L) * n + seq_len(n)))
-  for (i in seq_len(n)) lp <- lp - ad_log_sum_exp(ad_gather(eta, i + (seq_len(K) - 1L) * n))
-  lp
+  ad_sum(ad_gather(eta, (yy - 1L) * n + seq_len(n))) - ad_sum(ad_row_log_sum_exp(eta))
+}
+
+# log_sum_exp of each row of a matrix, one node
+ad_row_log_sum_exp <- function(X) {
+  vX <- val(X)
+  m <- apply(vX, 1L, max)
+  m[!is.finite(m)] <- 0
+  E <- exp(vX - m)
+  rs <- rowSums(E)
+  y <- m + log(rs)
+  if (!inherits(X, "bcad")) return(y)
+  ad_node(y, list(X), function(g) list(E / rs * as.vector(g)))
 }
 for (xt in c("matrix", "row_vector")) {
   def("categorical_logit_glm_lpmf", c("ints", xt, "vector", "matrix"), "real", function(...) cat_logit_glm(..., propto = FALSE), density = TRUE, dist = "categorical_logit_glm")
@@ -1031,39 +1046,39 @@ defdist("discrete_range", c("ints", "ints", "ints"), lp_discrete_range, discrete
 ordered_core <- function(f, k, eta, cuts, link_lcdf, link_lccdf) {
   cv <- val(cuts)
   # an array of cut point vectors: one per observation
-  if (!is.null(dim(cv))) {
+  multi <- !is.null(dim(cv))
+  if (multi) {
     if (nrow(cv) != length(k)) stop_shape(sprintf("%s: the number of cut point vectors must equal the number of observations", f))
     eta <- flat(as_dbl(eta))
     # as Stan Math: one location per cut point vector, also for a real location
     if (length(val(eta)) != nrow(cv)) stop_shape(sprintf("%s: the number of locations must equal the number of cut point vectors", f))
-    cuts <- as_dbl(cuts)
-    lp <- 0
-    for (i in seq_along(k)) {
-      ci <- ad_gather(cuts, i + (seq_len(ncol(cv)) - 1L) * nrow(cv))
-      e <- if (length(val(eta)) == 1L) eta else ad_select(eta, i)
-      lp <- lp + ordered_core(f, k[i], e, ci, link_lcdf, link_lccdf)
-    }
-    return(lp)
+    K <- ncol(cv) + 1L
+    chk_int_range(f, "Random variable", k, 1L, K)
+    if (K > 2L && any(!(t(apply(cv, 1L, diff)) > 0))) stop_domain(sprintf("%s: Cut-points is not a valid ordered vector", f))
+  } else {
+    K <- nelem(cuts) + 1L
+    chk_int_range(f, "Random variable", k, 1L, K)
+    if (K > 2L && any(!(diff(cv) > 0))) stop_domain(sprintf("%s: Cut-points is not a valid ordered vector", f))
+    eta <- flat(as_dbl(eta))
   }
-  K <- nelem(cuts) + 1L
-  chk_int_range(f, "Random variable", k, 1L, K)
-  if (K > 2L && any(!(diff(cv) > 0))) stop_domain(sprintf("%s: Cut-points is not a valid ordered vector", f))
-  eta <- flat(as_dbl(eta))
   N <- vlen_check(f, k, eta)
+  if (N == 0L) return(0)
   kk <- rep_len(as.integer(k), N)
   cuts <- as_dbl(cuts)
+  # all observations at once, grouped by whether the category is the first,
+  # the last or in between; cut c[col] of observation i
+  cut_at <- function(col, rows) ad_gather(cuts, if (multi) rows + (col - 1L) * nrow(cv) else col)
+  eta_at <- function(rows) if (length(val(eta)) == 1L) ad_gather(eta, rep(1L, length(rows))) else ad_gather(eta, rows)
   lp <- 0
-  for (i in seq_len(N)) {
-    e <- if (length(val(eta)) == 1L) eta else ad_select(eta, i)
-    ki <- kk[i]
-    term <- if (ki == 1L) {
-      link_lccdf(e - ad_select(cuts, 1L))
-    } else if (ki == K) {
-      link_lcdf(e - ad_select(cuts, K - 1L))
-    } else {
-      ad_log_diff_exp(link_lcdf(e - ad_select(cuts, ki - 1L)), link_lcdf(e - ad_select(cuts, ki)))
-    }
-    lp <- lp + term
+  g1 <- which(kk == 1L)
+  gK <- which(kk == K & K > 1L)
+  gm <- which(kk > 1L & kk < K)
+  if (K == 1L) return(0)
+  if (length(g1)) lp <- lp + ad_sum(link_lccdf(eta_at(g1) - cut_at(rep(1L, length(g1)), g1)))
+  if (length(gK)) lp <- lp + ad_sum(link_lcdf(eta_at(gK) - cut_at(rep(K - 1L, length(gK)), gK)))
+  if (length(gm)) {
+    em <- eta_at(gm)
+    lp <- lp + ad_sum(ad_log_diff_exp(link_lcdf(em - cut_at(kk[gm] - 1L, gm)), link_lcdf(em - cut_at(kk[gm], gm))))
   }
   lp
 }
@@ -1375,16 +1390,27 @@ lp_dirichlet <- function(theta, alpha, propto) {
   al <- vec_rows(alpha)
   N <- max(length(th), length(al))
   if (length(th) != 1L && length(al) != 1L && length(th) != length(al)) stop_shape(sprintf("%s: size mismatch", f))
-  lp <- 0
-  for (i in seq_len(N)) {
-    t <- th[[min(i, length(th))]]
-    a <- al[[min(i, length(al))]]
-    chk_positive_finite(f, "prior sample sizes", a)
+  for (a in al) chk_positive_finite(f, "prior sample sizes", a)
+  for (t in th) {
     m <- simplex_check(val(t))
     if (!is.null(m)) stop_domain(paste(f, ": probabilities", m))
+  }
+  K <- nelem(th[[1L]])
+  for (x in c(th, al)) if (nelem(x) != K) stop_shape(sprintf("%s: size mismatch", f))
+  lp <- 0
+  if (N == 1L) {
+    t <- as_dbl(th[[1L]]); a <- as_dbl(al[[1L]])
     if (inc(propto, a)) lp <- lp + lgamma(ad_sum(a)) - ad_sum(lgamma(a))
     if (inc(propto, t, a)) lp <- lp + ad_sum(ad_mult_log(a - 1, t))
+    return(lp)
   }
+  # all observations at once (columns of K x N matrices)
+  A <- stack_cols(al, N, K)
+  if (inc(propto, alpha)) {
+    lp <- lp + (if (length(al) == 1L) N * (lgamma(ad_sum(as_dbl(al[[1L]]))) - ad_sum(lgamma(as_dbl(al[[1L]]))))
+                else ad_sum(lgamma(ad_matmul(matrix(1, 1L, K), A))) - ad_sum(lgamma(A)))
+  }
+  if (inc(propto, theta, alpha)) lp <- lp + ad_sum(ad_mult_log(A - 1, stack_cols(th, N, K)))
   lp
 }
 defdist("dirichlet", c("vectors", "vectors"), lp_dirichlet,
@@ -1403,17 +1429,23 @@ mvn_core <- function(f, y, mu, logdet_half, solve_fn, propto, depends) {
   lp <- 0
   if (!propto) lp <- lp - N * K * 0.5 * log(2 * pi)
   if (inc(propto, depends)) lp <- lp - N * logdet_half
-  for (i in seq_len(N)) {
-    yi <- ys[[min(i, length(ys))]]
-    mi <- ms[[min(i, length(ms))]]
-    if (nelem(yi) != K || nelem(mi) != K) stop_shape(sprintf("%s: size mismatch", f))
-    chk_not_nan(f, "Random variable", yi); chk_finite(f, "Location parameter", mi)
-    if (inc(propto, yi, mi, depends)) {
-      d <- as_dbl(yi) - as_dbl(mi)
-      lp <- lp - 0.5 * solve_fn(d)
-    }
+  for (x in ys) if (nelem(x) != K) stop_shape(sprintf("%s: size mismatch", f))
+  for (x in ms) if (nelem(x) != K) stop_shape(sprintf("%s: size mismatch", f))
+  for (x in ys) chk_not_nan(f, "Random variable", x)
+  for (x in ms) chk_finite(f, "Location parameter", x)
+  if (!inc(propto, y, mu, depends)) return(lp)
+  # all observations at once: the K x N matrix of differences goes through
+  # one solve
+  if (N == 1L) return(lp - 0.5 * solve_fn(as_dbl(ys[[1L]]) - as_dbl(ms[[1L]])))
+  lp - 0.5 * solve_fn(stack_cols(ys, N, K) - stack_cols(ms, N, K))
+}
+# K x N matrix whose columns are the vectors xs (one vector is repeated)
+stack_cols <- function(xs, N, K) {
+  if (length(xs) == 1L) {
+    x <- as_dbl(xs[[1L]])
+    return(ad_gather(x, rep(seq_len(K), N), c(K, N)))
   }
-  lp
+  ad_reshape(ad_c(lapply(xs, as_dbl)), c(K, N))
 }
 lp_multi_normal <- function(y, mu, Sigma, propto) {
   sym_check("multi_normal_lpdf", Sigma)
@@ -1436,7 +1468,8 @@ lp_multi_normal_prec <- function(y, mu, Omega, propto) {
   L <- ad_cholesky(Omega)
   ldh <- -ad_sum(log(.lib$diagonal[[1L]]$impl(L)))
   mvn_core("multi_normal_prec_lpdf", y, mu, ldh, function(d) {
-    ad_sum(d * op_mat_vec(Omega, d))
+    D <- if (is.null(dim(val(d)))) ad_reshape(d, c(length(val(d)), 1L)) else d
+    ad_sum(D * ad_matmul(as_dbl(Omega), D))
   }, propto, Omega)
 }
 mvn_rng <- function(mu, L) {
@@ -1474,11 +1507,11 @@ mvt_core <- function(f, y, nu, mu, L, propto) {
   if (inc(propto, nu)) lp <- lp + N * (lgamma((nu + K) / 2) - lgamma(nu / 2) - K / 2 * log(nu))
   if (!propto) lp <- lp - N * K / 2 * log(pi)
   if (inc(propto, L)) lp <- lp - N * ad_sum(log(.lib$diagonal[[1L]]$impl(L)))
-  for (i in seq_len(N)) {
-    d <- as_dbl(ys[[min(i, length(ys))]]) - as_dbl(ms[[min(i, length(ms))]])
-    z <- ad_tri_solve(L, d, f)
-    lp <- lp - (nu + K) / 2 * log1p(ad_sum(z * z) / nu)
-  }
+  # all observations through one triangular solve
+  D <- if (N == 1L) as_dbl(ys[[1L]]) - as_dbl(ms[[1L]]) else stack_cols(ys, N, K) - stack_cols(ms, N, K)
+  z <- ad_tri_solve(L, D, f)
+  q <- if (N == 1L) ad_sum(z * z) else ad_reshape(ad_matmul(matrix(1, 1L, K), z * z), NULL)
+  lp <- lp - (nu + K) / 2 * ad_sum(log1p(q / nu))
   lp
 }
 lp_multi_student_t <- function(y, nu, mu, Sigma, propto) {

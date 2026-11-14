@@ -3,13 +3,22 @@
 
 safe_lp <- function(model, jacobian, propto = TRUE) {
   lpg <- model_lpg(model, jacobian, propto)
-  function(u) {
+  lp <- model_lp(model, jacobian, propto)
+  f <- function(u) {
     r <- tryCatch(lpg(u), bayescomp_fatal_error = function(e) stop(e),
        bayescomp_domain_error = function(e) NULL,
        bayescomp_reject_error = function(e) NULL)
     if (is.null(r) || !is.finite(r$value)) return(list(value = -Inf, grad = rep(NA_real_, length(u))))
     r
   }
+  # value only version, for draws that need no gradient
+  attr(f, "value") <- function(u) {
+    v <- tryCatch(lp(u), bayescomp_fatal_error = function(e) stop(e),
+       bayescomp_domain_error = function(e) -Inf,
+       bayescomp_reject_error = function(e) -Inf)
+    if (is.finite(v)) v else -Inf
+  }
+  f
 }
 
 # Hessian of the log density by central differences of the gradient
