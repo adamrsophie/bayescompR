@@ -79,5 +79,8 @@ Collate:
     'ssm.R'
     'bigdata.R'
     'evidence.R'
+    'inla.R'
+    'sbi.R'
+    'diffusion.R'
     'ir.R'
 Config/roxygen2/version: 8.1.1

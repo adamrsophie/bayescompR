@@ -169,7 +169,7 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
   t0 <- proc.time()[["elapsed"]]
   info <- NULL
   res <- run_chains(model, 1L, seed, 1L, function(id) {
-    parts <- split(seq_len(sp$N), cut(seq_len(sp$N), K, labels = FALSE))
+    parts <- split(seq_len(sp$N), ceiling(seq_len(sp$N) * K / sp$N))
     pr <- safe_lp(sp$prior, jacobian = TRUE)
     lk <- lapply(parts, function(ix) safe_lp(model_with_data(model, sp$subset(model$data, ix)), jacobian = TRUE))
     # natural parameters: precision Q and shift r = Q m
