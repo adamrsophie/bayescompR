@@ -10,6 +10,7 @@ First release.
 * Math, container, linear algebra and distribution library.
 * The `wiener` distribution with four, five and seven parameters and its
   defective distribution functions.
+* `rstantools::log_lik()` and `rstantools::posterior_predict()` methods.
 * Exact gradients of `svd_U()`, `svd_V()`, `qr_Q()` and `qr_R()` of tall
   matrices, and of `student_t_qf()` in the degrees of freedom.
 * Embedded Laplace approximation (`laplace_marginal` and related

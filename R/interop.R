@@ -1,8 +1,9 @@
-# Methods for the generics of the Stan ecosystem (posterior, bayesplot, loo),
+# Methods for the generics of the Stan ecosystem (posterior, bayesplot, loo,
+# rstantools),
 # registered when those packages are loaded, so tools written for rstan or
 # cmdstanr fits accept a bayescomp_fit.
 
-#' Methods for posterior, bayesplot and loo
+#' Methods for posterior, bayesplot, loo and rstantools
 #'
 #' A `bayescomp_fit` works with the generics that rstan and cmdstanr fits
 #' support:
@@ -14,7 +15,10 @@
 #'   `bayesplot::log_posterior()` the `lp__` draws;
 #' * `loo::loo()` computes PSIS-LOO from the pointwise log likelihood stored
 #'   in the generated quantity `variable` (default `"log_lik"`), with
-#'   relative efficiencies from the chains.
+#'   relative efficiencies from the chains;
+#' * `rstantools::log_lik()` and `rstantools::posterior_predict()` return
+#'   draws by elements matrices (chains stacked) of the generated
+#'   quantities `variable` (defaults `"log_lik"` and `"y_rep"`).
 #' @param x,object A `bayescomp_fit`.
 #' @param variable Variable names; for `loo()` the name of the pointwise log
 #'   likelihood.
@@ -80,3 +84,20 @@ loo.bayescomp_fit <- function(x, variable = "log_lik", r_eff = TRUE, ...) {
   else if (isFALSE(r_eff)) r_eff <- NULL
   loo::loo(a, r_eff = r_eff, ...)
 }
+
+# draws x elements matrix of one variable, chains stacked
+draws_matrix_of <- function(fit, variable) {
+  a <- unclass(fit_draws(fit, variable))
+  if (!dim(a)[3L]) stop(sprintf("the fit has no variable '%s'", variable), call. = FALSE)
+  m <- matrix(a, ncol = dim(a)[3L])
+  colnames(m) <- dimnames(a)[[3L]]
+  m
+}
+
+#' @rdname bayescomp_interop
+#' @exportS3Method rstantools::log_lik
+log_lik.bayescomp_fit <- function(object, variable = "log_lik", ...) draws_matrix_of(object, variable)
+
+#' @rdname bayescomp_interop
+#' @exportS3Method rstantools::posterior_predict
+posterior_predict.bayescomp_fit <- function(object, variable = "y_rep", ...) draws_matrix_of(object, variable)

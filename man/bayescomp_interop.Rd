@@ -9,7 +9,9 @@
 \alias{nuts_params.bayescomp_fit}
 \alias{log_posterior.bayescomp_fit}
 \alias{loo.bayescomp_fit}
-\title{Methods for posterior, bayesplot and loo}
+\alias{log_lik.bayescomp_fit}
+\alias{posterior_predict.bayescomp_fit}
+\title{Methods for posterior, bayesplot, loo and rstantools}
 \usage{
 \method{as_draws}{bayescomp_fit}(x, variable = NULL, ...)
 
@@ -24,6 +26,10 @@
 \method{log_posterior}{bayescomp_fit}(object, ...)
 
 \method{loo}{bayescomp_fit}(x, variable = "log_lik", r_eff = TRUE, ...)
+
+\method{log_lik}{bayescomp_fit}(object, variable = "log_lik", ...)
+
+\method{posterior_predict}{bayescomp_fit}(object, variable = "y_rep", ...)
 }
 \arguments{
 \item{x, object}{A \code{bayescomp_fit}.}
@@ -51,6 +57,9 @@ format of \code{bayesplot::mcmc_nuts_divergence()} and related plots, and
 \code{bayesplot::log_posterior()} the \code{lp__} draws;
 \item \code{loo::loo()} computes PSIS-LOO from the pointwise log likelihood stored
 in the generated quantity \code{variable} (default \code{"log_lik"}), with
-relative efficiencies from the chains.
+relative efficiencies from the chains;
+\item \code{rstantools::log_lik()} and \code{rstantools::posterior_predict()} return
+draws by elements matrices (chains stacked) of the generated
+quantities \code{variable} (defaults \code{"log_lik"} and \code{"y_rep"}).
 }
 }
