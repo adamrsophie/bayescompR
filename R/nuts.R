@@ -282,12 +282,14 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   st$block <- isTRUE(cfg$block)
   st$max_steps <- 32L
   trans <- switch(cfg$algorithm, nuts = nuts_transition, hmc = hmc_transition, mala = mala_transition,
-                  metropolis = metropolis_transition, slice = slice_transition)
+                  metropolis = metropolis_transition, slice = slice_transition,
+                  elliptical_slice = elliptical_transition)
+  st$center <- q0
   hamiltonian <- cfg$algorithm %in% c("nuts", "hmc")
   nw <- cfg$iter_warmup
   ns <- cfg$iter_sampling
   adapt <- cfg$adapt_engaged && nw > 0L
-  tune_step <- adapt && cfg$algorithm != "slice"
+  tune_step <- adapt && !(cfg$algorithm %in% c("slice", "elliptical_slice"))
   da <- dual_avg_new(cfg$adapt_delta, cfg$adapt_gamma, cfg$adapt_kappa, cfg$adapt_t0, mu = log(10 * cfg$step_size))
   w <- windows_new(nw, cfg$adapt_init_buffer, cfg$adapt_term_buffer, cfg$adapt_window)
   est <- est_new(n, dense)
@@ -310,7 +312,10 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
       if (tune_step) st$eps <- exp(da$x_bar)
     }
     eps_used <- st$eps
-    s <- trans(st, q)
+    # elliptical slice sampling relies on the Gaussian fitted during warmup;
+    # warmup itself uses scale free slice sampling so that the fit does not
+    # shrink along with the moves
+    s <- if (cfg$algorithm == "elliptical_slice" && it <= nw) slice_transition(st, q) else trans(st, q)
     q <- s$q
     if (it <= nw && adapt) {
       if (tune_step) st$eps <- dual_avg_learn(da, s$accept_stat)
@@ -319,6 +324,7 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
         if (win_end_window(w)) {
           win_compute_next(w)
           st$metric <- make_metric(cfg$metric, est_value(est))
+          st$center <- est$mean
           est <- est_new(n, dense)
           w$counter <- w$counter + 1L
           if (hamiltonian) st$eps <- init_stepsize(st, q)

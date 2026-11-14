@@ -146,5 +146,36 @@ lp_cache_fun <- function(st) {
 }
 
 default_adapt_delta <- function(algorithm, block) {
-  switch(algorithm, nuts = 0.8, hmc = 0.8, mala = 0.574, metropolis = if (block) 0.234 else 0.44, slice = NA_real_)
+  switch(algorithm, nuts = 0.8, hmc = 0.8, mala = 0.574, metropolis = if (block) 0.234 else 0.44, NA_real_)
+}
+
+# Generalized elliptical slice sampling (Murray, Adams and MacKay 2010;
+# Nishihara, Murray and Adams 2014): the target is written as
+# N(q; c, Sigma) * L(q) with L = p / N, where the Gaussian has the adapted
+# inverse metric as covariance and the warmup mean as center. Elliptical
+# slice sampling on L is exact for any target; it is efficient when the
+# Gaussian matches the posterior. It needs no gradient and no step size.
+elliptical_transition <- function(st, q) {
+  m <- st$metric
+  c0 <- st$center
+  logN <- function(x) -0.5 * sum(metric_chol_solve(m, x - c0)^2)
+  lp0 <- st$lp_cache(q)
+  ll0 <- lp0 - logN(q)
+  logy <- ll0 + log(stats::runif(1))
+  nu <- metric_chol_mult(m, stats::rnorm(length(q)))
+  th <- stats::runif(1, 0, 2 * pi)
+  lo <- th - 2 * pi
+  hi <- th
+  evals <- 0L
+  repeat {
+    qn <- c0 + (q - c0) * cos(th) + nu * sin(th)
+    lp1 <- st$lp(qn)
+    evals <- evals + 1L
+    if (is.finite(lp1) && lp1 - logN(qn) > logy) { q <- qn; lp0 <- lp1; break }
+    if (th < 0) lo <- th else hi <- th
+    if (hi - lo < 1e-12) break
+    th <- stats::runif(1, lo, hi)
+  }
+  st$last <- list(q = q, lp = lp0)
+  mh_out(q, lp0, 1, evals)
 }

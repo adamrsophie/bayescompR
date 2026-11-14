@@ -29,7 +29,9 @@
 #'   `bayescomp_fit` (for example from [bayescomp_pathfinder()]) whose draws
 #'   are used as starting points.
 #' @param algorithm `"nuts"`, `"hmc"` (static integration time), `"mala"`,
-#'   `"metropolis"` or `"slice"`.
+#'   `"metropolis"`, `"slice"` or `"elliptical_slice"` (generalized
+#'   elliptical slice sampling around a Gaussian whose mean and covariance
+#'   are estimated during warmup).
 #' @param metric `"diag_e"` or `"dense_e"`.
 #' @param inv_metric Optional initial inverse metric (vector or matrix).
 #' @param step_size Initial step size: leapfrog step for HMC, proposal scale
@@ -61,7 +63,7 @@
 #' }
 #' @export
 bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampling = 1000L,
-                             seed = NULL, init = 2, algorithm = c("nuts", "hmc", "mala", "metropolis", "slice"),
+                             seed = NULL, init = 2, algorithm = c("nuts", "hmc", "mala", "metropolis", "slice", "elliptical_slice"),
                              metric = c("diag_e", "dense_e"), inv_metric = NULL,
                              step_size = NULL, adapt_delta = NULL, block = TRUE, max_treedepth = 10L,
                              int_time = 2 * pi, adapt_engaged = TRUE, adapt_gamma = 0.05,
@@ -77,9 +79,9 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   thin <- as_count(thin, "thin", min = 1L)
   n <- model$dim
   if (is.null(adapt_delta)) adapt_delta <- default_adapt_delta(algorithm, block)
-  if (algorithm != "slice" && !(adapt_delta > 0 && adapt_delta < 1)) stop("'adapt_delta' must be in (0, 1)", call. = FALSE)
+  if (!(algorithm %in% c("slice", "elliptical_slice")) && !(adapt_delta > 0 && adapt_delta < 1)) stop("'adapt_delta' must be in (0, 1)", call. = FALSE)
   if (is.null(step_size)) {
-    step_size <- switch(algorithm, nuts = 1, hmc = 1, slice = 2, mala = 1 / max(1, n)^(1 / 6),
+    step_size <- switch(algorithm, nuts = 1, hmc = 1, slice = 2, elliptical_slice = 1, mala = 1 / max(1, n)^(1 / 6),
                         metropolis = if (block) 2.38 / sqrt(max(1, n)) else 2.4)
   }
   if (!(is.numeric(step_size) && length(step_size) == 1L && step_size > 0)) stop("'step_size' must be positive", call. = FALSE)

@@ -1,0 +1,60 @@
+target2 <- "parameters { vector[2] x; } model { x ~ multi_normal([1, -1]', [[1, 0.7], [0.7, 1]]); }"
+
+moments_ok <- function(fit, tol = 0.25) {
+  x <- bayescomp_extract(fit, "x")
+  expect_equal(colMeans(x), c(1, -1), tolerance = tol)
+  expect_equal(apply(x, 2, sd), c(1, 1), tolerance = tol)
+}
+
+test_that("elliptical slice sampling targets the posterior", {
+  m <- bayescomp_model(target2)
+  fit <- bayescomp_sample(m, chains = 2, iter_warmup = 200, iter_sampling = 600,
+                          algorithm = "elliptical_slice", metric = "dense_e", seed = 1, refresh = 0)
+  moments_ok(fit, 0.15)
+})
+
+test_that("ensemble samplers target the posterior", {
+  m <- bayescomp_model(target2)
+  for (meth in c("de", "stretch")) {
+    fit <- bayescomp_ensemble(m, method = meth, iter_warmup = 400, iter_sampling = 400, seed = 2)
+    moments_ok(fit, 0.3)
+    expect_true(all(fit$acceptance > 0.05))
+  }
+})
+
+test_that("parallel tempering mixes between modes and estimates the evidence", {
+  mix <- bayescomp_model("parameters { real x; }
+    model { target += log_mix(0.3, normal_lpdf(x | -5, 0.5), normal_lpdf(x | 5, 0.5)); }")
+  fit <- bayescomp_parallel_tempering(mix, num_temps = 8, chains = 1, iter_warmup = 300, iter_sampling = 600,
+                                      reference = "standard", reference_scale = 8, seed = 1)
+  expect_equal(mean(bayescomp_extract(fit, "x") < 0), 0.3, tolerance = 0.15)
+  expect_equal(fit$log_evidence, 0, tolerance = 0.3)
+  b <- fit$betas[[1L]]
+  expect_equal(range(b), c(0, 1))
+  expect_true(all(diff(b) > 0))
+  s <- pt_update_schedule(seq(0, 1, length.out = 5), c(0.8, 0.1, 0.1, 0.1))
+  expect_lt(s[2], 0.25)
+})
+
+test_that("Gibbs sampling detects conjugate conditionals", {
+  y <- c(1, 2, 0.5, 1.5, 2.5)
+  m <- bayescomp_model("data { int N; vector[N] y; }
+    parameters { real mu; real<lower=0> tau; real<lower=0, upper=1> p; vector[2] b; real<lower=0> s; }
+    model {
+      mu ~ normal(0, 10); tau ~ gamma(2, 1); y ~ normal(mu, inv_sqrt(tau));
+      p ~ beta(2, 3); 7 ~ binomial(10, p);
+      b ~ normal(0, 1); [1, 2]' ~ normal(b, 1);
+      s ~ student_t(3, 0, 1);
+    }", data = list(N = 5, y = y))
+  fit <- bayescomp_gibbs(m, chains = 2, iter_warmup = 100, iter_sampling = 300, seed = 1)
+  expect_equal(fit$blocks$family[1:4], c("gaussian", "gamma1", "beta", "gaussian"))
+  expect_equal(fit$blocks$kernel[5], "slice")
+  expect_true(all(fit$blocks$acceptance[1:4] > 0.999))
+  expect_equal(mean(bayescomp_extract(fit, "p")), 9 / 15, tolerance = 0.05)
+  expect_equal(colMeans(bayescomp_extract(fit, "b")), c(0.5, 1), tolerance = 0.15)
+  fit2 <- bayescomp_gibbs(m, blocks = list(list(pars = c("mu", "tau"), kernel = "metropolis"),
+                                           list(pars = c("p", "b", "s"), kernel = "mala")),
+                          chains = 1, iter_warmup = 300, iter_sampling = 300, seed = 2)
+  expect_equal(mean(bayescomp_extract(fit2, "p")), 9 / 15, tolerance = 0.1)
+  expect_error(bayescomp_gibbs(m, blocks = list("mu")), "every parameter")
+})

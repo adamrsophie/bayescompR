@@ -11,7 +11,7 @@ bayescomp_sample(
   iter_sampling = 1000L,
   seed = NULL,
   init = 2,
-  algorithm = c("nuts", "hmc", "mala", "metropolis", "slice"),
+  algorithm = c("nuts", "hmc", "mala", "metropolis", "slice", "elliptical_slice"),
   metric = c("diag_e", "dense_e"),
   inv_metric = NULL,
   step_size = NULL,
@@ -51,7 +51,9 @@ a list of such lists (one per chain), a function returning a list, or a
 are used as starting points.}
 
 \item{algorithm}{\code{"nuts"}, \code{"hmc"} (static integration time), \code{"mala"},
-\code{"metropolis"} or \code{"slice"}.}
+\code{"metropolis"}, \code{"slice"} or \code{"elliptical_slice"} (generalized
+elliptical slice sampling around a Gaussian whose mean and covariance
+are estimated during warmup).}
 
 \item{metric}{\code{"diag_e"} or \code{"dense_e"}.}
 

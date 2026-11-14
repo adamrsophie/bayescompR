@@ -70,5 +70,8 @@ Collate:
     'mcmc.R'
     'vi.R'
     'smc.R'
+    'tempering.R'
+    'ensemble.R'
+    'gibbs.R'
     'ir.R'
 Config/roxygen2/version: 8.1.1

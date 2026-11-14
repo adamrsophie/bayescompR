@@ -25,6 +25,10 @@ make_fit <- function(model, res, cfg, method, seed, elapsed) {
     class = c("bayescomp_fit"))
 }
 
+# methods whose draws are Markov chains, for which R-hat and ESS apply
+mcmc_methods <- c("sample", "parallel_tempering", "ensemble", "gibbs", "rmhmc", "mclmc", "pdmp",
+                  "sgmcmc", "pmcmc", "rjmcmc")
+
 kept <- function(fit, inc_warmup = FALSE) {
   nw <- fit$n_warmup_saved %||% 0L
   n <- dim(fit$draws)[1L]
@@ -102,7 +106,7 @@ bayescomp_extract <- function(fit, variable) {
 summary.bayescomp_fit <- function(object, variables = NULL, probs = c(0.05, 0.95), ...) {
   a <- bayescomp_draws(object, variables)
   vars <- dimnames(a)[[3L]]
-  mcmc <- object$method == "sample"
+  mcmc <- object$method %in% mcmc_methods
   rows <- lapply(vars, function(v) {
     x <- matrix(a[, , v], dim(a)[1L], dim(a)[2L])
     xv <- as.vector(x)

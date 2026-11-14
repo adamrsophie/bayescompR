@@ -72,20 +72,8 @@ bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinde
   res <- run_chains(model, 1L, seed, 1L, function(id) {
     lp <- lp_value_fun(model)
     lpg_full <- model_lpg(model, jacobian = TRUE, propto = FALSE)
-    mu <- rep(0, n)
-    L <- diag(reference_scale, n)
-    if (reference == "pathfinder") {
-      pf <- tryCatch({
-        lpg <- safe_lp(model, jacobian = TRUE)
-        pathfinder_best_normal(lpg, find_init(model, 2, 1L), 5L, 1000L, 25L, 1e-12, 1e-8)
-      }, error = function(e) NULL)
-      if (!is.null(pf)) { mu <- pf$mu; L <- reference_scale * pf$L }
-    }
-    log_det_L <- sum(log(abs(diag(L))))
-    log_g <- function(U) {
-      Z <- t(forwardsolve(L, t(U) - mu))
-      -0.5 * rowSums(Z^2) - 0.5 * n * log(2 * pi) - log_det_L
-    }
+    ref <- gaussian_reference(model, reference, reference_scale)
+    mu <- ref$mu; L <- ref$L; log_g <- ref$log_g
     U <- sweep(matrix(stats::rnorm(N * n), N, n) %*% t(L), 2L, mu, "+")
     lg <- log_g(U)
     lpv <- eval_rows(lp, U, cores)
@@ -255,4 +243,26 @@ smc_gradient_moves <- function(U, lg, lpv, beta, mu, L, Lc, eps, kernel, hmc_ste
   M <- do.call(rbind, rows)
   n <- ncol(U)
   list(U = M[, seq_len(n), drop = FALSE], lg = M[, n + 1L], lpv = M[, n + 2L], acc = mean(M[, n + 3L]))
+}
+
+# A normalized Gaussian reference on the unconstrained space: the best
+# Pathfinder normal with its covariance scaled by scale^2, or N(0, scale^2 I).
+gaussian_reference <- function(model, reference, scale) {
+  n <- model$dim
+  mu <- rep(0, n)
+  L <- diag(scale, n)
+  if (reference == "pathfinder") {
+    pf <- tryCatch({
+      lpg <- safe_lp(model, jacobian = TRUE)
+      pathfinder_best_normal(lpg, find_init(model, 2, 1L), 5L, 1000L, 25L, 1e-12, 1e-8)
+    }, error = function(e) NULL)
+    if (!is.null(pf)) { mu <- pf$mu; L <- scale * pf$L }
+  }
+  log_det_L <- sum(log(abs(diag(L))))
+  log_g <- function(U) {
+    U <- matrix(U, ncol = n)
+    Z <- t(forwardsolve(L, t(U) - mu))
+    -0.5 * rowSums(Z^2) - 0.5 * n * log(2 * pi) - log_det_L
+  }
+  list(mu = mu, L = L, log_g = log_g)
 }
