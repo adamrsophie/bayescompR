@@ -15,6 +15,7 @@ CTX <- quote(.ctx)
 
 promote_to <- function(code, from, to) {
   if (!is.null(to) && !is.null(from) && to$base == "real" && from$base == "int") return(cl(as_dbl, code))
+  if (!is.null(to) && !is.null(from) && is_cx_ty(to) && !is_cx_ty(from)) return(cl(cx_promote, code, is_scalar_ty(from)))
   code
 }
 
@@ -31,6 +32,7 @@ cg_expr <- function(e) {
   switch(e$kind,
     int = e$value,
     real = e$value,
+    imag = c(0, e$value),
     var = vsym(e$name),
     paren = cg_expr(e$a),
     unop = {
@@ -40,7 +42,9 @@ cg_expr <- function(e) {
         "!" = cl(op_not, a),
         "+" = a)
     },
-    binop = cg_binop(e),
+    binop = if (is_cx_ty(e$type) || is_cx_ty(e$a$type) || is_cx_ty(e$b$type)) {
+      cl(cx_binop, e$op, cg_expr(e$a), cg_expr(e$b), e$a$type$base, e$b$type$base)
+    } else cg_binop(e),
     cond = {
       a <- promote_to(cg_expr(e$a), e$a$type, e$type)
       b <- promote_to(cg_expr(e$b), e$b$type, e$type)
@@ -48,7 +52,10 @@ cg_expr <- function(e) {
     },
     transpose = {
       a <- cg_expr(e$a)
-      if (e$a$type$base == "matrix") cl(op_transpose_mat, a) else cl(as_dbl, a)
+      if (e$a$type$base == "matrix") cl(op_transpose_mat, a)
+      else if (e$a$type$base == "complex_matrix") cl(cx_transpose, a)
+      else if (is_cx_ty(e$a$type)) a
+      else cl(as_dbl, a)
     },
     index = cg_index(e),
     array_expr = {
@@ -56,7 +63,11 @@ cg_expr <- function(e) {
       cl(rt_array, cl_list(as.name("list"), items), e$elem_type$base == "int",
          e$elem_type$base %in% c("int", "real") && (e$elem_type$nd %||% 0L) == 0L)
     },
-    rowvec_expr = {
+    rowvec_expr = if (is_cx_ty(e$type)) {
+      et <- if (e$type$base == "complex_matrix") ty("complex_row_vector") else ty("complex")
+      items <- lapply(e$items, function(it) promote_to(cg_expr(it), it$type, et))
+      cl(cx_rowvec, cl_list(as.name("list"), items), e$type$base == "complex_matrix")
+    } else {
       items <- lapply(e$items, cg_expr)
       cl(rt_rowvec, cl_list(as.name("list"), items), e$type$base == "matrix")
     },
@@ -149,6 +160,10 @@ cg_call <- function(e) {
     return(cl(dims_typed, args[[1L]], t$base, t$nd))
   }
   types <- lapply(e$args, `[[`, "type")
+  # arguments a complex signature takes as complex
+  if (!is.null(sg$cxargs))
+    args <- Map(function(code, a, p) if (p && !is_cx_ty(a$type)) promote_to(code, a$type, ty_cx(a$type)) else code,
+                args, e$args, rep_len(sg$cxargs, length(args)))
   if (grepl("_(lupdf|lupmf)$", e$name)) {
     full <- lib_impl(sub("_lup", "_lp", e$name), types)
     return(cl(as.name("if"), cl(as.name("isTRUE"), cl(as.name("$"), CTX, as.name("propto"))),
@@ -195,12 +210,24 @@ cg_decl_shape <- function(t) {
     sum_to_zero_vector = cl(as.name("c"), sz[[1L]]),
     cholesky_factor_corr = , corr_matrix = , cov_matrix = cl(as.name("c"), sz[[1L]], sz[[1L]]),
     cholesky_factor_cov = if (length(sz) == 1L) cl(as.name("c"), sz[[1L]], sz[[1L]]) else cl(as.name("c"), sz[[1L]], sz[[2L]]),
+    # complex values carry a trailing dimension holding the real and imaginary parts
+    complex = 2L,
+    complex_vector = , complex_row_vector = cl(as.name("c"), sz[[1L]], 2L),
+    complex_matrix = cl(as.name("c"), sz[[1L]], sz[[2L]], 2L),
     cl(as.name("c"), sz[[1L]], sz[[2L]]))
   list(adims = ad, eshape = es)
 }
 
 cg_cons_args <- function(t) {
   cl_list(as.name("list"), lapply(t$cons, cg_expr))
+}
+
+cg_print_items <- function(items) {
+  cl_list(as.name("list"), lapply(items, function(it)
+    if (it$kind == "string") it$value
+    else if (is_cx_ty(it$type)) cl(cx_fmt, cg_expr(it), it$type$nd)
+    else if (!is_scalar_ty(it$type)) cl(fmt_container, cg_expr(it))
+    else cg_expr(it)))
 }
 
 cg_stmt <- function(st, ctx) {
@@ -323,9 +350,9 @@ cg_stmt <- function(st, ctx) {
       if (is.null(st$value)) list(quote(return(invisible(NULL))))
       else list(cl(as.name("return"), promote_to(cg_expr(st$value), st$value$type, st$rtype)))
     },
-    print = list(cl(rt_print, CTX, cl_list(as.name("list"), lapply(st$items, function(it) if (it$kind == "string") it$value else cg_expr(it))))),
-    reject = list(cl(rt_reject, cl_list(as.name("list"), lapply(st$items, function(it) if (it$kind == "string") it$value else cg_expr(it))), FALSE)),
-    fatal_error = list(cl(rt_reject, cl_list(as.name("list"), lapply(st$items, function(it) if (it$kind == "string") it$value else cg_expr(it))), TRUE)),
+    print = list(cl(rt_print, CTX, cg_print_items(st$items))),
+    reject = list(cl(rt_reject, cg_print_items(st$items), FALSE)),
+    fatal_error = list(cl(rt_reject, cg_print_items(st$items), TRUE)),
     call_stmt = list(cg_expr(st$call)),
     stop("internal error: cannot generate code for statement ", st$kind))
 }

@@ -116,6 +116,11 @@ rt_range <- function(lo, hi) if (hi < lo) integer(0) else lo:hi
 
 rt_foreach <- function(x, nd, base) {
   v <- val(x)
+  if (is_cx_base(base) && nd == 0L) {
+    # the elements of a complex vector or matrix, in column major order
+    n <- length(v) %/% 2L
+    return(lapply(seq_len(n), function(k) ad_gather(x, c(k, k + n))))
+  }
   if (nd > 0L) {
     D <- storage_dims(x)
     n <- D[1L]
@@ -223,9 +228,16 @@ fmt_value <- function(x) {
   }
   paste0("[", paste(vapply(as.vector(v), format_scalar, ""), collapse = ","), "]")
 }
+# a container value: a single element still prints in brackets
+fmt_container <- function(x) {
+  v <- val(x)
+  if (length(v) == 1L && is.null(dim(v))) return(paste0("[", format_scalar(v), "]"))
+  fmt_value(x)
+}
 format_scalar <- function(v) {
   if (is.integer(v)) return(as.character(v))
   if (is.nan(v)) return("nan")
+  if (v == 0 && 1 / v < 0) return("-0")
   if (is.infinite(v)) return(if (v > 0) "inf" else "-inf")
   format(v, digits = 6)
 }

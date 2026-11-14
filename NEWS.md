@@ -8,6 +8,10 @@ First release.
   differentiation tape with fused density kernels.
 * All constrained types of Stan 2.40 with Stan's transforms and Jacobians.
 * Math, container, linear algebra and distribution library.
+* Complex numbers: complex scalars, vectors, row vectors and matrices with
+  differentiable arithmetic, elementwise functions, FFT, eigenvalues, SVD and
+  Schur decompositions, and the transform, HMM and further distribution
+  functions of Stan 2.40.
 * NUTS (multinomial, generalized U-turn) and static HMC with dual averaging
   and windowed diagonal or dense metric adaptation.
 * MALA, block and componentwise random walk Metropolis with adaptive

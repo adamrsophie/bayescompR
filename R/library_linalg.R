@@ -268,7 +268,6 @@ ad_eigen_sym <- function(A, want) {
 }
 def("eigenvalues_sym", "matrix", "vector", function(A) ad_eigen_sym(A, "values"))
 def("eigenvectors_sym", "matrix", "matrix", function(A) ad_eigen_sym(A, "vectors"))
-def("eigenvalues", "matrix", "vector", function(A) stop_unsupported("eigenvalues of a nonsymmetric matrix return complex values; complex numbers are not supported"))
 
 def("singular_values", "matrix", "vector", function(A) {
   A <- as_dbl(A)

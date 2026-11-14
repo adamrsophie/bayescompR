@@ -218,7 +218,8 @@ compile_r <- function(ir) {
   gq <- c(cg_block(block_body(ir, "generated quantities"), ctxl("generated quantities")),
           list(quote(.stmt$loc <- NULL)),
           check_calls(top_decls(ir, "generated quantities"), "generated quantities"))
-  out_list <- function(decls) cl_list(as.name("list"), stats::setNames(lapply(decls, function(d) vsym(d$name)), vapply(decls, `[[`, "", "name")))
+  out_list <- function(decls) cl_list(as.name("list"), stats::setNames(lapply(decls, function(d)
+    if (is_cx_base(d$type$base)) cl(cx_out, vsym(d$name)) else vsym(d$name)), vapply(decls, `[[`, "", "name")))
   tps <- top_decls(ir, "transformed parameters")
   gqs <- top_decls(ir, "generated quantities")
   # parameter transforms run before any statement: no location
@@ -314,6 +315,7 @@ read_data_value <- function(data, info) {
   }
   x <- data[[nm]]
   if (is.data.frame(x)) x <- as.matrix(x)
+  if (is_cx_base(info$stan_type %||% "")) return(read_cx_data(x, info))
   if (is.list(x)) {
     # arrays given as lists of elements
     x <- tryCatch(simplify_data_list(x), error = function(e) stop_data(sprintf("variable '%s': %s", nm, conditionMessage(e))))
@@ -464,6 +466,7 @@ bayescomp_param_names <- function(model, include_tparams = TRUE, include_gqs = T
   nm <- c(model$params$pars, if (include_tparams) model$params$tps, if (include_gqs) model$params$gqs)
   unlist(lapply(nm, function(n) {
     d <- model$decls[[n]]
+    if (is_cx_base(d$stan_type)) return(cx_flat_names(n, c(d$adims, d$eshape)))
     flat_names(n, c(d$adims, d$eshape))
   }))
 }
@@ -476,7 +479,9 @@ bayescomp_dim <- function(model) model$dim
 
 # flatten a write_array result to a named numeric vector
 flatten_draw <- function(lst) {
-  unlist(lapply(lst, function(v) as.numeric(v)), use.names = FALSE)
+  # complex values: real and imaginary parts of each element, as in CmdStan
+  unlist(lapply(lst, function(v) if (is.complex(v)) as.vector(rbind(Re(as.vector(v)), Im(as.vector(v)))) else as.numeric(v)),
+         use.names = FALSE)
 }
 
 #' @export

@@ -172,8 +172,6 @@ parse_type <- function(p) {
   t <- expect_ident(p, "a type")
   base <- t$value
   if (!(base %in% basic_types)) stop_syntax(sprintf("unknown type '%s'", base), tk_loc(t))
-  if (base %in% c("complex", "complex_vector", "complex_row_vector", "complex_matrix"))
-    stop_unsupported("complex numbers are not supported in this version", tk_loc(t))
   if (base == "tuple") stop_unsupported("tuple types are not supported in this version", tk_loc(t))
   cons <- list()
   if (base %in% c("int", "real", "vector", "row_vector", "matrix")) cons <- parse_constraint(p)
@@ -183,7 +181,8 @@ parse_type <- function(p) {
     vector = 1L, row_vector = 1L, simplex = 1L, ordered = 1L, positive_ordered = 1L,
     unit_vector = 1L, sum_to_zero_vector = 1L, cholesky_factor_corr = 1L, corr_matrix = 1L,
     cov_matrix = 1L, matrix = 2L, column_stochastic_matrix = 2L, row_stochastic_matrix = 2L,
-    cholesky_factor_cov = -1L, sum_to_zero_matrix = 2L)
+    cholesky_factor_cov = -1L, sum_to_zero_matrix = 2L,
+    complex = 0L, complex_vector = 1L, complex_row_vector = 1L, complex_matrix = 2L)
   if (needs != 0L) {
     if (!tk_is(p, "[")) stop_syntax(sprintf("type '%s' needs a size in brackets", base), tk_loc(tk(p)))
     sizes <- parse_expr_list_in(p, "[", "]")
@@ -243,7 +242,7 @@ parse_unsized_type <- function(p) {
   if (!(t$value %in% c("int", "real", "vector", "row_vector", "matrix", "void", "complex",
                        "complex_vector", "complex_row_vector", "complex_matrix", "tuple")))
     stop_syntax(sprintf("'%s' is not a valid function argument or return type", t$value), tk_loc(t))
-  if (t$value %in% c("complex", "complex_vector", "complex_row_vector", "complex_matrix", "tuple"))
+  if (t$value == "tuple")
     stop_unsupported(sprintf("type '%s' is not supported in this version", t$value), tk_loc(t))
   if (tk_is(p, "[")) stop_syntax("function argument types are unsized; old array syntax is not allowed", tk_loc(tk(p)))
   list(base = t$value, nd = nd, loc = tk_loc(t0))
@@ -575,7 +574,10 @@ parse_primary <- function(p, no_gt) {
     tk_next(p)
     return(list(kind = "real", value = as.numeric(t$value), loc = loc))
   }
-  if (t$type == "imag") stop_unsupported("imaginary literals (complex numbers) are not supported", loc)
+  if (t$type == "imag") {
+    tk_next(p)
+    return(list(kind = "imag", value = as.numeric(sub("i$", "", t$value)), loc = loc))
+  }
   if (t$type == "string") stop_syntax("string literals are only allowed in print, reject and fatal_error", loc)
   if (t$type == "op" && t$value == "(") {
     tk_next(p)

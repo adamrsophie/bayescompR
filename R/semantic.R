@@ -161,6 +161,7 @@ sem_decl <- function(s, d, top) {
   if (bn %in% c("data", "parameters") && !is.null(d$init))
     stop_semantic(sprintf("variables in the %s block cannot be assigned in their declaration", bn), d$loc)
   if (bn == "parameters" && t$base == "int") stop_semantic("parameters cannot be integers", d$loc)
+  if (bn == "parameters" && is_cx_base(t$base)) stop_semantic("parameters cannot be complex; declare the real and imaginary parts", d$loc)
   if (bn %in% c("transformed parameters") && top && t$base == "int") stop_semantic("transformed parameters cannot be integers", d$loc)
   if (t$base == "int" && (!is.null(t$cons$offset) || !is.null(t$cons$multiplier)))
     stop_semantic("integer variables cannot have offset or multiplier", d$loc)
@@ -313,7 +314,8 @@ sem_stmt <- function(s, st, top = FALSE) {
     foreach = {
       st$iter <- sem_expr(s, st$iter)
       it <- st$iter$type
-      et <- if (it$nd > 0L) ty(it$base, it$nd - 1L) else switch(it$base, vector = T_real, row_vector = T_real, matrix = T_real, NULL)
+      et <- if (it$nd > 0L) ty(it$base, it$nd - 1L) else switch(it$base, vector = T_real, row_vector = T_real, matrix = T_real,
+        complex_vector = , complex_row_vector = , complex_matrix = ty("complex"), NULL)
       if (is.null(et)) stop_semantic("foreach loops need an array, vector, row_vector or matrix", st$loc)
       st$elem_type <- et
       s$loop_depth <- s$loop_depth + 1L
@@ -386,6 +388,7 @@ sem_expr <- function(s, e, allow_void = FALSE) {
   out <- switch(k,
     int = { e$type <- T_int; e$data_only <- TRUE; e },
     real = { e$type <- T_real; e$data_only <- TRUE; e },
+    imag = { e$type <- ty("complex"); e$data_only <- TRUE; e },
     var = {
       info <- sem_lookup(s, e$name)
       if (is.null(info)) {
@@ -409,7 +412,7 @@ sem_expr <- function(s, e, allow_void = FALSE) {
         if (!is_scalar_ty(t)) stop_semantic("'!' needs an int or real operand", e$loc)
         e$type <- T_int
       } else {
-        if (!(t$base %in% c("int", "real", "vector", "row_vector", "matrix")))
+        if (!(t$base %in% c("int", "real", "vector", "row_vector", "matrix", names(cx_to_real))))
           stop_semantic(sprintf("unary %s is not defined for %s", e$op, ty_str(t)), e$loc)
         e$type <- t
       }
@@ -442,9 +445,11 @@ sem_expr <- function(s, e, allow_void = FALSE) {
     transpose = {
       a <- sem_expr(s, e$a)
       t <- a$type
-      if (t$nd > 0L || !(t$base %in% c("vector", "row_vector", "matrix")))
+      if (t$nd > 0L || !(t$base %in% c("vector", "row_vector", "matrix", "complex_vector", "complex_row_vector", "complex_matrix")))
         stop_semantic(sprintf("transpose is not defined for %s", ty_str(t)), e$loc)
-      e$type <- switch(t$base, vector = T_rvec, row_vector = T_vec, matrix = T_mat)
+      e$type <- ty(switch(t$base, vector = "row_vector", row_vector = "vector", matrix = "matrix",
+                          complex_vector = "complex_row_vector", complex_row_vector = "complex_vector",
+                          complex_matrix = "complex_matrix"))
       e$a <- a
       e$data_only <- a$data_only
       e
@@ -468,12 +473,18 @@ sem_expr <- function(s, e, allow_void = FALSE) {
     rowvec_expr = {
       items <- lapply(e$items, function(x) sem_expr(s, x))
       ts <- lapply(items, `[[`, "type")
+      is_cxs <- function(t) t$nd == 0L && t$base == "complex"
+      is_rv <- function(t) t$nd == 0L && t$base %in% c("row_vector", "complex_row_vector")
       if (length(items) == 0L) {
         e$type <- T_rvec
       } else if (all(vapply(ts, is_scalar_ty, TRUE))) {
         e$type <- T_rvec
+      } else if (all(vapply(ts, function(t) is_scalar_ty(t) || is_cxs(t), TRUE))) {
+        e$type <- ty("complex_row_vector")
       } else if (all(vapply(ts, function(t) ty_eq(t, T_rvec), TRUE))) {
         e$type <- T_mat
+      } else if (all(vapply(ts, is_rv, TRUE))) {
+        e$type <- ty("complex_matrix")
       } else {
         stop_semantic("row vector expressions need all real or all row_vector elements", e$loc)
       }
@@ -528,6 +539,8 @@ sem_index <- function(s, e) {
   res_nd <- sum(ka == "multi") + max(0L, nd - length(kinds))
   ke <- if (length(kinds) > nd) kinds[(nd + 1L):length(kinds)] else character(0)
   base <- t$base
+  cx <- is_cx_base(base)
+  if (cx) base <- cx_to_real[[base]]
   res_base <- switch(base,
     int = "int", real = "real",
     vector = , row_vector = if (length(ke) >= 1L && ke[1L] == "single") "real" else base,
@@ -539,6 +552,7 @@ sem_index <- function(s, e) {
       else if (kc == "single") "vector"
       else "matrix"
     })
+  if (cx) res_base <- real_to_cx[[res_base]]
   e$x <- x
   e$idx <- idx
   e$kinds <- kinds
@@ -549,6 +563,25 @@ sem_index <- function(s, e) {
 
 # operator typing
 binop_type <- function(op, a, b) {
+  if (is_cx_ty(a) || is_cx_ty(b)) return(binop_type_cx(op, a, b))
+  binop_type_real(op, a, b)
+}
+
+# complex operands: the real typing rules on the real parts, then complex
+binop_type_cx <- function(op, a, b) {
+  ok <- function(t) t$nd == 0L && t$base %in% c("int", "real", "vector", "row_vector", "matrix", names(cx_to_real))
+  if (!ok(a) || !ok(b)) return(NULL)
+  ra <- ty_realpart(a)
+  rb <- ty_realpart(b)
+  if (op %in% c("==", "!=")) return(if (ra$base %in% c("int", "real") && rb$base %in% c("int", "real")) T_int else NULL)
+  if (!(op %in% c("+", "-", "*", "/", ".*", "./", "^", ".^"))) return(NULL)
+  if (ra$base == "int") ra <- T_real
+  if (rb$base == "int") rb <- T_real
+  rt <- binop_type_real(op, ra, rb)
+  if (is.null(rt)) NULL else ty_cx(rt)
+}
+
+binop_type_real <- function(op, a, b) {
   sc <- function(t) is_scalar_ty(t)
   arith_base <- c("vector", "row_vector", "matrix")
   isC <- function(t) t$nd == 0L && t$base %in% arith_base
@@ -641,6 +674,8 @@ resolve_call <- function(s, name, types, quiet = FALSE, loc = NULL) {
       }
     }
   }
+  # container functions of complex values reuse their real versions
+  if (any(vapply(types, is_cx_ty, TRUE))) return(resolve_cx_lift(s, name, types))
   NULL
 }
 
@@ -788,10 +823,8 @@ unsupported_functions <- c(
   "integrate_1d_double_exponential", "integrate_1d_double_exponential_tol",
   "map_rect", "reduce_sum", "reduce_sum_static", "laplace_marginal", "laplace_marginal_tol", "laplace_latent_rng",
   "laplace_latent_tol_rng", "laplace_latent_solve", "laplace_latent_solve_tol",
-  "complex_schur_decompose", "fft", "inv_fft", "fft2", "inv_fft2", "eigendecompose",
-  "eigendecompose_sym", "svd", "csr_extract",
-  "get_real", "get_imag", "to_complex",
+  "complex_schur_decompose", "eigendecompose", "eigendecompose_sym", "svd", "csr_extract",
   "wiener_lpdf", "wiener_lcdf_defective", "wiener_lccdf_defective",
-  "norm")
+  NULL)
 unsupported_distributions <- c("wiener", "gaussian_dlm_obs", "multi_gp", "multi_gp_cholesky",
                                "multi_student_t_cholesky_dummy", "beta_neg_binomial")

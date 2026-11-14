@@ -70,6 +70,7 @@ Collate:
     'library_linalg.R'
     'library_dist.R'
     'library_transforms.R'
+    'library_complex.R'
     'semantic.R'
     'runtime.R'
     'codegen.R'

@@ -405,7 +405,8 @@ lp_lognormal <- function(y, mu, sigma, propto) {
   ly <- log(vy)
   z <- (ly - vm) / vs
   lp <- 0
-  if (!propto) lp <- lp - N * 0.9189385332046727
+  # Stan Math keeps the constant whenever any argument is a parameter
+  if (!propto || inc(propto, y, mu, sigma)) lp <- lp - N * 0.9189385332046727
   if (inc(propto, sigma)) lp <- lp - rep1(log(vs))
   if (inc(propto, y)) lp <- lp - rep1(ly)
   if (inc(propto, y, mu, sigma)) lp <- lp - 0.5 * rep1(z * z)

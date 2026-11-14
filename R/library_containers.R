@@ -151,6 +151,12 @@ def("dims", "any", "int[]", function(x) {
 # through dims_typed so these cases are exact.
 dims_typed <- function(x, base, nd) {
   sh <- as.integer(shape_of(x))
+  if (is_cx_base(base)) {
+    # drop the trailing real/imaginary dimension
+    if (base == "complex" && nd == 0L) return(integer(0))
+    sh <- sh[-length(sh)]
+    base <- cx_to_real[[base]]
+  }
   if (base %in% c("int", "real") && nd == 0L) return(integer(0))
   if (base == "vector") return(c(sh[seq_len(nd)], if (nd) sh[nd + 1L] else sh[1L], 1L))
   if (base == "row_vector") return(c(sh[seq_len(nd)], 1L, if (nd) sh[nd + 1L] else sh[1L]))

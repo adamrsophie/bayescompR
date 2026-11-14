@@ -211,14 +211,32 @@ Stan.
 
 The following Stan features raise `bayescomp_unsupported_error`:
 
-* complex numbers and tuples;
+* tuples and the functions that return them (`eigendecompose`, `svd`,
+  `complex_schur_decompose`, `csr_extract`);
 * ODE, DAE and algebraic solvers, 1D integrators;
 * `map_rect`, `reduce_sum` and `reduce_sum_static`;
-* HMM functions and the embedded Laplace approximation functions;
-* sparse CSR functions, FFT, SVD and non symmetric eigendecomposition;
-* the `wiener`, `gaussian_dlm_obs`, `multi_gp`, `multi_gp_cholesky` and
-  `beta_neg_binomial` distributions.
+* the embedded Laplace approximation functions;
+* the `wiener` distribution.
 
 ```{r, error = TRUE}
-bayescomp_check("parameters { complex z; } model { }")
+bayescomp_check("transformed data { tuple(real, int) t = (1.5, 2); }")
+```
+
+## Complex numbers
+
+Complex scalars, vectors, row vectors and matrices work in every block
+except `parameters`, with derivatives through all complex operations.
+Generated complex values come back as R complex numbers from
+`bayescomp_constrain()`, and as real and imaginary columns named in
+cmdstanr's style (`z[real]`, `z[imag]`, `v[1,real]`, ...) in draws.
+Eigenvectors, singular vectors and Schur factors are unique only up to a
+phase per column, so they can differ from CmdStan by such a factor.
+
+```{r}
+m <- bayescomp_model("
+transformed data {
+  complex_vector[4] f = fft([1, 2, 3, 4]');
+  print(f, \" \", abs(f));
+}
+parameters { real y; } model { y ~ normal(0, 1); }")
 ```

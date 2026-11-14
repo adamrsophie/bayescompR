@@ -50,6 +50,8 @@ pat_ok <- function(p, t) {
     intany = t$base == "int",
     vecarr = t$base == "vector" && t$nd <= 1L,
     string = t$base == "string",
+    cxall = is_cx_base(t$base),
+    cxnum = t$base %in% numeric_bases || is_cx_base(t$base),
     ty_assignable(parse_ty_string(p), t))
 }
 
