@@ -190,7 +190,9 @@ lbfgs_inv_hessian <- function(alpha, S, Y) {
   0.5 * (H + t(H))
 }
 
-pathfinder_path <- function(lpg, u0, history, max_iter, num_elbo_draws, num_draws, tol_rel_obj, tol_grad) {
+pathfinder_path <- function(lpg, u0, ctl) {
+  history <- ctl$history_size; num_elbo_draws <- ctl$num_elbo_draws; num_draws <- ctl$num_draws
+  eps <- .Machine$double.eps
   n <- length(u0)
   lv <- attr(lpg, "value") %||% function(q) lpg(q)$value
   x <- u0
@@ -199,6 +201,7 @@ pathfinder_path <- function(lpg, u0, history, max_iter, num_elbo_draws, num_draw
   S <- matrix(0, n, 0L); Y <- matrix(0, n, 0L)
   alpha <- rep(1, n)
   best <- list(elbo = -Inf)
+  trace <- numeric(0)
   evaluate <- function(x, g, alpha, S, Y) {
     a <- tryCatch(lbfgs_normal(x, g, alpha, S, Y), error = function(e) NULL)
     if (is.null(a)) return(NULL)
@@ -209,10 +212,10 @@ pathfinder_path <- function(lpg, u0, history, max_iter, num_elbo_draws, num_draw
     e <- mean(ifelse(is.finite(lp), lp, -Inf) - lq)
     list(elbo = if (is.nan(e)) -Inf else e, mu = a$mu, approx = a)
   }
-  for (it in seq_len(max_iter)) {
+  for (it in seq_len(ctl$max_iter)) {
     # L-BFGS direction on -log p
     d <- -lbfgs_two_loop(-r$grad, alpha, S, Y)
-    step <- 1
+    step <- if (it == 1L) ctl$init_alpha else 1
     f0 <- r$value
     gd <- sum(r$grad * d)
     if (!(gd > 0)) { d <- r$grad; gd <- sum(r$grad^2) }
@@ -235,20 +238,26 @@ pathfinder_path <- function(lpg, u0, history, max_iter, num_elbo_draws, num_draw
       if (ncol(S) > history) { S <- S[, -1L, drop = FALSE]; Y <- Y[, -1L, drop = FALSE] }
     }
     x <- xn
-    rel <- abs(rn$value - f0) / max(abs(rn$value), abs(f0), 1)
+    df <- abs(rn$value - f0)
+    rel <- df / max(abs(rn$value), abs(f0), 1)
+    rel_grad <- abs(sum(rn$grad * lbfgs_two_loop(rn$grad, alpha, S, Y))) / max(abs(rn$value), 1)
     r <- rn
     if (ncol(S) > 0L) {
       ev <- evaluate(x, r$grad, alpha, S, Y)
-      if (!is.null(ev) && ev$elbo > best$elbo) best <- ev
+      if (!is.null(ev)) {
+        trace <- c(trace, ev$elbo)
+        if (ev$elbo > best$elbo) best <- ev
+      }
     }
-    if (rel < tol_rel_obj || sqrt(sum(r$grad^2)) < tol_grad) break
+    if (df < ctl$tol_obj || rel < ctl$tol_rel_obj * eps || sqrt(sum(r$grad^2)) < ctl$tol_grad ||
+        rel_grad < ctl$tol_rel_grad * eps || sqrt(sum(s^2)) < ctl$tol_param) break
   }
   if (!is.finite(best$elbo)) stop("Pathfinder: no usable normal approximation was found along the optimization path", call. = FALSE)
   z <- matrix(stats::rnorm(num_draws * n), num_draws, n)
   th <- best$approx$draw(z)
   lq <- -0.5 * rowSums(z^2) - 0.5 * n * log(2 * pi) - best$approx$logdet
-  lp <- apply(th, 1L, lv)
-  list(q = th, log_p = lp, log_q = lq, elbo = best$elbo, mu = best$mu, approx = best$approx)
+  lp <- if (isTRUE(ctl$calculate_lp)) apply(th, 1L, lv) else rep(NaN, num_draws)
+  list(q = th, log_p = lp, log_q = lq, elbo = best$elbo, mu = best$mu, approx = best$approx, trace = trace)
 }
 
 lbfgs_two_loop <- function(g, alpha, S, Y) {
@@ -306,63 +315,111 @@ gpd_quantile <- function(p, k, sigma) sigma * expm1(-k * log1p(-p)) / k
 #' Runs `num_paths` L-BFGS optimization paths, forms a normal approximation
 #' from the L-BFGS inverse Hessian estimate at every iterate, keeps the one
 #' with the largest ELBO on each path, and combines the paths by Pareto
-#' smoothed importance resampling.
+#' smoothed importance resampling, as CmdStan's `pathfinder` method does.
 #'
 #' @param model A `bayescomp_model`.
 #' @param num_paths Number of paths.
-#' @param num_draws Number of draws returned.
+#' @param num_draws Number of draws from each path's approximation.
+#' @param num_psis_draws Number of draws returned after importance
+#'   resampling.
 #' @param history_size L-BFGS history size.
 #' @param max_lbfgs_iters Maximum L-BFGS iterations per path.
 #' @param num_elbo_draws Draws per ELBO estimate.
-#' @param psis_resample Resample `num_draws` draws with Pareto smoothed
-#'   importance weights. With `FALSE`, all `num_paths * num_draws` draws of
-#'   the paths are returned, as in Stan.
-#' @param tol_rel_obj,tol_grad L-BFGS convergence tolerances.
+#' @param psis_resample Resample `num_psis_draws` draws with Pareto
+#'   smoothed importance weights. With `FALSE`, all `num_paths * num_draws`
+#'   draws of the paths are returned, as in Stan; so they are with one path.
+#' @param calculate_lp Evaluate the log density of the returned draws. With
+#'   `FALSE`, `log_p__` is `NaN` and no resampling is done, as in Stan.
+#' @param save_single_paths Keep each path's draws (element `single_paths`,
+#'   a list of fits, which [bayescomp_write_csv()] writes as
+#'   `<file>_path_<i>.csv`) and ELBO trajectory.
+#' @param init_alpha First line search step size.
+#' @param tol_obj,tol_rel_obj,tol_grad,tol_rel_grad,tol_param L-BFGS
+#'   convergence tolerances, as in [bayescomp_optimize()] (the relative
+#'   tolerances are multiples of the machine epsilon).
 #' @param init,seed As in [bayescomp_sample()].
 #' @param cores Paths to run in parallel; defaults to `getOption("mc.cores", 1L)`.
 #' @return A `bayescomp_fit` with method `"pathfinder"`, extra columns
-#'   `log_p__` and `log_q__`, and element `pareto_k`.
+#'   `log_p__` and `log_q__`, and elements `pareto_k`, `elbo` (the best ELBO
+#'   of each path) and `path` (the path of each draw).
 #' @export
-bayescomp_pathfinder <- function(model, num_paths = 4L, num_draws = 1000L, history_size = 5L,
-                                 max_lbfgs_iters = 1000L, num_elbo_draws = 25L, psis_resample = TRUE,
-                                 tol_rel_obj = 1e-12, tol_grad = 1e-8, init = 2, seed = NULL, cores = getOption("mc.cores", 1L)) {
+bayescomp_pathfinder <- function(model, num_paths = 4L, num_draws = 1000L, num_psis_draws = 1000L, history_size = 5L,
+                                 max_lbfgs_iters = 1000L, num_elbo_draws = 25L, psis_resample = TRUE, calculate_lp = TRUE,
+                                 save_single_paths = FALSE, init_alpha = 1e-3, tol_obj = 1e-12, tol_rel_obj = 1e4,
+                                 tol_grad = 1e-8, tol_rel_grad = 1e7, tol_param = 1e-8,
+                                 init = 2, seed = NULL, cores = getOption("mc.cores", 1L)) {
   check_model(model)
   if (model$dim == 0L) stop("the model has no parameters", call. = FALSE)
+  num_paths <- as_count(num_paths, "num_paths", 1L)
+  ctl <- pathfinder_control(history_size = as_count(history_size, "history_size", 1L),
+                            max_iter = as_count(max_lbfgs_iters, "max_lbfgs_iters", 1L),
+                            num_elbo_draws = as_count(num_elbo_draws, "num_elbo_draws", 1L),
+                            num_draws = as_count(num_draws, "num_draws", 1L), calculate_lp = isTRUE(calculate_lp),
+                            init_alpha = init_alpha, tol_obj = tol_obj, tol_rel_obj = tol_rel_obj, tol_grad = tol_grad,
+                            tol_rel_grad = tol_rel_grad, tol_param = tol_param)
+  num_psis_draws <- as_count(num_psis_draws, "num_psis_draws", 1L)
   t0 <- proc.time()[["elapsed"]]
   paths <- run_chains(model, num_paths, seed, cores, function(id) {
     lpg <- safe_lp(model, jacobian = TRUE)
-    pathfinder_path(lpg, find_init(model, init, id), history_size, max_lbfgs_iters,
-                    num_elbo_draws, num_draws, tol_rel_obj, tol_grad)
+    pathfinder_path(lpg, find_init(model, init, id), ctl)
   })
   q <- do.call(rbind, lapply(paths, `[[`, "q"))
   lp <- unlist(lapply(paths, `[[`, "log_p"))
   lq <- unlist(lapply(paths, `[[`, "log_q"))
+  pid <- rep(seq_len(num_paths), vapply(paths, function(p) nrow(p$q), 0L))
+  resample <- isTRUE(psis_resample) && ctl$calculate_lp && num_paths > 1L
   k <- NA_real_
+  pick <- NULL
   res <- run_chains(model, 1L, if (is.null(seed)) NULL else seed + 1L, 1L, function(id) {
     sel <- seq_len(nrow(q))
-    if (psis_resample) {
+    if (resample) {
       lw <- ifelse(is.finite(lp), lp - lq, -Inf)
       ps <- psis_smooth(lw)
       k <<- ps$k
       w <- exp(ps$lw - max(ps$lw))
-      sel <- sample.int(nrow(q), num_draws, replace = TRUE, prob = w)
+      sel <- sample.int(nrow(q), num_psis_draws, replace = TRUE, prob = w)
     }
-    # without resampling every path's draws are returned, as in Stan
-    qs <- q[sel, , drop = FALSE]
-    gq <- chain_write_draws(model, qs, FALSE)
-    dg <- matrix(0, length(sel), 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
-    list(q = qs, gq = cbind(log_p__ = lp[sel], log_q__ = lq[sel], gq), diag = dg, step_size = NA_real_,
-         inv_metric = NULL, n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0))
+    pick <<- sel
+    pathfinder_result(model, q[sel, , drop = FALSE], lp[sel], lq[sel])
   })
-  fit <- make_fit_extra(model, res, list(num_paths = num_paths), "pathfinder", seed, proc.time()[["elapsed"]] - t0)
+  fit <- make_fit_extra(model, res, list(num_paths = num_paths, num_draws = ctl$num_draws, num_psis_draws = num_psis_draws,
+                                         psis_resample = resample, calculate_lp = ctl$calculate_lp, history_size = ctl$history_size,
+                                         init_alpha = init_alpha, tol_obj = tol_obj, tol_rel_obj = tol_rel_obj, tol_grad = tol_grad,
+                                         tol_rel_grad = tol_rel_grad, tol_param = tol_param, max_lbfgs_iters = ctl$max_iter),
+                        "pathfinder", seed, proc.time()[["elapsed"]] - t0)
   fit$pareto_k <- k
   fit$elbo <- vapply(paths, `[[`, 0, "elbo")
+  fit$path <- pid[pick]
+  if (isTRUE(save_single_paths)) {
+    fit$single_paths <- lapply(seq_along(paths), function(i) {
+      p <- paths[[i]]
+      r <- run_chains(model, 1L, NULL, 1L, function(id) pathfinder_result(model, p$q, p$log_p, p$log_q))
+      f <- make_fit_extra(model, r, fit$config, "pathfinder", seed, NA_real_)
+      f$path <- rep(i, nrow(p$q))
+      f$elbo_trace <- p$trace
+      f
+    })
+  }
   if (is.finite(k) && k > 0.7) warning(sprintf("Pareto k = %.2f: the importance weights are unreliable", k), call. = FALSE)
   fit
 }
 
+pathfinder_result <- function(model, qs, lp, lq) {
+  gq <- chain_write_draws(model, qs, FALSE)
+  dg <- matrix(0, nrow(qs), 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
+  list(q = qs, gq = cbind(log_p__ = lp, log_q__ = lq, gq), diag = dg, step_size = NA_real_,
+       inv_metric = NULL, n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0))
+}
+
+pathfinder_control <- function(...) {
+  utils::modifyList(list(history_size = 5L, max_iter = 1000L, num_elbo_draws = 25L, num_draws = 1L, calculate_lp = TRUE,
+                         init_alpha = 1e-3, tol_obj = 1e-12, tol_rel_obj = 1e4, tol_grad = 1e-8, tol_rel_grad = 1e7,
+                         tol_param = 1e-8), list(...))
+}
+
 # the best normal approximation along one Pathfinder path
-pathfinder_best_normal <- function(lpg, u0, history, max_iter, num_elbo_draws, tol_rel_obj, tol_grad) {
-  r <- pathfinder_path(lpg, u0, history, max_iter, num_elbo_draws, 1L, tol_rel_obj, tol_grad)
+pathfinder_best_normal <- function(lpg, u0, ctl = pathfinder_control()) {
+  r <- pathfinder_path(lpg, u0, ctl)
   list(mu = r$mu, L = t(chol(lbfgs_normal_cov(r$approx))))
 }
+

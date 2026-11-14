@@ -17,6 +17,22 @@ First release.
   uses the compact L-BFGS form, and `bayescomp_log_prob()` skips the
   gradient.
 * `rstantools::log_lik()` and `rstantools::posterior_predict()` methods.
+* Data, initial values and metrics from CmdStan JSON and R dump files
+  (`bayescomp_read_data()`, `bayescomp_write_data()`; any `data` or `init`
+  argument also takes a file name).
+* Stan CSV output and input for every method (`bayescomp_write_csv()`,
+  `bayescomp_read_csv()`), readable by CmdStan's `stansummary` and by
+  cmdstanr, including the diagnostic file (`save_diagnostics = TRUE`), the
+  adapted metric (`save_metric = TRUE`) and single Pathfinder paths.
+* `bayescomp_check_gradients()`, the gradient test of CmdStan's `diagnose`
+  method. `bayescomp_log_prob()` and `bayescomp_grad_log_prob()` take
+  constrained values, files and matrices of points.
+* Pathfinder takes all of CmdStan's arguments (`num_psis_draws`,
+  `calculate_lp`, `save_single_paths`, `init_alpha` and the L-BFGS
+  tolerances) and records the path of each draw; Laplace takes its mode from
+  a file and has `calculate_lp`.
+* Library calls are checked against the signatures of stanc 2.40, so calls
+  stanc rejects (such as `sum()` of a two dimensional array) are rejected.
 * Exact gradients of `svd_U()`, `svd_V()`, `qr_Q()` and `qr_R()` of tall
   matrices, and of `student_t_qf()` in the degrees of freedom.
 * Embedded Laplace approximation (`laplace_marginal` and related

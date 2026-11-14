@@ -1,0 +1,62 @@
+# stan_version_major = 2
+# stan_version_minor = 40
+# stan_version_patch = 0
+# model = csvm_model
+# start_datetime = 2026-11-14 19:28:34 UTC
+# method = sample (Default)
+#   sample
+#     num_samples = 2
+#     num_warmup = 3
+#     save_warmup = true
+#     thin = 1 (Default)
+#     adapt
+#       engaged = true (Default)
+#       gamma = 0.05 (Default)
+#       delta = 0.8 (Default)
+#       kappa = 0.75 (Default)
+#       t0 = 10 (Default)
+#       init_buffer = 75 (Default)
+#       term_buffer = 50 (Default)
+#       window = 25 (Default)
+#       save_metric = false (Default)
+#     algorithm = hmc (Default)
+#       hmc
+#         engine = nuts (Default)
+#           nuts
+#             max_depth = 10 (Default)
+#         metric = diag_e (Default)
+#         metric_file =  (Default)
+#         stepsize = 1 (Default)
+#         stepsize_jitter = 0 (Default)
+#     num_chains = 1 (Default)
+# id = 1 (Default)
+# data
+#   file =  (Default)
+# init = 2 (Default)
+# random
+#   seed = 3683152046 (Default)
+# output
+#   file = csvm.csv
+#   diagnostic_file =  (Default)
+#   refresh = 0
+#   sig_figs = 8 (Default)
+#   profile_file = profile.csv (Default)
+#   save_cmdstan_config = false (Default)
+# num_threads = 1 (Default)
+# stanc_version = stanc3 v2.40.0
+# stancflags = 
+lp__,accept_stat__,stepsize__,treedepth__,n_leapfrog__,divergent__,energy__,mu,s.1,s.2,A.1.1,A.2.1,A.1.2,A.2.2,k.1,k.2
+-8.9775429,2.1264419e-07,2,1,1,0,15.818622,-0.99331232,0.20333967,0.15140727,0.75354387,1.6610695,1.8017242,-0.7864432,1,2
+-8.9775429,1.9398142e-13,2.3350657,1,1,0,13.019548,-0.99331232,0.20333967,0.15140727,0.75354387,1.6610695,1.8017242,-0.7864432,1,2
+-5.2545651,0.99839746,0.23023596,4,15,0,11.8472,-0.49365225,0.38830749,0.3543009,-0.28594922,1.9830295,0.47089772,-0.61830269,1,2
+# Adaptation terminated
+# Step size = 0.396327
+# Diagonal elements of inverse mass matrix:
+# 1, 1, 1, 1, 1, 1, 1
+-5.1852545,1,0.39632703,4,15,0,7.4589113,-0.33835255,0.4226737,0.36075931,-0.0067018147,1.8195314,0.43714517,-1.1390255,1,2
+-5.4738637,0.98493816,0.39632703,4,15,0,9.023706,-0.99824071,4.608055,0.77509752,-1.354709,-0.35642127,1.3231707,0.40415205,1,2
+# 
+#  Elapsed Time: 0 seconds (Warm-up)
+#                0 seconds (Sampling)
+#                0 seconds (Total)
+# 

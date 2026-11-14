@@ -29,7 +29,9 @@
 #'   unconstrained space, default 2), `0`, a named list of constrained values,
 #'   a list of such lists (one per chain), a function returning a list, or a
 #'   `bayescomp_fit` (for example from [bayescomp_pathfinder()]) whose draws
-#'   are used as starting points.
+#'   are used as starting points, or the names of JSON or R dump files (one
+#'   per chain, recycled). Parameters missing from a list or file are
+#'   initialized at random.
 #' @param algorithm `"nuts"`, `"hmc"` (static integration time), `"mala"`,
 #'   `"metropolis"`, `"slice"`, `"elliptical_slice"` (generalized
 #'   elliptical slice sampling around a Gaussian whose mean and covariance
@@ -38,7 +40,12 @@
 #'   fixed_param sampler).
 #' @param metric `"diag_e"`, `"dense_e"` or `"unit_e"` (identity metric,
 #'   never adapted).
-#' @param inv_metric Optional initial inverse metric (vector or matrix).
+#' @param inv_metric Optional initial inverse metric (vector or matrix), or
+#'   the name of a JSON or R dump file with element `inv_metric` (CmdStan's
+#'   `metric_file`, as written by `bayescomp_write_csv(save_metric = TRUE)`).
+#' @param save_diagnostics Keep the unconstrained values, momenta and
+#'   potential gradients of each saved draw (CmdStan's `diagnostic_file`) in
+#'   element `diagnostics` of the fit; [bayescomp_write_csv()] writes them.
 #' @param step_size Initial step size: leapfrog step for HMC, proposal scale
 #'   for Metropolis and MALA, bracket width in metric units for slice
 #'   sampling. `NULL` selects a default for the algorithm.
@@ -82,7 +89,8 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
                              int_time = 2 * pi, step_size_jitter = 0, adapt_engaged = TRUE, adapt_metric = TRUE, adapt_gamma = 0.05,
                              adapt_kappa = 0.75, adapt_t0 = 10, adapt_init_buffer = 75L,
                              adapt_term_buffer = 50L, adapt_window = 25L, thin = 1L,
-                             save_warmup = FALSE, refresh = 200L, cores = getOption("mc.cores", 1L), show_print = TRUE) {
+                             save_warmup = FALSE, refresh = 200L, cores = getOption("mc.cores", 1L), show_print = TRUE,
+                             save_diagnostics = FALSE) {
   check_model(model)
   algorithm <- match.arg(algorithm)
   metric <- match.arg(metric)
@@ -105,6 +113,13 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
                         metropolis = if (block) 2.38 / sqrt(max(1, n)) else 2.4)
   }
   if (!(is.numeric(step_size) && length(step_size) == 1L && step_size > 0)) stop("'step_size' must be positive", call. = FALSE)
+  if (is.character(inv_metric)) {
+    # CmdStan's metric_file: a JSON or R dump file with element inv_metric
+    im <- bayescomp_read_data(inv_metric)$inv_metric
+    if (is.null(im)) stop("the metric file has no 'inv_metric' element", call. = FALSE)
+    if (is.list(im)) im <- simplify_data_list(im)
+    inv_metric <- if (metric == "dense_e") as.matrix(im) else as.numeric(im)
+  }
   if (!is.null(inv_metric)) {
     ok <- if (metric == "diag_e") is.numeric(inv_metric) && length(inv_metric) == n && all(is.finite(inv_metric)) && all(inv_metric > 0)
           else is.matrix(inv_metric) && all(dim(inv_metric) == n) && all(is.finite(inv_metric)) &&
@@ -117,7 +132,8 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
               adapt_gamma = adapt_gamma, adapt_kappa = adapt_kappa, adapt_t0 = adapt_t0,
               adapt_init_buffer = as.integer(adapt_init_buffer), adapt_term_buffer = as.integer(adapt_term_buffer),
               adapt_window = as.integer(adapt_window), iter_warmup = iter_warmup, iter_sampling = iter_sampling,
-              thin = thin, save_warmup = save_warmup, refresh = as.integer(refresh), print = show_print)
+              thin = thin, save_warmup = save_warmup, refresh = as.integer(refresh), print = show_print,
+              diagnostic = isTRUE(save_diagnostics))
   t0 <- proc.time()[["elapsed"]]
   res <- run_chains(model, chains, seed, cores, function(id) {
     q0 <- find_init(model, init, id, gradient = !(algorithm %in% c("metropolis", "slice", "elliptical_slice", "fixed_param")))
@@ -281,6 +297,7 @@ find_init <- function(model, init, chain_id, gradient = TRUE) {
     stop(sprintf("chain %d: no draw of the initialization fit has a finite log density", chain_id), call. = FALSE)
   }
   user <- init
+  if (is.character(user)) user <- bayescomp_read_data(user[[(chain_id - 1L) %% length(user) + 1L]])
   if (is.function(user)) user <- user()
   if (is.list(user) && length(user) && is.list(user[[1L]]) && is.null(names(user))) user <- user[[chain_id]]
   radius <- 2

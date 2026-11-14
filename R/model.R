@@ -55,7 +55,8 @@ expand_includes <- function(lines, paths, seen) {
 #'
 #' @param code Stan program as a character string.
 #' @param data Named list of data, one element per variable in the `data`
-#'   block. Arrays use R arrays with the array dimensions first, so
+#'   block, or the name of a CmdStan JSON or R dump file (see
+#'   [bayescomp_read_data()]). Arrays use R arrays with the array dimensions first, so
 #'   `array[N] vector[K] y` is an `N` by `K` matrix.
 #' @param file Path to a `.stan` file, used when `code` is `NULL`.
 #' @param include_paths Directories searched for `#include` files, as in
@@ -97,7 +98,8 @@ bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL
     stop("'functions' must be a named list of R functions", call. = FALSE)
   ir <- stan_check(stan_parse(src), external = names(functions))
   if (is.null(data)) data <- list()
-  if (!is.list(data)) stop("'data' must be a named list", call. = FALSE)
+  data <- data_arg(data)
+  if (!is.list(data)) stop("'data' must be a named list or the name of a JSON or R dump file", call. = FALSE)
   be <- backend_get(backend)
   m <- compile_r(ir)
   m$external_impl <- functions
@@ -417,23 +419,43 @@ lp_grad <- function(model, upars, jacobian = TRUE, propto = TRUE, print = TRUE) 
 #' Log density of a model
 #'
 #' @param model A `bayescomp_model`.
-#' @param upars Numeric vector of unconstrained parameter values.
+#' @param upars Unconstrained parameter values: a numeric vector, or a
+#'   matrix with one row per point (as CmdStan's `log_prob` method with
+#'   `unconstrained_params`). Constrained values are accepted as a named list
+#'   or the name of a JSON or R dump file (CmdStan's `constrained_params`).
 #' @param jacobian Include the log absolute Jacobian determinant of the
 #'   constraining transforms.
 #' @param propto Drop constant terms of sampling statements (`~`) and
 #'   `_lupdf`/`_lupmf` calls, as the samplers do.
-#' @return The log density (a number). `bayescomp_grad_log_prob()` returns the
-#'   gradient with the log density in attribute `"log_prob"`.
+#' @return The log density (a number, or a vector for a matrix of points).
+#'   `bayescomp_grad_log_prob()` returns the gradient (a matrix with one row
+#'   per point for a matrix) with the log density in attribute `"log_prob"`.
 #' @export
 bayescomp_log_prob <- function(model, upars, jacobian = TRUE, propto = FALSE) {
-  model_lp(model, jacobian, propto, TRUE)(check_upars(model, upars))
+  f <- model_lp(model, jacobian, propto, TRUE)
+  upars <- as_upars(model, upars)
+  if (is.matrix(upars)) return(apply(upars, 1L, function(u) f(check_upars(model, u))))
+  f(check_upars(model, upars))
 }
 
 #' @rdname bayescomp_log_prob
 #' @export
 bayescomp_grad_log_prob <- function(model, upars, jacobian = TRUE, propto = FALSE) {
+  upars <- as_upars(model, upars)
+  if (is.matrix(upars)) {
+    r <- lapply(seq_len(nrow(upars)), function(i) lp_grad(model, check_upars(model, upars[i, ]), jacobian, propto))
+    g <- matrix(unlist(lapply(r, `[[`, "grad")), nrow(upars), model$dim, byrow = TRUE)
+    return(structure(g, log_prob = vapply(r, `[[`, 0, "value")))
+  }
   r <- lp_grad(model, check_upars(model, upars), jacobian, propto)
   structure(r$grad, log_prob = r$value)
+}
+
+# constrained values (a list or a file) to unconstrained ones
+as_upars <- function(model, upars) {
+  if (is.character(upars)) upars <- bayescomp_read_data(upars)
+  if (is.list(upars)) upars <- bayescomp_unconstrain(model, upars)
+  upars
 }
 
 #' Map between constrained and unconstrained parameters

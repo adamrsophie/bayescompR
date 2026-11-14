@@ -163,3 +163,38 @@ bayescomp_mcse_sd <- function(x) {
   ev <- mean(x2)
   sqrt(mean((x2 - ev)^2) / 4 / ev / ess)
 }
+
+#' Gradient test
+#'
+#' Compares the automatic differentiation gradient of the log density with
+#' central finite differences, as CmdStan's `diagnose` method
+#' (`test=gradient`) does.
+#'
+#' @param model A `bayescomp_model`.
+#' @param init Point to test: as for [bayescomp_sample()] (a radius, a list
+#'   of constrained values, a file name, ...).
+#' @param seed Seed for a random initial point.
+#' @param epsilon Finite difference step size.
+#' @param error Absolute difference above which an element fails.
+#' @param jacobian Include the Jacobian adjustment.
+#' @return A data frame with one row per unconstrained parameter: `param`
+#'   (index from 0, as CmdStan prints it), `value`, `model` (the gradient),
+#'   `finite_diff` and `error`, with attribute `"log_prob"` and attribute
+#'   `"passed"` (all errors within `error`).
+#' @examples
+#' m <- bayescomp_model("parameters { real<lower=0> s; } model { s ~ gamma(2, 1); }")
+#' bayescomp_check_gradients(m, init = list(s = 1.5))
+#' @export
+bayescomp_check_gradients <- function(model, init = 2, seed = NULL, epsilon = 1e-6, error = 1e-6, jacobian = TRUE) {
+  check_model(model)
+  if (!(epsilon > 0) || !(error > 0)) stop("'epsilon' and 'error' must be positive", call. = FALSE)
+  u <- with_seed(seed, find_init(model, init, 1L))
+  r <- lp_grad(model, u, jacobian, FALSE, print = FALSE)
+  lp <- function(x) bayescomp_log_prob(model, x, jacobian = jacobian)
+  fd <- vapply(seq_along(u), function(i) {
+    e <- replace(numeric(length(u)), i, epsilon)
+    (lp(u + e) - lp(u - e)) / (2 * epsilon)
+  }, 0)
+  out <- data.frame(param = seq_along(u) - 1L, value = u, model = r$grad, finite_diff = fd, error = r$grad - fd)
+  structure(out, log_prob = r$value, passed = all(abs(out$error) <= error))
+}

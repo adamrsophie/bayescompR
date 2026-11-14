@@ -259,7 +259,7 @@ gaussian_reference <- function(model, reference, scale) {
   if (reference == "pathfinder") {
     pf <- tryCatch({
       lpg <- safe_lp(model, jacobian = TRUE)
-      pathfinder_best_normal(lpg, find_init(model, 2, 1L), 5L, 1000L, 25L, 1e-12, 1e-8)
+      pathfinder_best_normal(lpg, find_init(model, 2, 1L))
     }, error = function(e) NULL)
     if (!is.null(pf)) { mu <- pf$mu; L <- scale * pf$L }
   }

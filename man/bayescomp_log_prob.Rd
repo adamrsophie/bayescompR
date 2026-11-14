@@ -12,7 +12,10 @@ bayescomp_grad_log_prob(model, upars, jacobian = TRUE, propto = FALSE)
 \arguments{
 \item{model}{A \code{bayescomp_model}.}
 
-\item{upars}{Numeric vector of unconstrained parameter values.}
+\item{upars}{Unconstrained parameter values: a numeric vector, or a
+matrix with one row per point (as CmdStan's \code{log_prob} method with
+\code{unconstrained_params}). Constrained values are accepted as a named list
+or the name of a JSON or R dump file (CmdStan's \code{constrained_params}).}
 
 \item{jacobian}{Include the log absolute Jacobian determinant of the
 constraining transforms.}
@@ -21,8 +24,9 @@ constraining transforms.}
 \verb{_lupdf}/\verb{_lupmf} calls, as the samplers do.}
 }
 \value{
-The log density (a number). \code{bayescomp_grad_log_prob()} returns the
-gradient with the log density in attribute \code{"log_prob"}.
+The log density (a number, or a vector for a matrix of points).
+\code{bayescomp_grad_log_prob()} returns the gradient (a matrix with one row
+per point for a matrix) with the log density in attribute \code{"log_prob"}.
 }
 \description{
 Log density of a model

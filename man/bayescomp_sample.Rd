@@ -33,7 +33,8 @@ bayescomp_sample(
   save_warmup = FALSE,
   refresh = 200L,
   cores = getOption("mc.cores", 1L),
-  show_print = TRUE
+  show_print = TRUE,
+  save_diagnostics = FALSE
 )
 }
 \arguments{
@@ -53,7 +54,9 @@ differ) and recorded in the fit's \code{seed} element.}
 unconstrained space, default 2), \code{0}, a named list of constrained values,
 a list of such lists (one per chain), a function returning a list, or a
 \code{bayescomp_fit} (for example from \code{\link[=bayescomp_pathfinder]{bayescomp_pathfinder()}}) whose draws
-are used as starting points.}
+are used as starting points, or the names of JSON or R dump files (one
+per chain, recycled). Parameters missing from a list or file are
+initialized at random.}
 
 \item{algorithm}{\code{"nuts"}, \code{"hmc"} (static integration time), \code{"mala"},
 \code{"metropolis"}, \code{"slice"}, \code{"elliptical_slice"} (generalized
@@ -65,7 +68,9 @@ fixed_param sampler).}
 \item{metric}{\code{"diag_e"}, \code{"dense_e"} or \code{"unit_e"} (identity metric,
 never adapted).}
 
-\item{inv_metric}{Optional initial inverse metric (vector or matrix).}
+\item{inv_metric}{Optional initial inverse metric (vector or matrix), or
+the name of a JSON or R dump file with element \code{inv_metric} (CmdStan's
+\code{metric_file}, as written by \code{bayescomp_write_csv(save_metric = TRUE)}).}
 
 \item{step_size}{Initial step size: leapfrog step for HMC, proposal scale
 for Metropolis and MALA, bracket width in metric units for slice
@@ -108,6 +113,10 @@ whose workers load the installed package and print their progress
 when they finish.}
 
 \item{show_print}{Show output of Stan \code{print()} statements.}
+
+\item{save_diagnostics}{Keep the unconstrained values, momenta and
+potential gradients of each saved draw (CmdStan's \code{diagnostic_file}) in
+element \code{diagnostics} of the fit; \code{\link[=bayescomp_write_csv]{bayescomp_write_csv()}} writes them.}
 }
 \value{
 A \code{bayescomp_fit} object.

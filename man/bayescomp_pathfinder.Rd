@@ -8,12 +8,19 @@ bayescomp_pathfinder(
   model,
   num_paths = 4L,
   num_draws = 1000L,
+  num_psis_draws = 1000L,
   history_size = 5L,
   max_lbfgs_iters = 1000L,
   num_elbo_draws = 25L,
   psis_resample = TRUE,
-  tol_rel_obj = 1e-12,
+  calculate_lp = TRUE,
+  save_single_paths = FALSE,
+  init_alpha = 0.001,
+  tol_obj = 1e-12,
+  tol_rel_obj = 10000,
   tol_grad = 1e-08,
+  tol_rel_grad = 1e+07,
+  tol_param = 1e-08,
   init = 2,
   seed = NULL,
   cores = getOption("mc.cores", 1L)
@@ -24,7 +31,10 @@ bayescomp_pathfinder(
 
 \item{num_paths}{Number of paths.}
 
-\item{num_draws}{Number of draws returned.}
+\item{num_draws}{Number of draws from each path's approximation.}
+
+\item{num_psis_draws}{Number of draws returned after importance
+resampling.}
 
 \item{history_size}{L-BFGS history size.}
 
@@ -32,11 +42,22 @@ bayescomp_pathfinder(
 
 \item{num_elbo_draws}{Draws per ELBO estimate.}
 
-\item{psis_resample}{Resample \code{num_draws} draws with Pareto smoothed
-importance weights. With \code{FALSE}, all \code{num_paths * num_draws} draws of
-the paths are returned, as in Stan.}
+\item{psis_resample}{Resample \code{num_psis_draws} draws with Pareto
+smoothed importance weights. With \code{FALSE}, all \code{num_paths * num_draws}
+draws of the paths are returned, as in Stan; so they are with one path.}
 
-\item{tol_rel_obj, tol_grad}{L-BFGS convergence tolerances.}
+\item{calculate_lp}{Evaluate the log density of the returned draws. With
+\code{FALSE}, \code{log_p__} is \code{NaN} and no resampling is done, as in Stan.}
+
+\item{save_single_paths}{Keep each path's draws (element \code{single_paths},
+a list of fits, which \code{\link[=bayescomp_write_csv]{bayescomp_write_csv()}} writes as
+\verb{<file>_path_<i>.csv}) and ELBO trajectory.}
+
+\item{init_alpha}{First line search step size.}
+
+\item{tol_obj, tol_rel_obj, tol_grad, tol_rel_grad, tol_param}{L-BFGS
+convergence tolerances, as in \code{\link[=bayescomp_optimize]{bayescomp_optimize()}} (the relative
+tolerances are multiples of the machine epsilon).}
 
 \item{init, seed}{As in \code{\link[=bayescomp_sample]{bayescomp_sample()}}.}
 
@@ -44,11 +65,12 @@ the paths are returned, as in Stan.}
 }
 \value{
 A \code{bayescomp_fit} with method \code{"pathfinder"}, extra columns
-\code{log_p__} and \code{log_q__}, and element \code{pareto_k}.
+\code{log_p__} and \code{log_q__}, and elements \code{pareto_k}, \code{elbo} (the best ELBO
+of each path) and \code{path} (the path of each draw).
 }
 \description{
 Runs \code{num_paths} L-BFGS optimization paths, forms a normal approximation
 from the L-BFGS inverse Hessian estimate at every iterate, keeps the one
 with the largest ELBO on each path, and combines the paths by Pareto
-smoothed importance resampling.
+smoothed importance resampling, as CmdStan's \code{pathfinder} method does.
 }

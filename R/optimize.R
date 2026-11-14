@@ -83,6 +83,7 @@ bayescomp_optimize <- function(model, algorithm = c("lbfgs", "bfgs", "newton"), 
   fit$value <- res$value
   fit$code <- res$code
   fit$message <- res$message %||% ""
+  fit$return_code <- optim_return_code(fit$message)
   fit$iterations <- res$iterations
   if (res$code != 0L) warning(sprintf("optimization did not converge: %s", res$message %||% "see code"), call. = FALSE)
   fit
@@ -227,15 +228,21 @@ newton_opt <- function(lpg, u, iter) {
 #'
 #' @param model A `bayescomp_model`.
 #' @param mode Optional result of [bayescomp_optimize()] (with
-#'   `jacobian = TRUE`) or a named list of constrained values at the mode.
+#'   `jacobian = TRUE`), a named list of constrained values at the mode, or
+#'   the name of a file with the mode: a Stan CSV file from an optimization
+#'   (by CmdStan or [bayescomp_write_csv()]) or a JSON or R dump file.
 #' @param jacobian Use the Jacobian adjusted density (recommended).
 #' @param draws Number of draws.
 #' @param seed Random seed.
+#' @param calculate_lp Evaluate the log density of the draws (`log_p__`);
+#'   with `FALSE` it is `NaN`, as in CmdStan.
 #' @return A `bayescomp_fit` with extra columns `log_p__` and `log_g__`.
 #' @export
-bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L, seed = NULL) {
+bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L, seed = NULL, calculate_lp = TRUE) {
   check_model(model)
   draws <- as_count(draws, "draws", 1L)
+  if (is.character(mode))
+    mode <- if (grepl("\\.csv$", mode, ignore.case = TRUE)) bayescomp_read_csv(mode, model = model) else bayescomp_read_data(mode)
   t0 <- proc.time()[["elapsed"]]
   res <- run_chains(model, 1L, seed, 1L, function(id) {
     lpg <- safe_lp(model, jacobian)
@@ -256,7 +263,7 @@ bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L
     z <- matrix(stats::rnorm(draws * n), draws, n)
     qs <- sweep(z %*% t(L), 2L, u, "+")
     log_g <- -0.5 * rowSums(z^2) - 0.5 * n * log(2 * pi) - sum(log(diag(L)))
-    log_p <- apply(qs, 1L, function(q) lpg(q)$value)
+    log_p <- if (isTRUE(calculate_lp)) apply(qs, 1L, function(q) lpg(q)$value) else rep(NaN, draws)
     gq <- chain_write_draws(model, qs, FALSE)
     dg <- matrix(0, draws, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
     dg[, "lp__"] <- 0

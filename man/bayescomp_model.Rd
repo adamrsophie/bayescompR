@@ -19,7 +19,8 @@ bayescomp_model(
 \item{code}{Stan program as a character string.}
 
 \item{data}{Named list of data, one element per variable in the \code{data}
-block. Arrays use R arrays with the array dimensions first, so
+block, or the name of a CmdStan JSON or R dump file (see
+\code{\link[=bayescomp_read_data]{bayescomp_read_data()}}). Arrays use R arrays with the array dimensions first, so
 \verb{array[N] vector[K] y} is an \code{N} by \code{K} matrix.}
 
 \item{file}{Path to a \code{.stan} file, used when \code{code} is \code{NULL}.}

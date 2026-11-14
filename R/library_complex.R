@@ -83,6 +83,7 @@ cx_flat_names <- function(name, dims) {
 
 # data supplied as R complex (or real) values
 read_cx_data <- function(x, info) {
+  if (isTRUE(attr(x, "stan_json"))) x <- json_complex(x)
   if (is.list(x)) x <- simplify_data_list(x)
   if (!is.numeric(x) && !is.complex(x) && !is.logical(x))
     stop_data(sprintf("variable '%s' must be complex or numeric", info$name))

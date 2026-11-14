@@ -9,20 +9,26 @@ bayescomp_laplace(
   mode = NULL,
   jacobian = TRUE,
   draws = 1000L,
-  seed = NULL
+  seed = NULL,
+  calculate_lp = TRUE
 )
 }
 \arguments{
 \item{model}{A \code{bayescomp_model}.}
 
 \item{mode}{Optional result of \code{\link[=bayescomp_optimize]{bayescomp_optimize()}} (with
-\code{jacobian = TRUE}) or a named list of constrained values at the mode.}
+\code{jacobian = TRUE}), a named list of constrained values at the mode, or
+the name of a file with the mode: a Stan CSV file from an optimization
+(by CmdStan or \code{\link[=bayescomp_write_csv]{bayescomp_write_csv()}}) or a JSON or R dump file.}
 
 \item{jacobian}{Use the Jacobian adjusted density (recommended).}
 
 \item{draws}{Number of draws.}
 
 \item{seed}{Random seed.}
+
+\item{calculate_lp}{Evaluate the log density of the draws (\code{log_p__});
+with \code{FALSE} it is \code{NaN}, as in CmdStan.}
 }
 \value{
 A \code{bayescomp_fit} with extra columns \code{log_p__} and \code{log_g__}.

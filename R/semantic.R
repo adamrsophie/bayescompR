@@ -729,6 +729,36 @@ binop_type_real <- function(op, a, b) {
 }
 
 # resolve a call against user functions and the library
+# library calls must also match a signature of stanc (R/sysdata.rda, built
+# by data-raw/stan_signatures.R), with Stan's int to real and real to
+# complex promotions; the R implementations are often more general
+sig_cache <- new.env(parent = emptyenv())
+stan_sig_key <- function(name) sub("_lup([dm])f$", "_lp\\1f", name)
+stan_sig_parsed <- function(key) {
+  p <- sig_cache[[key]]
+  if (is.null(p)) {
+    p <- lapply(stan_signatures[[key]], function(a) {
+      if (!nzchar(a)) return(list())
+      lapply(strsplit(a, ",", fixed = TRUE)[[1L]], function(x) {
+        b <- strsplit(x, ":", fixed = TRUE)[[1L]]
+        ty(b[1L], as.integer(b[2L]))
+      })
+    })
+    assign(key, p, envir = sig_cache)
+  }
+  p
+}
+stan_sig_ok <- function(name, types) {
+  key <- stan_sig_key(name)
+  if (is.null(stan_signatures[[key]]) || any(vapply(types, is_tuple_ty, TRUE))) return(TRUE)
+  for (p in stan_sig_parsed(key))
+    if (length(p) == length(types) && all(mapply(ty_assignable, p, types))) return(TRUE)
+  FALSE
+}
+stan_sig_strings <- function(name) {
+  vapply(stan_sig_parsed(stan_sig_key(name)), function(p) sprintf("  %s(%s)", name, paste(vapply(p, ty_str, ""), collapse = ", ")), "")
+}
+
 resolve_call <- function(s, name, types, quiet = FALSE, loc = NULL) {
   cands <- c(s$ufuns[[name]], .lib[[name]])
   if (!length(cands)) return(NULL)
@@ -781,6 +811,13 @@ sem_call <- function(s, e) {
   nm <- e$name
   if (is.null(s$ufuns[[nm]]) && !isTRUE(e$cond_bar)) {
     na <- length(e$args)
+    if ((na == 2L && nm %in% names(op_functions)) || (na == 1L && nm %in% names(op_unary_functions))) {
+      # the functional forms have fewer signatures than the operators
+      at <- lapply(e$args, function(a) sem_expr(s, a)$type)
+      if (!stan_sig_ok(nm, at))
+        stop_semantic(sprintf("no matching signature for %s(%s); Stan %s defines:\n%s", nm, paste(vapply(at, ty_str, ""), collapse = ", "),
+                              stan_signatures_version, paste(utils::head(stan_sig_strings(nm), 20L), collapse = "\n")), e$loc)
+    }
     if (na == 2L && nm %in% names(op_functions))
       return(sem_expr(s, list(kind = "binop", op = op_functions[[nm]], a = e$args[[1L]], b = e$args[[2L]], loc = e$loc)))
     if (na == 1L && nm %in% names(op_unary_functions))
@@ -835,6 +872,11 @@ sem_call <- function(s, e) {
                           paste(describe_sigs(s, uname), collapse = "\n")), e$loc)
   }
   sg <- res$sig
+  if (!isTRUE(sg$user) && !stan_sig_ok(uname, types)) {
+    stop_semantic(sprintf("no matching signature for %s(%s); Stan %s defines:\n%s", nm,
+                          paste(vapply(types, ty_str, ""), collapse = ", "), stan_signatures_version,
+                          paste(utils::head(stan_sig_strings(uname), 20L), collapse = "\n")), e$loc)
+  }
   is_rng <- isTRUE(sg$rng) || endsWith(nm, "_rng")
   if (is_rng) {
     ok <- s$block %in% c("transformed data", "generated quantities") || (!is.null(s$fun) && endsWith(s$fun$name, "_rng"))

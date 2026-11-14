@@ -144,7 +144,7 @@ nuts_transition <- function(st, q) {
   st$last_r <- list(V = z_sample$V, g = z_sample$g)
   list(q = z_sample$q, lp = -z_sample$V, accept_stat = if (st$n_leapfrog > 0L) st$sum_metro / st$n_leapfrog else 0,
        treedepth = depth, n_leapfrog = st$n_leapfrog, divergent = st$divergent,
-       energy = ps_H(m, z_sample))
+       energy = ps_H(m, z_sample), p = z_sample$p, g = z_sample$g)
 }
 
 # static HMC with integration time int_time (Stan's static_hmc)
@@ -161,7 +161,7 @@ hmc_transition <- function(st, q) {
   acc <- min(1, exp(H0 - h))
   if (stats::runif(1) > acc) z <- z0
   list(q = z$q, lp = -z$V, accept_stat = acc, treedepth = 0L, n_leapfrog = L,
-       divergent = (h - H0) > st$max_deltaH, energy = ps_H(m, z))
+       divergent = (h - H0) > st$max_deltaH, energy = ps_H(m, z), p = z$p, g = z$g)
 }
 
 # Stan's step size initialization heuristic (base_hmc::init_stepsize)
@@ -309,6 +309,8 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   qs <- matrix(NA_real_, length(thin_idx), n)
   diag_out <- matrix(NA_real_, length(thin_idx), 7L,
                      dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
+  keep_pg <- isTRUE(cfg$diagnostic) && hamiltonian
+  if (keep_pg) dp <- dg <- matrix(NA_real_, length(thin_idx), n)
   q <- q0
   row <- 0L
   total <- nw + ns
@@ -352,6 +354,7 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
       row <- row + 1L
       qs[row, ] <- q
       diag_out[row, ] <- c(s$lp, s$accept_stat, eps_used, s$treedepth, s$n_leapfrog, as.numeric(s$divergent), s$energy)
+      if (keep_pg) { dp[row, ] <- s$p; dg[row, ] <- s$g }
     }
     if (cfg$refresh > 0L && (it %% cfg$refresh == 0L || it == 1L || it == total)) {
       chain_message(sprintf("Chain %d: Iteration: %*d / %d [%3.0f%%]  (%s)", chain_id, nchar(total), it, total,
@@ -361,5 +364,6 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   if (nw == 0L) t_warm <- 0
   t_total <- proc.time()[["elapsed"]] - t_start
   list(q = qs, diag = diag_out, step_size = st$eps, inv_metric = st$metric$inv,
-       n_warmup_saved = sum(thin_idx <= nw), time = c(warmup = t_warm, sampling = t_total - t_warm))
+       n_warmup_saved = sum(thin_idx <= nw), time = c(warmup = t_warm, sampling = t_total - t_warm),
+       diagnostics = if (keep_pg) list(p = dp, g = dg))
 }
