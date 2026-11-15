@@ -3,13 +3,15 @@
 # The parser and semantic analyzer produce a typed IR that does not depend on
 # any backend. A backend turns the IR into the functions the inference
 # algorithms call. The "r" backend (this package) is always available. Native
-# backends live in separate packages and register themselves when loaded.
+# backends are downloaded libraries (native.R) or separate packages, and
+# register themselves when loaded.
 
 .backends <- new.env(parent = emptyenv())
 
 #' Register an execution backend
 #'
-#' Used by backend packages such as bayescompRCranelift and bayescompRLLVM.
+#' Used by [bayescomp_install_backend()] for the downloaded native backends,
+#' and by any package that provides a backend.
 #'
 #' @param name Backend name.
 #' @param capabilities Character vector of supported capabilities, from

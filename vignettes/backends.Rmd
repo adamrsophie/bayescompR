@@ -23,29 +23,64 @@ The parser and semantic analyzer of bayescompR do not depend on how a
 model is executed. They produce a typed, versioned intermediate
 representation (IR). A backend turns the IR into the functions the
 inference algorithms call. The R backend in this package is always
-available; native backends in separate packages compile the same IR to
-machine code:
+available; the native backends compile the same IR to machine code. They
+are built from the
+[bayescomp-native-rs](https://github.com/adamrsophie/bayescomp-native-rs)
+repository.
 
-| Backend | Package | Requires |
-|---------|---------|----------|
-| `"r"` | bayescompR | nothing beyond R |
-| `"cranelift"` | bayescompRCranelift | a Rust toolchain (Linux, macOS, Windows) |
-| `"llvm"` | bayescompRLLVM | a Rust toolchain and LLVM 18, 20, 21 or 22 (Linux, macOS) |
+## Installing a native backend
 
-bayescompR itself has no native dependencies. Both native packages live in
-the [bayescomp-native-rs](https://github.com/adamrsophie/bayescomp-native-rs)
-repository and install from source:
+bayescompR itself has no compiled code. `bayescomp_install_backend()`
+downloads the prebuilt shared library of a backend for your operating
+system and architecture from the releases of bayescomp-native-rs, checks
+its checksum and stores it in `tools::R_user_dir("bayescompR", "data")`.
+The backend is registered at once and again whenever bayescompR is loaded;
+nothing is downloaded unless you call the function.
 
 ```{r, eval = FALSE}
-remotes::install_github("adamrsophie/bayescomp-native-rs", subdir = "rpkg/bayescompRCranelift")
-remotes::install_github("adamrsophie/bayescomp-native-rs", subdir = "rpkg/bayescompRLLVM")
+bayescomp_install_backend("cranelift")
+bayescomp_install_backend("llvm")
+bayescomp_backends()
 ```
 
-Loading a backend package registers its backend. In this version the
+| Backend | Prebuilt libraries | LLVM installation needed |
+|---------|--------------------|--------------------------|
+| `"r"` | not needed | no |
+| `"cranelift"` | Linux (x86_64, aarch64), macOS (arm64, x86_64), Windows (x86_64) | no |
+| `"llvm"` | Linux (x86_64), macOS (arm64) | no; LLVM is linked into the library |
+
+The Cranelift libraries need glibc 2.28 or newer on Linux and macOS 11 or
+newer. The LLVM libraries need glibc 2.35 or newer, libstdc++, zlib, zstd
+and libxml2 (`libxml2.so.2`) on Linux; on macOS they are built and tested
+on macOS 15. Each download is checked against its SHA-256 checksum (MD5 on
+R older than 4.5, which detects a damaged file but is not a security check).
+
+When no prebuilt library is published for a platform, the function says
+so. Build the library with Rust instead and install it from a file with
+`bayescomp_install_backend(path = )`:
+
+```sh
+git clone https://github.com/adamrsophie/bayescomp-native-rs
+cd bayescomp-native-rs
+cargo build --release -p bcn-ffi --features cranelift
+```
+
+```{r, eval = FALSE}
+# libbcn_ffi.so on Linux, libbcn_ffi.dylib on macOS, bcn_ffi.dll on Windows
+bayescomp_install_backend("cranelift", path = "target/release/libbcn_ffi.so")
+```
+
+`bayescomp_remove_backend()` deletes an installed library.
+
+`options(bayescompR.native_engine = "interpreter")` runs the native
+runtime's reference interpreter instead of the JIT compiler, which is
+useful to tell a code generation problem from a runtime one. In this version the
 native backends provide the log density and its gradient; the native
 lowering does not yet cover user defined functions, truncation, matrix
 division and a few other constructs, and such programs are refused with
-`bayescomp_unsupported_error` when the model is built.
+`bayescomp_unsupported_error` when the model is built. An evaluation in
+native code cannot be interrupted, so a `while` loop that never ends blocks
+the R session.
 
 ```{r}
 bayescomp_backends()
@@ -81,22 +116,29 @@ Every node is an object with a `kind` and a source location `loc`
 of statements).
 
 **Types.** Declared types (`type` of a `decl`) have `base` (`int`, `real`,
-`vector`, `row_vector`, `matrix`, or a constrained type such as `simplex`
-or `cholesky_factor_corr`), `adims` (array size expressions), `sizes`
+`complex`, `vector`, `row_vector`, `matrix`, their complex versions,
+`tuple`, or a constrained type such as `simplex` or
+`cholesky_factor_corr`), `adims` (array size expressions), `sizes`
 (vector or matrix size expressions) and `cons` (constraint arguments:
 `lower`, `upper`, `offset`, `multiplier`). Value types of expressions
-(`type` of an expression) have `base` (`int`, `real`, `vector`,
-`row_vector`, `matrix`) and `nd`, the number of array dimensions.
+(`type` of an expression) have `base` (`int`, `real`, `complex`,
+`vector`, `row_vector`, `matrix`, `complex_vector`, `complex_row_vector`,
+`complex_matrix` or `tuple`, whose element types are in `elems`) and
+`nd`, the number of array dimensions.
 
 **Declarations.** `kind = "decl"` with `name`, `type`, `block`, `top`
 (declared at block level) and optional `init`.
 
 **Expressions.** Every expression has `type` and `data_only` (`true` when
-it depends only on data, so a backend can hoist it). Kinds:
+it depends only on data). A backend must use `data_only`, not the run time
+value, to decide which terms of a density `propto` drops: a term is kept
+when any argument it depends on is neither `data_only` nor an integer, as
+in Stan. A backend can also hoist `data_only` expressions. Kinds:
 
 | kind | members |
 |------|---------|
 | `int`, `real` | `value` |
+| `imag` | `value` (an imaginary literal such as `2.5i`) |
 | `string` | `value` (only in `print`, `reject`, `fatal_error`) |
 | `var` | `name`, `origin` (the block, or `argument`, `local`, `loop`) |
 | `binop` | `op` (`+ - * / %/% % \ .* ./ ^ .^ == != < <= > >= && ||`), `a`, `b` |
@@ -105,8 +147,10 @@ it depends only on data, so a backend can hoist it). Kinds:
 | `paren` | `a` |
 | `cond` | `cond`, `a`, `b` (the `?:` operator) |
 | `call` | `name`, `args`, `cond_bar`, `sig`, `resolved` |
-| `index` | `x`, `idx`; each index has `kind` `single` (`e`, an int), `intarray` (`e`, an int array), `range` (`lo`, `hi`, either may be null) or `omni` |
+| `index` | `x`, `idx`; each index has `kind` `single` (`e`, an int), `intarray` (`e`, an int array), `range` (`lo`, `hi`), `lower` (`lo`, for `a:`), `upper` (`hi`, for `:b`) or `omni` |
 | `array_expr`, `rowvec_expr` | `items` (`{...}` and `[...]` literals) |
+| `tuple_expr` | `items` (a tuple literal `(a, b)`) |
+| `proj` | `x`, `k` (element `k` of a tuple, `x.k`) |
 
 **Resolved signatures.** Calls and sampling statements carry `sig`: the
 function `name`, whether it is `user` defined, the `mangled` name of a user
@@ -119,7 +163,9 @@ Library signatures use Stan's argument patterns (`reals`, `ints`,
 the `_lupdf` or `_lupmf` implementation, `sig`), `target_add` and
 `jacobian_add` (`value`), `for` (`var`, `lo`, `hi`, `body`), `foreach`
 (`var`, `iter`, `body`), `while` (`cond`, `body`), `if` (`cond`, `then`,
-`els`), `block_stmt` (`body`), `break`, `continue`, `return` (`value`),
+`els`), `block_stmt` (`body`, and `profile`, the name of a `profile`
+block, when it is one), `unpack` (`lhs`, a `tuple_expr` of variables,
+and `rhs`), `break`, `continue`, `return` (`value`),
 `print`, `reject` and `fatal_error` (`items`), `call_stmt` (`call`) and
 `empty`. Function definitions have `kind = "fundef"`, `name`, `rtype`,
 `args` (each with `name`, `type`, `data_only`), `body` and `sig`.
@@ -171,10 +217,23 @@ the IR as a JSON string, the values of every data and transformed data
 variable (computed by the R implementation and flattened in Stan order)
 as JSON, and the number of unconstrained parameters. A native runtime
 reports errors as strings with a code prefix (`"E_DOMAIN: scale is
-negative"`, `"E_REJECT: ..."`, `"E_FATAL: ..."`, `"E_SHAPE: ..."`), and
+negative"`, `"E_REJECT: ..."`, `"E_FATAL: ..."`, `"E_SHAPE: ..."`,
+`"E_UNSUPPORTED: ..."`), and
 `bayescomp_native_error()` turns them into the condition classes of the R
 backend, so the samplers reject a proposal the same way whichever backend
 raised the error.
+
+```{r}
+m_native <- bayescomp_model("data { int N; vector[N] y; } transformed data { real m = mean(y); }
+                             parameters { real mu; } model { y ~ normal(mu, 1); }",
+                            data = list(N = 3, y = c(0.2, 1.1, 0.7)))
+inputs <- bayescomp_native_inputs(m_native)
+str(inputs, max.level = 1)
+cat(inputs$data, "\n")
+e <- tryCatch(bayescomp_native_error("E_DOMAIN: scale is negative"), error = identity)
+class(e)
+conditionMessage(e)
+```
 
 ### Capability negotiation
 

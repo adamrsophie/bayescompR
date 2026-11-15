@@ -28,8 +28,8 @@ Description: An independent implementation, written entirely in R, of the
     inference, Pathfinder (Zhang et al. 2022
     <doi:10.48550/arXiv.2108.03782>), neural posterior estimation
     and diffusion based sampling. A typed, versioned intermediate
-    representation lets separately installed native backends compute the log
-    density and its gradient. Posterior summaries use rank normalized split
+    representation lets native backends, downloaded on request as prebuilt
+    libraries, compute the log density and its gradient. Posterior summaries use rank normalized split
     R-hat and bulk and tail effective sample sizes (Vehtari et al. 2021
     <doi:10.1214/20-BA1221>). No C++ compiler or 'Stan' installation is
     required. This package is not affiliated with or endorsed by the 'Stan'
@@ -89,6 +89,7 @@ Collate:
     'runtime.R'
     'codegen.R'
     'backends.R'
+    'native.R'
     'model.R'
     'nuts.R'
     'diagnostics.R'

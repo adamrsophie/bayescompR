@@ -50,7 +50,7 @@ diagnostics,MCSE columns in summaries and quantile MCSE,implemented,test-inferen
 output,standalone generated quantities,implemented,test-model.R;test-regressions.R,checks parameter declarations
 backends,typed versioned IR,implemented,test-model.R;test-backends.R,IR 1.0.0
 backends,R backend,implemented,,all capabilities
-backends,Cranelift backend (bayescompRCranelift),partial,test-backends.R,log density and gradient only; Linux macOS Windows
-backends,LLVM backend (bayescompRLLVM),partial,test-backends.R,log density and gradient only; Linux and macOS
+backends,Cranelift backend (bayescomp_install_backend),partial,test-native.R,log density and gradient only; Linux macOS Windows
+backends,LLVM backend (bayescomp_install_backend),partial,test-native.R,log density and gradient only; Linux and macOS
 backends,GPU TPU and NPU,not_implemented,,planned for 0.2.0 through jaxR
 interfaces,CmdStan file formats and stanc,not_applicable,,bayescompR is an independent R implementation

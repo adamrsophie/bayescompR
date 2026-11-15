@@ -30,7 +30,8 @@ bound model, and returning a list with function \code{log_density_gradient(u, ja
 Invisibly, the backend record.
 }
 \description{
-Used by backend packages such as bayescompRCranelift and bayescompRLLVM.
+Used by \code{\link[=bayescomp_install_backend]{bayescomp_install_backend()}} for the downloaded native backends,
+and by any package that provides a backend.
 }
 \examples{
 # a backend that evaluates the standard normal density in closed form

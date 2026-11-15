@@ -26,3 +26,18 @@ This is the first submission of bayescompR.
   integration with `NOT_CRAN=true`. The vignettes in the tarball were built
   with all code evaluated.
 * Examples that run samplers for more than a few seconds are in `\donttest{}`.
+* `bayescomp_install_backend()` downloads an optional prebuilt shared
+  library (a native backend) from a fixed release of the package's GitHub
+  repository over https, but only when the user calls it. We are aware that
+  the CRAN policy allows downloading precompiled code only as a last resort
+  and with the agreement of the CRAN team, and we ask for that agreement
+  here: the libraries are compiled Rust (Cranelift or LLVM code generators)
+  that would otherwise require a Rust toolchain and, for LLVM, an LLVM
+  installation on the user's machine. The package works fully without them.
+  The file is checked against its SHA-256 checksum (MD5 on R older than 4.5)
+  before it is loaded, written only to
+  `tools::R_user_dir("bayescompR", "data")`, which the package manages
+  (installing removes the files of other releases), and loaded with
+  `dyn.load()`. Nothing is downloaded at installation, loading, or in
+  examples, tests or vignettes, and the package has no compiled code of its
+  own. If this is not acceptable, we will remove the installer.

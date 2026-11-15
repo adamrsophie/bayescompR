@@ -139,7 +139,9 @@ compiled Stan. Its compiler works to keep the gap small:
 
 A gradient of a small hierarchical model costs well under a millisecond.
 The typed, versioned IR (`bayescomp_ir()`) and the backend registry let
-native backends compile the same model to machine code; see
+native backends compile the same model to machine code.
+`bayescomp_install_backend("cranelift")` (or `"llvm"`) downloads a
+prebuilt backend library, so no compiler is needed; see
 `vignette("backends")` and `vignette("performance")`.
 
 ## Documentation

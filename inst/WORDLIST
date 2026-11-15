@@ -101,8 +101,6 @@ affine
 al
 backend's
 bayescomp
-bayescompRCranelift
-bayescompRLLVM
 bayesplot
 conjugacy
 det

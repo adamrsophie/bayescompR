@@ -61,6 +61,15 @@ json_str <- function(s) {
   s <- gsub("\"", "\\\\\"", s)
   s <- gsub("\n", "\\\\n", s)
   s <- gsub("\t", "\\\\t", s)
+  s <- gsub("\r", "\\\\r", s)
+  # any other control character as a \u escape, so the JSON stays valid
+  ctl <- grepl("[\\x01-\\x1f]", s, perl = TRUE)
+  if (any(ctl)) s[ctl] <- vapply(s[ctl], function(x) {
+    cs <- strsplit(x, "")[[1L]]
+    i <- grepl("[\\x01-\\x1f]", cs, perl = TRUE)
+    cs[i] <- sprintf("\\u%04x", vapply(cs[i], utf8ToInt, 0L))
+    paste(cs, collapse = "")
+  }, "", USE.NAMES = FALSE)
   paste0("\"", s, "\"")
 }
 

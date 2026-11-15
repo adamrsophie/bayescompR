@@ -26,4 +26,5 @@ First release.
 * Works with posterior, bayesplot, loo and rstantools, and runs the Stan
   programs written by brms, rstanarm and multinma.
 * A typed, versioned intermediate representation and a backend registry
-  for native backends.
+  for native backends; `bayescomp_install_backend()` downloads prebuilt
+  Cranelift and LLVM backends.
