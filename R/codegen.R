@@ -278,6 +278,27 @@ cg_print_items <- function(items) {
     else cg_expr(it)))
 }
 
+# A density statement on data in the model block also records its pointwise
+# terms when the context asks for them (bayescomp_log_lik() and
+# bayescomp_posterior_predict()): the normalized density of each element
+# and, when the distribution has one, a draw from its _rng.
+cg_pointwise <- function(fname, lhs_e, arg_es, lhs, args, sg, truncated) {
+  if (!identical(.cg$block, "model") || !isTRUE(lhs_e$data_only) || isTRUE(sg$user)) return(NULL)
+  root <- lhs_e
+  while (identical(root$kind, "index") || identical(root$kind, "paren")) root <- root$x %||% root$a
+  label <- if (identical(root$kind, "var")) root$name else "y"
+  types <- c(list(lhs_e$type), lapply(arg_es, `[[`, "type"))
+  base <- sub("_(lpdf|lpmf|lupdf|lupmf)$", "", fname)
+  full <- tryCatch(lib_impl(sub("_lup", "_lp", fname), types), error = function(e) NULL)
+  if (is.null(full)) return(NULL)
+  rng <- tryCatch(lib_impl(paste0(base, "_rng"), types[-1L]), error = function(e) NULL)
+  # elementwise only for scalar and one dimensional arguments
+  split <- all(vapply(types, function(t) (t$nd == 0L && t$base %in% c("int", "real", "vector", "row_vector")) ||
+                                           (t$nd == 1L && t$base %in% c("int", "real")), TRUE))
+  cl(as.name("if"), cl(as.name("!"), cl(as.name("is.null"), cl(as.name("$"), CTX, as.name("pw")))),
+     cl_list(rt_pointwise, c(list(CTX, label, full, rng, split, truncated, lhs), unname(args))))
+}
+
 # block being generated, read by cg_call() for _lupdf calls
 .cg <- new.env(parent = emptyenv())
 
@@ -384,6 +405,8 @@ cg_stmt <- function(st, ctx) {
            cg_size_guard(st$fname, sg, types, cl_list(full, c(list(lhs), unname(args)))))
       }
       out <- list(cl(rt_target_add, CTX, call))
+      pw <- cg_pointwise(st$fname, st$lhs, st$args, lhs, args, sg, truncated = !is.null(st$trunc))
+      if (!is.null(pw)) out <- c(list(pw), out)
       if (!is.null(st$trunc)) {
         tr <- st$trunc
         mkfun <- function(sig) {
@@ -407,7 +430,12 @@ cg_stmt <- function(st, ctx) {
       }
       out
     },
-    target_add = list(cl(rt_target_add, CTX, cg_expr(st$value))),
+    target_add = {
+      v <- st$value
+      pw <- if (identical(v$kind, "call") && length(v$args) && grepl("_(lpdf|lpmf|lupdf|lupmf)$", v$name))
+        cg_pointwise(v$name, v$args[[1L]], v$args[-1L], cg_expr(v$args[[1L]]), lapply(v$args[-1L], cg_expr), v$sig, FALSE)
+      c(if (!is.null(pw)) list(pw), list(cl(rt_target_add, CTX, cg_expr(st$value))))
+    },
     jacobian_add = list(cl(as.name("if"), cl(as.name("isTRUE"), cl(as.name("$"), CTX, as.name("jacobian"))),
                            cl(rt_target_add, CTX, cg_expr(st$value)))),
     "if" = {

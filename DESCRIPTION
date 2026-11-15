@@ -78,6 +78,7 @@ Collate:
     'library_transforms.R'
     'library_complex.R'
     'vectorize.R'
+    'pointwise.R'
     'tuples.R'
     'hof.R'
     'hof_runtime.R'

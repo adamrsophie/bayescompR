@@ -15,10 +15,13 @@
 #'   `bayesplot::log_posterior()` the `lp__` draws;
 #' * `loo::loo()` computes PSIS-LOO from the pointwise log likelihood stored
 #'   in the generated quantity `variable` (default `"log_lik"`), with
-#'   relative efficiencies from the chains;
+#'   relative efficiencies from the chains; without a `log_lik` generated
+#'   quantity it uses [bayescomp_log_lik()];
 #' * `rstantools::log_lik()` and `rstantools::posterior_predict()` return
 #'   draws by elements matrices (chains stacked) of the generated
-#'   quantities `variable` (defaults `"log_lik"` and `"y_rep"`).
+#'   quantities `variable` (defaults `"log_lik"` and `"y_rep"`), or of
+#'   [bayescomp_log_lik()] and [bayescomp_posterior_predict()] when the fit
+#'   has no such variable.
 #' @param x,object A `bayescomp_fit`.
 #' @param variable Variable names; for `loo()` the name of the pointwise log
 #'   likelihood.
@@ -92,6 +95,8 @@ log_posterior.bayescomp_fit <- function(object, ...) {
 #' @exportS3Method loo::loo
 loo.bayescomp_fit <- function(x, variable = "log_lik", r_eff = TRUE, ...) {
   a <- unclass(fit_draws(x, variable))
+  # no such generated quantity: take the terms from the model block
+  if (!dim(a)[3L] && identical(variable, "log_lik")) a <- bayescomp_log_lik(x, "array")
   if (!dim(a)[3L]) stop(sprintf("the fit has no variable '%s'", variable), call. = FALSE)
   if (isTRUE(r_eff)) {
     # relative efficiency does not change when each observation's likelihood
@@ -114,8 +119,15 @@ draws_matrix_of <- function(fit, variable) {
 
 #' @rdname bayescomp_interop
 #' @exportS3Method rstantools::log_lik
-log_lik.bayescomp_fit <- function(object, variable = "log_lik", ...) draws_matrix_of(object, variable)
+log_lik.bayescomp_fit <- function(object, variable = "log_lik", ...) {
+  if (identical(variable, "log_lik") && !has_variable(object, variable)) return(bayescomp_log_lik(object))
+  draws_matrix_of(object, variable)
+}
 
 #' @rdname bayescomp_interop
 #' @exportS3Method rstantools::posterior_predict
-posterior_predict.bayescomp_fit <- function(object, variable = "y_rep", ...) draws_matrix_of(object, variable)
+posterior_predict.bayescomp_fit <- function(object, variable = "y_rep", ...) {
+  if (identical(variable, "y_rep") && !has_variable(object, variable)) return(bayescomp_posterior_predict(object))
+  draws_matrix_of(object, variable)
+}
+has_variable <- function(fit, variable) dim(fit_draws(fit, variable))[3L] > 0L

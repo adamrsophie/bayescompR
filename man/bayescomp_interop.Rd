@@ -57,10 +57,13 @@ format of \code{bayesplot::mcmc_nuts_divergence()} and related plots, and
 \code{bayesplot::log_posterior()} the \code{lp__} draws;
 \item \code{loo::loo()} computes PSIS-LOO from the pointwise log likelihood stored
 in the generated quantity \code{variable} (default \code{"log_lik"}), with
-relative efficiencies from the chains;
+relative efficiencies from the chains; without a \code{log_lik} generated
+quantity it uses \code{\link[=bayescomp_log_lik]{bayescomp_log_lik()}};
 \item \code{rstantools::log_lik()} and \code{rstantools::posterior_predict()} return
 draws by elements matrices (chains stacked) of the generated
-quantities \code{variable} (defaults \code{"log_lik"} and \code{"y_rep"}).
+quantities \code{variable} (defaults \code{"log_lik"} and \code{"y_rep"}), or of
+\code{\link[=bayescomp_log_lik]{bayescomp_log_lik()}} and \code{\link[=bayescomp_posterior_predict]{bayescomp_posterior_predict()}} when the fit
+has no such variable.
 }
 }
 \examples{

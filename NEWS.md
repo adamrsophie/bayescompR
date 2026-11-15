@@ -10,6 +10,11 @@ First release.
 * Math, container, linear algebra and distribution library.
 * The `wiener` distribution with four, five and seven parameters and its
   defective distribution functions.
+* `bayescomp_log_lik()` and `bayescomp_posterior_predict()` take the
+  pointwise log likelihood and predictive draws from the sampling
+  statements of the model block, so `loo::loo()`, `rstantools::log_lik()`
+  and `rstantools::posterior_predict()` work on models without a
+  generated quantities block.
 * Loops whose iterations only read and write their own element (sampling
   statements, `target +=` of a density and assignments to `v[n]`) run as
   one statement on slices: 13 to 34 times faster gradients on brms models
