@@ -17,3 +17,6 @@ expect_grad_ok <- function(f, x, tol = 1e-5, label = "") {
 long_tests <- function() identical(Sys.getenv("BAYESCOMPR_LONG_TESTS"), "true")
 
 lib_fun <- function(name, i = 1L) .lib[[name]][[i]]$impl
+
+# every backward rule is checked for adjoint shapes during the tests
+options(bayescompR.check_adjoints = TRUE)

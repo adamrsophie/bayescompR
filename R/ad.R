@@ -31,6 +31,7 @@ tape_start <- function() {
   # its next node
   old <- new.env(parent = emptyenv())
   old$tape <- .ad$tape; old$n <- .ad$n; old$cap <- .ad$cap
+  .ad$check <- isTRUE(getOption("bayescompR.check_adjoints"))
   old$gr <- .ad$gr; .ad$gr <- NULL
   old$ids <- .ad$ids; .ad$ids <- NULL
   old$adj <- .ad$adj; .ad$adj <- NULL
@@ -94,6 +95,7 @@ ad_node <- function(v, parents, grads) {
     if (inherits(p, "bcad")) ids[k] <- p$id
   }
   if (all(ids == 0L)) return(v)
+  if (isTRUE(.ad$check)) grads <- adj_checked(grads, parents, ids)
   n <- .ad$n + 1L
   if (n > .ad$cap) tape_grow()
   .ad$n <- n
@@ -104,6 +106,30 @@ ad_node <- function(v, parents, grads) {
   x <- list(v = v, id = n)
   class(x) <- "bcad"
   x
+}
+
+# options(bayescompR.check_adjoints = TRUE), read when a tape starts: every
+# backward rule is checked to return, for each differentiable parent, an
+# adjoint of its length (or a scalar) with no NaN where the incoming adjoint
+# has none. Used by the test suite to catch shape bugs in new rules.
+adj_checked <- function(grads, parents, ids) {
+  force(grads); force(ids)
+  lens <- vapply(parents, function(p) length(val(p)), 0L)
+  parents <- NULL
+  function(g) {
+    cs <- grads(g)
+    for (k in which(ids > 0L)) {
+      ck <- cs[[k]]
+      if (is.null(ck)) next
+      n <- if (inherits(ck, "bcsp")) ck$n else length(ck)
+      if (n != lens[k] && !(n == 1L && !inherits(ck, "bcsp")))
+        stop(sprintf("internal error: adjoint of length %d for an operand of length %d", n, lens[k]), call. = FALSE)
+      v <- if (inherits(ck, "bcsp")) ck$g else ck
+      if (!is.numeric(v)) stop("internal error: non-numeric adjoint", call. = FALSE)
+      if (anyNA(v) && !anyNA(g)) stop("internal error: NaN adjoint from a finite incoming adjoint", call. = FALSE)
+    }
+    cs
+  }
 }
 
 ad_backward <- function(out) {

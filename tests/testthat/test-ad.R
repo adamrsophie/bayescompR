@@ -60,3 +60,11 @@ test_that("GP kernels have finite gradients for parameter inputs", {
     expect_equal(as.vector(g), fd, tolerance = 1e-6, info = k)
   }
 })
+
+test_that("the adjoint check catches a rule with the wrong shape", {
+  bad <- function(x) ad_sum(ad_node(val(x) * 2, list(x), function(g) list(c(g, g))))
+  expect_error(ad_value_grad(bad, c(1, 2, 3)), "adjoint of length 6 for an operand of length 3")
+  old <- options(bayescompR.check_adjoints = FALSE)
+  on.exit(options(old))
+  expect_silent(ad_value_grad(function(x) ad_sum(x * 2), c(1, 2, 3)))
+})
