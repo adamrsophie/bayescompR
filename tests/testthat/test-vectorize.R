@@ -43,3 +43,33 @@ test_that("empty and out of range loops behave as loops", {
   m <- bayescomp_model("data { int N; vector[N] y; } parameters { real a; } model { for (n in 1:(N + 1)) y[n] ~ normal(a, 1); }", data = list(N = 3L, y = 1:3))
   expect_error(bayescomp_log_prob(m, 0.1), "index out of range")
 })
+
+test_that("element writes in a loop that cannot be vectorized use linear memory", {
+  code <- "data { int N; vector[N] y; } parameters { real<lower=-1, upper=1> r; real a; }
+    model { vector[N] mu; mu[1] = a; for (n in 2:N) mu[n] = r * mu[n - 1] + a; y ~ normal(mu, 1); }"
+  grad_mb <- function(N) {
+    m <- bayescomp_model(code, data = list(N = N, y = rep(0.1, N)))
+    gc(reset = TRUE)
+    bayescomp_grad_log_prob(m, c(0.2, 0.1))
+    sum(gc()[, "max used"] * c(56, 8)) / 2^20
+  }
+  skip_on_cran()
+  small <- grad_mb(500L)
+  big <- grad_mb(4000L)
+  # quadratic memory would need about 64 times as much
+  expect_lt(big - small, 100)
+})
+
+test_that("a data covariance is factored once and gives the same density", {
+  set.seed(3)
+  K <- 4; S <- crossprod(matrix(rnorm(K * K), K)) + diag(K); Y <- matrix(rnorm(10 * K), 10)
+  m <- bayescomp_model("data { int K; matrix[10, K] Y; cov_matrix[K] S; } parameters { vector[K] mu; } model { for (n in 1:10) Y[n]' ~ multi_normal(mu, S); }",
+                       data = list(K = K, Y = Y, S = S))
+  m2 <- bayescomp_model("data { int K; array[10] vector[K] Y; cov_matrix[K] S; } parameters { vector[K] mu; } model { Y ~ multi_normal(mu, S); }",
+                        data = list(K = K, Y = Y, S = S))
+  u <- rep(0.2, K)
+  expect_equal(bayescomp_grad_log_prob(m, u, propto = FALSE), bayescomp_grad_log_prob(m2, u, propto = FALSE))
+  R <- chol(S)
+  ref <- sum(apply(Y, 1, function(y) -0.5 * K * log(2 * pi) - sum(log(diag(R))) - 0.5 * sum(backsolve(R, y - u, transpose = TRUE)^2)))
+  expect_equal(bayescomp_log_prob(m2, u, propto = FALSE), ref)
+})

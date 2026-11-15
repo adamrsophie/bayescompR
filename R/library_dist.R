@@ -1437,7 +1437,13 @@ mvn_core <- function(f, y, mu, logdet_half, solve_fn, propto, depends) {
   # all observations at once: the K x N matrix of differences goes through
   # one solve
   if (N == 1L) return(lp - 0.5 * solve_fn(as_dbl(ys[[1L]]) - as_dbl(ms[[1L]])))
-  lp - 0.5 * solve_fn(stack_cols(ys, N, K) - stack_cols(ms, N, K))
+  # a data matrix of rows is transposed directly instead of split and restacked
+  cols <- function(x, xs) {
+    v <- val(x)
+    if (!inherits(x, "bcad") && is.matrix(v) && length(xs) == N) return(t(v))
+    stack_cols(xs, N, K)
+  }
+  lp - 0.5 * solve_fn(cols(y, ys) - cols(mu, ms))
 }
 # K x N matrix whose columns are the vectors xs (one vector is repeated)
 stack_cols <- function(xs, N, K) {
@@ -1447,10 +1453,22 @@ stack_cols <- function(xs, N, K) {
   }
   ad_reshape(ad_c(lapply(xs, as_dbl)), c(K, N))
 }
+# Cholesky factor and half log determinant of a covariance or precision
+# matrix that is data: the last one is kept, so a fixed matrix is factored
+# once rather than at every evaluation
+.mvn_cache <- new.env(parent = emptyenv())
+mvn_factor <- function(S) {
+  if (!inherits(S, "bcad") && identical(.mvn_cache$S, S)) return(.mvn_cache$r)
+  L <- ad_cholesky(S)
+  r <- list(L = L, ldh = ad_sum(log(.lib$diagonal[[1L]]$impl(L))))
+  if (!inherits(S, "bcad")) { .mvn_cache$S <- S; .mvn_cache$r <- r }
+  r
+}
 lp_multi_normal <- function(y, mu, Sigma, propto) {
   sym_check("multi_normal_lpdf", Sigma)
-  L <- ad_cholesky(Sigma)
-  ldh <- ad_sum(log(.lib$diagonal[[1L]]$impl(L)))
+  fc <- mvn_factor(Sigma)
+  L <- fc$L
+  ldh <- fc$ldh
   mvn_core("multi_normal_lpdf", y, mu, ldh, function(d) {
     z <- ad_tri_solve(L, d, "multi_normal_lpdf")
     ad_sum(z * z)
@@ -1465,8 +1483,7 @@ lp_multi_normal_cholesky <- function(y, mu, L, propto) {
 }
 lp_multi_normal_prec <- function(y, mu, Omega, propto) {
   sym_check("multi_normal_prec_lpdf", Omega)
-  L <- ad_cholesky(Omega)
-  ldh <- -ad_sum(log(.lib$diagonal[[1L]]$impl(L)))
+  ldh <- -mvn_factor(Omega)$ldh
   mvn_core("multi_normal_prec_lpdf", y, mu, ldh, function(d) {
     D <- if (is.null(dim(val(d)))) ad_reshape(d, c(length(val(d)), 1L)) else d
     ad_sum(D * ad_matmul(as_dbl(Omega), D))

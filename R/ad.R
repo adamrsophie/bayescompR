@@ -133,6 +133,9 @@ ad_backward <- function(out) {
     gr <- grl[[i]]
     if (is.null(gr)) next
     cs <- gr(g)
+    # only leaf adjoints are read after the sweep; dropping the others keeps
+    # memory linear when many nodes hold full size adjoints
+    adj[i] <- list(NULL)
     ids <- idl[[i]]
     for (k in seq_along(ids)) {
       id <- ids[k]
@@ -434,28 +437,34 @@ ad_scatter <- function(x, idx, y) {
   out <- vx
   storage.mode(out) <- "double"
   out[idx] <- vy
-  if (!inherits(x, "bcad") && !inherits(y, "bcad")) return(out)
-  ly <- length(vy)
-  dy <- dim(vy)
+  ix <- inherits(x, "bcad"); iy <- inherits(y, "bcad")
+  if (!ix && !iy) return(out)
+  ad_node(out, list(x, y), scatter_grad(ix, iy, length(vx), idx, length(vy), dim(vy)))
+}
+# the backward rule lives in its own small environment: it must not keep the
+# full vectors of x and of the result alive, or a loop of element writes
+# holds one copy per iteration
+scatter_grad <- function(ix, iy, n, idx, ly, dy) {
+  # forced now: an unevaluated argument would keep the caller's frame alive
+  force(ix); force(iy); force(n); force(idx); force(ly); force(dy)
   # with repeated indices only the last write survives, so only it gets
   # the adjoint
-  dup <- anyDuplicated(idx) > 0L
-  if (dup) overwritten <- duplicated(idx, fromLast = TRUE)
-  ad_node(out, list(x, y), function(g) {
+  overwritten <- if (anyDuplicated(idx) > 0L) duplicated(idx, fromLast = TRUE)
+  function(g) {
     gx <- NULL
     gy <- NULL
-    if (inherits(x, "bcad")) {
+    if (ix) {
       gx <- g
-      if (length(gx) == 1L && length(vx) > 1L) gx <- rep(gx, length(vx))
+      if (length(gx) == 1L && n > 1L) gx <- rep(gx, n)
       gx[idx] <- 0
     }
-    if (inherits(y, "bcad")) {
+    if (iy) {
       gy <- as.vector(g)[idx]
-      if (dup) gy[overwritten] <- 0
+      if (!is.null(overwritten)) gy[overwritten] <- 0
       if (ly == 1L) gy <- sum(gy) else if (!is.null(dy)) dim(gy) <- dy
     }
     list(gx, gy)
-  })
+  }
 }
 
 # Concatenate a list of operands into one flat vector.

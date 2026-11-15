@@ -19,6 +19,9 @@ First release.
 * Scalar arithmetic, `row_vector * vector` and matrix product adjoints
   skip generic dispatch and transposes (1.4 to 1.8 times faster gradients
   on small models).
+* Element writes in loops that cannot be vectorized (`mu[n] = r * mu[n - 1]`)
+  use linear rather than quadratic memory; multivariate normal densities
+  factor a data covariance or precision matrix once.
 * Faster gradients: scalar arithmetic and single indexes skip the generic
   machinery, selections accumulate adjoints in place, sum to zero and
   simplex transforms run in linear time, multivariate densities and ordered

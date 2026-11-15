@@ -94,7 +94,13 @@ rt_index_s1 <- function(x, i) {
     stop_domain(sprintf("index out of range: index %s for a dimension of size %d", i, n))
   i <- as.integer(i)
   if (!is.object(x)) return(v[[i]])
-  ad_node(v[[i]], list(x), function(g) list(ad_sparse(i, g, n, d)))
+  ad_node(v[[i]], list(x), sparse_grad(i, n, d))
+}
+# backward rule of a single element read, in an environment that does not
+# keep the full container alive
+sparse_grad <- function(i, n, d) {
+  force(i); force(n); force(d)
+  function(g) list(ad_sparse(i, g, n, d))
 }
 rt_index_s2 <- function(x, i, j) {
   if (is.object(x)) {
@@ -110,7 +116,7 @@ rt_index_s2 <- function(x, i, j) {
   k <- as.integer(i + (j - 1L) * d[1L])
   if (!is.object(x)) return(v[[k]])
   n <- length(v)
-  ad_node(v[[k]], list(x), function(g) list(ad_sparse(k, g, n, d)))
+  ad_node(v[[k]], list(x), sparse_grad(k, n, d))
 }
 
 rt_assign_index <- function(x, kinds, vals, rhs, name) {
