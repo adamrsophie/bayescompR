@@ -95,8 +95,10 @@ rhat_raw <- function(x) {
 #'
 #' @param x Matrix of draws with one column per chain (iterations by
 #'   chains), or a vector for a single chain.
-#' @param probs Probabilities for `ess_quantile()`.
-#' @return A number.
+#' @param probs Probabilities for `ess_quantile()` and `mcse_quantile()`.
+#' @return A number; for `ess_quantile()` and `mcse_quantile()`, one per
+#'   probability. `mcse_quantile()` is the Monte Carlo standard error of a
+#'   quantile estimate, computed as in the posterior package.
 #' @examples
 #' set.seed(1)
 #' x <- matrix(rnorm(400), 100, 4)
@@ -104,6 +106,7 @@ rhat_raw <- function(x) {
 #' bayescomp_ess_bulk(x)
 #' bayescomp_ess_tail(x)
 #' bayescomp_mcse_mean(x)
+#' bayescomp_mcse_quantile(x, c(0.05, 0.5, 0.95))
 #' @name diagnostics
 NULL
 
@@ -169,6 +172,23 @@ bayescomp_mcse_sd <- function(x) {
   ess <- bayescomp_ess_basic(x2)
   ev <- mean(x2)
   sqrt(mean((x2 - ev)^2) / 4 / ev / ess)
+}
+
+#' @rdname diagnostics
+#' @export
+bayescomp_mcse_quantile <- function(x, probs = c(0.05, 0.95)) {
+  # as posterior 1.7.1: the Beta interval of the quantile's rank, mapped
+  # back through the sorted draws
+  x <- as_draws_matrix_chains(x)
+  s <- sort(as.vector(x))
+  n <- length(s)
+  ess <- bayescomp_ess_quantile(x, probs)
+  vapply(seq_along(probs), function(k) {
+    e <- ess[k]; p <- probs[k]
+    if (is.na(e)) return(NA_real_)
+    a <- stats::qbeta(c(0.1586553, 0.8413447), e * p + 1, e * (1 - p) + 1)
+    (s[min(ceiling(a[2L] * n), n)] - s[max(floor(a[1L] * n), 1L)]) / 2
+  }, 0)
 }
 
 #' Gradient test

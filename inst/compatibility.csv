@@ -11,20 +11,20 @@ language,data only argument qualifiers,implemented,test-semantic.R,user and libr
 language,control flow (for foreach while if break continue),implemented,test-model.R,
 language,print reject fatal_error,implemented,test-model.R;test-backends.R,
 language,"truncation T[lower, upper]",implemented,test-distributions.R;test-regressions.R,needs the distribution's lcdf and lccdf
-language,complex numbers,not_implemented,,raises bayescomp_unsupported_error
-language,tuples,not_implemented,,raises bayescomp_unsupported_error
-language,ODE and DAE solvers,not_implemented,,raises bayescomp_unsupported_error
-language,algebraic solvers and 1D integrators,not_implemented,,raises bayescomp_unsupported_error
-language,map_rect and reduce_sum,not_implemented,,raises bayescomp_unsupported_error
-language,embedded Laplace functions,not_implemented,,raises bayescomp_unsupported_error
-language,transform functions (*_constrain *_unconstrain *_jacobian),not_implemented,test-semantic.R,raise bayescomp_unsupported_error
-library,elementwise math functions,partial,test-ad.R,gradients checked by finite differences; the ^ operator takes scalars only and some vectorized signatures are missing
-library,container and array functions,partial,test-model.R,unary minus on arrays and some overloads are missing
-library,linear algebra,partial,test-ad.R,singular values have gradients but svd_U and svd_V do not; no general eigendecomposition; no FFT
-library,sparse CSR functions,partial,test-regressions.R,csr_extract_w/v/u; csr_to_dense_matrix and csr_matrix_times_vector with gradients; csr_extract (tuple) is missing
-library,HMM functions,not_implemented,,
-library,distributions lpdf and lpmf,partial,test-distributions.R,Wiener; Gaussian DLM; multi GP and beta negative binomial missing
-library,distributions cdf lcdf lccdf,partial,test-distributions.R;test-regressions.R,some missing such as bernoulli_lccdf and the skew normal family
+language,complex numbers,implemented,test-complex.R,complex scalars vectors and matrices with gradients
+language,tuples,implemented,test-tuples.R,
+language,ODE and DAE solvers,implemented,test-ode.R;test-hof.R,sensitivities by the forward method
+language,algebraic solvers and 1D integrators,implemented,test-hof.R;test-parity.R,gradients by the implicit function theorem
+language,map_rect and reduce_sum,implemented,test-hof.R;test-regressions.R,evaluated serially with identical results
+language,embedded Laplace functions,implemented,test-laplace.R,
+language,transform functions (*_constrain *_unconstrain *_jacobian),implemented,test-semantic.R;test-distributions.R,
+library,elementwise math functions,implemented,test-ad.R;test-derivatives.R,every Stan 2.40 signature; gradients checked by finite differences
+library,container and array functions,implemented,test-model.R;test-library.R,
+library,linear algebra,implemented,test-ad.R;test-complex.R;test-derivatives.R,singular vectors and eigenvectors are unique up to sign
+library,sparse CSR functions,implemented,test-regressions.R;test-tuples.R,
+library,HMM functions,implemented,test-library.R,
+library,distributions lpdf and lpmf,implemented,test-distributions.R;test-library.R;test-wiener.R,
+library,distributions cdf lcdf lccdf,implemented,test-distributions.R;test-regressions.R,
 library,distributions rng,implemented,test-distributions.R,for implemented distributions
 autodiff,reverse mode AD tape,implemented,test-ad.R;test-regressions.R,
 inference,NUTS and static HMC with Stan adaptation,implemented,test-samplers.R,
@@ -32,7 +32,7 @@ inference,MALA Metropolis slice elliptical slice,implemented,test-samplers.R;tes
 inference,parallel tempering,implemented,test-advanced-mcmc.R,
 inference,ensemble samplers,implemented,test-advanced-mcmc.R,walkers are dependent so R-hat over walkers is optimistic
 inference,Gibbs with conjugacy detection,implemented,test-advanced-mcmc.R;test-regressions.R,numerical detection with Metropolis correction
-inference,Riemannian MALA and RMHMC,partial,test-advanced-mcmc.R,RMHMC does not check implicit solver convergence
+inference,Riemannian MALA and RMHMC,implemented,test-advanced-mcmc.R,steps whose implicit equations do not converge are rejected
 inference,MCLMC,implemented,test-advanced-mcmc.R,L is not tuned from the draws
 inference,Zig-Zag and BPS,partial,test-advanced-mcmc.R,event times by numerical rate quadrature
 inference,SMC with evidence,implemented,test-evidence.R,
@@ -44,9 +44,9 @@ inference,reverse diffusion Monte Carlo,partial,test-approximate.R;test-regressi
 approximation,optimization and Laplace,implemented,test-approximate.R,
 approximation,ADVI and Pathfinder,implemented,test-approximate.R,
 approximation,normalizing flow VI,implemented,test-advanced-mcmc.R,planar flows only
-approximation,INLA EP and neural posterior estimation,partial,test-approximate.R,no approximation error diagnostics
+approximation,INLA EP and neural posterior estimation,partial,test-approximate.R,no approximation error diagnostic; check against MCMC or SBC
 diagnostics,R-hat ESS MCSE,implemented,test-inference.R;test-regressions.R,matches posterior 1.7.1
-diagnostics,MCSE columns in summaries and quantile MCSE,not_implemented,,
+diagnostics,MCSE columns in summaries and quantile MCSE,implemented,test-inference.R,mcse_mean and mcse_sd in summary(); bayescomp_mcse_quantile()
 output,standalone generated quantities,implemented,test-model.R;test-regressions.R,checks parameter declarations
 backends,typed versioned IR,implemented,test-model.R;test-backends.R,IR 1.0.0
 backends,R backend,implemented,,all capabilities

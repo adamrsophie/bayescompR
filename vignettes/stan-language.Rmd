@@ -175,11 +175,10 @@ All of Stan's elementwise math functions, container operations
 `segment`, `head`, `tail`, `to_vector`, `to_matrix` and so on), linear
 algebra (`cholesky_decompose`, `mdivide_left_tri_low`, `inverse`,
 `log_determinant`, `eigenvalues_sym`, `matrix_exp`, `qr_thin_Q`, quadratic
-forms and more) and most distributions are available. Every implemented
-distribution has its `_lpdf` or `_lpmf`; most also have `_cdf`, `_lcdf`,
-`_lccdf` and `_rng`, but some cumulative functions Stan defines are still
-missing (for example `bernoulli_lccdf` and the skew normal family), and
-truncation needs them. TODO.md lists the gaps.
+forms and more) and every distribution are available, each with the
+`_lpdf` or `_lpmf`, `_cdf`, `_lcdf`, `_lccdf` and `_rng` functions Stan
+defines for it. Truncation (`T[a, b]`) works for every distribution with
+cumulative functions.
 
 ```{r}
 m <- bayescomp_model("
@@ -202,16 +201,21 @@ Errors have classes, so programs can catch them selectively:
 | `bayescomp_semantic_error` | types or placement rules are violated |
 | `bayescomp_unsupported_error` | the program uses an unsupported feature |
 | `bayescomp_data_error` | data do not match the declarations |
+| `bayescomp_shape_error` | container sizes do not agree at run time |
 | `bayescomp_domain_error` | a function argument is out of its domain |
-| `bayescomp_reject_error` | the program calls `reject()` |
+| `bayescomp_reject_error` | the program calls `reject()` (or `fatal_error()`) |
 | `bayescomp_fatal_error` | the program calls `fatal_error()` |
+
+Every one of them also has the class `bayescomp_error`, so
+`tryCatch(..., bayescomp_error = ...)` catches all errors of the package.
 
 ```{r, error = TRUE}
 bayescomp_check("parameters { real x; } model { x ~ normal(0); }")
 ```
 
 During sampling, domain and reject errors reject the proposal, as in
-Stan.
+Stan, and `bayescomp_diagnose()` counts the rejections by message.
+`fatal_error()` stops the run.
 
 ## Coverage
 

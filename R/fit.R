@@ -166,7 +166,8 @@ summary.bayescomp_fit <- function(object, variables = NULL, probs = c(0.05, 0.95
         W <- object$config$walkers
         vapply(seq_len(object$config$ensembles), function(e) rowMeans(x[, (e - 1L) * W + seq_len(W), drop = FALSE]), numeric(nrow(x)))
       } else x
-      r <- c(r, rhat = bayescomp_rhat(matrix(xr, nrow(x))), ess_bulk = bayescomp_ess_bulk(x), ess_tail = bayescomp_ess_tail(x))
+      r <- c(r, rhat = bayescomp_rhat(matrix(xr, nrow(x))), ess_bulk = bayescomp_ess_bulk(x), ess_tail = bayescomp_ess_tail(x),
+             mcse_mean = bayescomp_mcse_mean(x), mcse_sd = bayescomp_mcse_sd(x))
     }
     r
   })

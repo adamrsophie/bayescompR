@@ -59,4 +59,6 @@ test_that("diagnostics agree with the posterior package", {
   expect_equal(bayescomp_ess_tail(x), posterior::ess_tail(x), tolerance = 1e-8)
   expect_equal(bayescomp_ess_basic(x), posterior::ess_basic(x), tolerance = 1e-8)
   expect_equal(bayescomp_mcse_mean(x), posterior::mcse_mean(x), tolerance = 1e-8)
+  expect_equal(bayescomp_mcse_sd(x), posterior::mcse_sd(x), tolerance = 1e-6)
+  expect_equal(bayescomp_mcse_quantile(x, c(0.05, 0.5, 0.95)), unname(posterior::mcse_quantile(x, c(0.05, 0.5, 0.95))), tolerance = 1e-8)
 })

@@ -9,6 +9,7 @@
 \alias{bayescomp_ess_quantile}
 \alias{bayescomp_mcse_mean}
 \alias{bayescomp_mcse_sd}
+\alias{bayescomp_mcse_quantile}
 \title{Convergence diagnostics for one quantity}
 \usage{
 bayescomp_rhat(x)
@@ -24,15 +25,19 @@ bayescomp_ess_quantile(x, probs = c(0.05, 0.95))
 bayescomp_mcse_mean(x)
 
 bayescomp_mcse_sd(x)
+
+bayescomp_mcse_quantile(x, probs = c(0.05, 0.95))
 }
 \arguments{
 \item{x}{Matrix of draws with one column per chain (iterations by
 chains), or a vector for a single chain.}
 
-\item{probs}{Probabilities for \code{ess_quantile()}.}
+\item{probs}{Probabilities for \code{ess_quantile()} and \code{mcse_quantile()}.}
 }
 \value{
-A number.
+A number; for \code{ess_quantile()} and \code{mcse_quantile()}, one per
+probability. \code{mcse_quantile()} is the Monte Carlo standard error of a
+quantile estimate, computed as in the posterior package.
 }
 \description{
 Convergence diagnostics for one quantity
@@ -44,4 +49,5 @@ bayescomp_rhat(x)
 bayescomp_ess_bulk(x)
 bayescomp_ess_tail(x)
 bayescomp_mcse_mean(x)
+bayescomp_mcse_quantile(x, c(0.05, 0.5, 0.95))
 }
