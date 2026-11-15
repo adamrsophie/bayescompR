@@ -52,7 +52,23 @@ Diagnostics
 
 * Rank normalized and folded split R-hat, bulk, tail and quantile ESS, MCSE,
   divergences, tree depth, E-BFMI; trace, density, rank, local ESS and
-  quantile ESS plots; simulation based calibration in the long CI tests.
+  quantile ESS plots; divergence locations (`fit$divergences`) and
+  rejected proposals by reason; checks that apply to the method only.
+
+Model checking and workflow
+
+* Pointwise log likelihood and posterior predictive draws from the model
+  block (`bayescomp_log_lik()`, `bayescomp_posterior_predict()`).
+* Exact refits for observations with large Pareto k (`bayescomp_reloo()`).
+* Simulation based calibration (`bayescomp_sbc()`).
+* Interrupted runs keep their draws; `bayescomp_sample(resume = fit)`
+  continues chains without warmup.
+
+Compiler
+
+* Loops with independent iterations are rewritten into vectorized
+  statements; scalar arithmetic and dot products have fast paths; element
+  writes in loops take linear memory.
 
 ## Next (0.2.0)
 
@@ -66,6 +82,10 @@ Diagnostics
   be derived from the IR.
 * Richer flows (coupling layers) for normalizing flow VI and neural
   posterior estimation.
+* A code generator that emits the reverse sweep as R code instead of
+  interpreting the tape.
+* Keeping partial draws when parallel chains in forked processes are
+  interrupted (sequential chains keep them now).
 
 ## Known gaps found in review
 
