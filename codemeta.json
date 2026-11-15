@@ -1,0 +1,114 @@
+{
+  "@context": "https://doi.org/10.5063/schema/codemeta-2.0",
+  "@type": "SoftwareSourceCode",
+  "@id": "https://github.com/adamrsophie/bayescompR",
+  "name": "bayescompR",
+  "description": "A pure R implementation of the Stan modeling language (version 2.40) and of many inference algorithms. Stan programs are parsed, type checked and compiled into R closures on a reverse mode automatic differentiation tape, and fitted with the No-U-Turn sampler and the other CmdStan methods (optimization, Laplace approximation, ADVI, Pathfinder, generated quantities), with CmdStan's adaptation, output files and diagnostics, as well as many further samplers and approximations. No C++ compiler, CmdStan or rstan is required. Not affiliated with or endorsed by the Stan Development Team or NumFOCUS.",
+  "codeRepository": "https://github.com/adamrsophie/bayescompR",
+  "url": "https://adamrsophie.github.io/bayescompR/",
+  "issueTracker": "https://github.com/adamrsophie/bayescompR/issues",
+  "license": "https://spdx.org/licenses/GPL-3.0-only.html",
+  "version": "0.1.0",
+  "softwareVersion": "0.1.0",
+  "dateCreated": "2026-11-01",
+  "dateModified": "2026-11-15",
+  "programmingLanguage": {
+    "@type": "ComputerLanguage",
+    "name": "R",
+    "url": "https://www.r-project.org"
+  },
+  "runtimePlatform": "R >= 4.3.0",
+  "operatingSystem": "OS Independent",
+  "applicationCategory": "Statistics / Bayesian inference",
+  "developmentStatus": "active",
+  "keywords": [
+    "Bayesian inference",
+    "Stan",
+    "probabilistic programming",
+    "MCMC",
+    "Hamiltonian Monte Carlo",
+    "No-U-Turn sampler",
+    "automatic differentiation",
+    "variational inference",
+    "R"
+  ],
+  "softwareRequirements": [
+    "R >= 4.3.0",
+    "graphics",
+    "grDevices",
+    "jsonlite",
+    "Matrix",
+    "parallel",
+    "stats",
+    "utils"
+  ],
+  "softwareSuggestions": [
+    "bayesplot",
+    "knitr",
+    "loo",
+    "posterior",
+    "rmarkdown",
+    "rstantools",
+    "testthat >= 3.0.0"
+  ],
+  "author": [
+    {
+      "@type": "Person",
+      "givenName": "Adam R",
+      "familyName": "Sophie",
+      "email": "adamrsophie@gmail.com",
+      "@id": "https://github.com/adamrsophie"
+    }
+  ],
+  "maintainer": [
+    {
+      "@type": "Person",
+      "givenName": "Adam R",
+      "familyName": "Sophie",
+      "email": "adamrsophie@gmail.com",
+      "@id": "https://github.com/adamrsophie"
+    }
+  ],
+  "copyrightHolder": [
+    {
+      "@type": "Person",
+      "@id": "https://github.com/adamrsophie",
+      "name": "Adam R Sophie"
+    },
+    {
+      "@type": "Organization",
+      "name": "Stan Development Team"
+    }
+  ],
+  "contributor": [
+    {
+      "@type": "Role",
+      "roleName": [
+        "Conceptualization",
+        "Software",
+        "Validation",
+        "Writing - original draft",
+        "Project administration"
+      ],
+      "url": "https://credit.niso.org/",
+      "schema:author": {
+        "@id": "https://github.com/adamrsophie",
+        "name": "Adam R Sophie"
+      }
+    }
+  ],
+  "isBasedOn": {
+    "@type": "CreativeWork",
+    "name": "Stan modeling language specification, version 2.40",
+    "url": "https://mc-stan.org/docs/reference-manual/",
+    "author": {
+      "@type": "Organization",
+      "name": "Stan Development Team"
+    }
+  },
+  "referencePublication": "https://doi.org/10.18637/jss.v076.i01",
+  "relatedLink": [
+    "https://adamrsophie.github.io/bayescompR/",
+    "https://mc-stan.org"
+  ]
+}

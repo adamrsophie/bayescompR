@@ -1,0 +1,118 @@
+{
+  "@context": "https://w3id.org/ro/crate/1.1/context",
+  "@graph": [
+    {
+      "@type": "CreativeWork",
+      "@id": "ro-crate-metadata.json",
+      "conformsTo": {
+        "@id": "https://w3id.org/ro/crate/1.1"
+      },
+      "about": {
+        "@id": "./"
+      },
+      "description": "Machine-readable provenance and packaging metadata for the bayescompR R package, following the RO-Crate 1.1 specification."
+    },
+    {
+      "@type": "Dataset",
+      "@id": "./",
+      "name": "bayescompR: Pure R Implementation of the Stan Modeling Language",
+      "description": "A pure R implementation of the Stan modeling language (version 2.40) and of many inference algorithms. Stan programs are parsed, type checked and compiled into R closures on a reverse mode automatic differentiation tape, and fitted with the No-U-Turn sampler and the other CmdStan methods (optimization, Laplace approximation, ADVI, Pathfinder, generated quantities), with CmdStan's adaptation, output files and diagnostics, as well as many further samplers and approximations. No C++ compiler, CmdStan or rstan is required. Not affiliated with or endorsed by the Stan Development Team or NumFOCUS.",
+      "datePublished": "2026-11-15",
+      "license": {
+        "@id": "https://spdx.org/licenses/GPL-3.0-only.html"
+      },
+      "author": [
+        {
+          "@id": "https://github.com/adamrsophie"
+        }
+      ],
+      "mainEntity": {
+        "@id": "#bayescompR"
+      },
+      "hasPart": [
+        {
+          "@id": "#bayescompR"
+        },
+        {
+          "@id": "https://github.com/adamrsophie/bayescompR"
+        },
+        {
+          "@id": "inst/COPYRIGHTS"
+        }
+      ]
+    },
+    {
+      "@type": "SoftwareSourceCode",
+      "@id": "#bayescompR",
+      "name": "bayescompR",
+      "programmingLanguage": {
+        "@id": "https://www.r-project.org"
+      },
+      "codeRepository": "https://github.com/adamrsophie/bayescompR",
+      "url": "https://adamrsophie.github.io/bayescompR/",
+      "version": "0.1.0",
+      "license": {
+        "@id": "https://spdx.org/licenses/GPL-3.0-only.html"
+      },
+      "author": [
+        {
+          "@id": "https://github.com/adamrsophie"
+        }
+      ],
+      "isBasedOn": {
+        "@id": "https://mc-stan.org/docs/reference-manual/"
+      },
+      "referencePublication": {
+        "@id": "https://doi.org/10.18637/jss.v076.i01"
+      }
+    },
+    {
+      "@type": "File",
+      "@id": "inst/COPYRIGHTS",
+      "name": "Copyright and provenance notice",
+      "description": "States which data and texts of bayescompR derive from stanc3 and CmdStan 2.40, and the BSD 3-Clause License that applies to them.",
+      "encodingFormat": "text/plain"
+    },
+    {
+      "@type": "CreativeWork",
+      "@id": "https://mc-stan.org/docs/reference-manual/",
+      "name": "Stan Reference Manual, version 2.40",
+      "author": {
+        "@id": "#stan-team"
+      }
+    },
+    {
+      "@type": "Organization",
+      "@id": "#stan-team",
+      "name": "Stan Development Team",
+      "url": "https://mc-stan.org"
+    },
+    {
+      "@type": "Person",
+      "@id": "https://github.com/adamrsophie",
+      "name": "Adam R Sophie",
+      "roleName": [
+        "Conceptualization",
+        "Software",
+        "Validation",
+        "Writing - original draft",
+        "Project administration"
+      ]
+    },
+    {
+      "@type": "ScholarlyArticle",
+      "@id": "https://doi.org/10.18637/jss.v076.i01",
+      "name": "Stan: A Probabilistic Programming Language"
+    },
+    {
+      "@type": "CreativeWork",
+      "@id": "https://spdx.org/licenses/GPL-3.0-only.html",
+      "name": "GNU General Public License v3.0 only"
+    },
+    {
+      "@type": "CreativeWork",
+      "@id": "https://w3id.org/ro/crate/1.1",
+      "name": "RO-Crate 1.1"
+    }
+  ]
+}

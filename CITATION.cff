@@ -1,0 +1,89 @@
+# -----------------------------------------------------------------------------
+# Citation File Format (https://citation-file-format.github.io/).
+# Machine-readable citation metadata for GitHub, Zenodo, and FAIR tooling.
+# The R-level citation lives in inst/CITATION; the canonical software metadata
+# crosswalk is in codemeta.json; Zenodo deposit metadata is in .zenodo.json.
+# -----------------------------------------------------------------------------
+cff-version: 1.2.0
+message: 'To cite the bayescompR package in publications use:'
+type: software
+license: GPL-3.0-only
+title: 'bayescompR: Pure R Implementation of the Stan Modeling Language'
+version: 0.1.0
+date-released: '2026-11-15'
+abstract: >-
+  A pure R implementation of the Stan modeling language (version 2.40) and
+  of many inference algorithms. Stan programs are parsed, type checked and
+  compiled into R closures on a reverse mode automatic differentiation tape,
+  and fitted with the No-U-Turn sampler and the other CmdStan methods, with
+  CmdStan's adaptation, output files and diagnostics, as well as many
+  further samplers and approximations. No C++ compiler, CmdStan or rstan is
+  required. Not affiliated with or endorsed by the Stan Development Team or
+  NumFOCUS.
+authors:
+  - family-names: Sophie
+    given-names: Adam R
+    email: adamrsophie@gmail.com
+repository-code: https://github.com/adamrsophie/bayescompR
+url: https://adamrsophie.github.io/bayescompR/
+keywords:
+  - bayesian-inference
+  - stan
+  - probabilistic-programming
+  - mcmc
+  - hamiltonian-monte-carlo
+  - automatic-differentiation
+  - variational-inference
+  - r
+references:
+  - type: article
+    title: 'Stan: A Probabilistic Programming Language'
+    authors:
+      - family-names: Carpenter
+        given-names: Bob
+      - family-names: Gelman
+        given-names: Andrew
+      - family-names: Hoffman
+        given-names: Matthew D.
+      - family-names: Lee
+        given-names: Daniel
+      - family-names: Goodrich
+        given-names: Ben
+      - family-names: Betancourt
+        given-names: Michael
+      - family-names: Brubaker
+        given-names: Marcus
+      - family-names: Guo
+        given-names: Jiqiang
+      - family-names: Li
+        given-names: Peter
+      - family-names: Riddell
+        given-names: Allen
+    journal: Journal of Statistical Software
+    volume: 76
+    issue: 1
+    start: 1
+    end: 32
+    year: 2017
+    doi: 10.18637/jss.v076.i01
+  - type: article
+    title: 'The No-U-Turn Sampler: Adaptively Setting Path Lengths in Hamiltonian Monte Carlo'
+    authors:
+      - family-names: Hoffman
+        given-names: Matthew D.
+      - family-names: Gelman
+        given-names: Andrew
+    journal: Journal of Machine Learning Research
+    volume: 15
+    start: 1593
+    end: 1623
+    year: 2014
+  - type: manual
+    title: 'Stan Reference Manual, version 2.40'
+    authors:
+      - name: Stan Development Team
+    url: https://mc-stan.org/docs/reference-manual/
+    notes: >-
+      bayescompR implements this language specification. The function
+      signature table and the texts of some warnings and reports derive from
+      stanc3 and CmdStan 2.40 (BSD 3-Clause); see inst/COPYRIGHTS.

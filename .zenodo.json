@@ -1,0 +1,45 @@
+{
+  "title": "bayescompR: Pure R Implementation of the Stan Modeling Language",
+  "description": "A pure R implementation of the Stan modeling language (version 2.40) and of many inference algorithms. Stan programs are parsed, type checked and compiled into R closures on a reverse mode automatic differentiation tape, and fitted with the No-U-Turn sampler and the other CmdStan methods (optimization, Laplace approximation, ADVI, Pathfinder, generated quantities), with CmdStan's adaptation, output files and diagnostics, as well as many further samplers and approximations. No C++ compiler, CmdStan or rstan is required. Not affiliated with or endorsed by the Stan Development Team or NumFOCUS.",
+  "upload_type": "software",
+  "license": "GPL-3.0-only",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "Sophie, Adam R"
+    }
+  ],
+  "keywords": [
+    "Bayesian inference",
+    "Stan",
+    "probabilistic programming",
+    "MCMC",
+    "Hamiltonian Monte Carlo",
+    "No-U-Turn sampler",
+    "automatic differentiation",
+    "variational inference",
+    "R"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/adamrsophie/bayescompR",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://adamrsophie.github.io/bayescompR/",
+      "relation": "isDocumentedBy",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://mc-stan.org/docs/reference-manual/",
+      "relation": "isDerivedFrom",
+      "scheme": "url"
+    },
+    {
+      "identifier": "10.18637/jss.v076.i01",
+      "relation": "references",
+      "scheme": "doi"
+    }
+  ]
+}

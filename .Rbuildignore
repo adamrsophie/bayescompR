@@ -20,10 +20,15 @@
 ^CITATION\.cff$
 ^validation$
 ^ARCHITECTURE\.md$
-^TODO\.md$
 ^CONTRIBUTING\.md$
 ^figure$
 ^cran-comments\.md$
 ^CRAN-SUBMISSION$
 ^receipts$
 ^review-receipts$
+^CODE_OF_CONDUCT\.md$
+^SECURITY\.md$
+^codemeta\.json$
+^\.zenodo\.json$
+^ro-crate-metadata\.json$
+^codecov\.yml$

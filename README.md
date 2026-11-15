@@ -3,6 +3,18 @@
 <!-- badges: start -->
 [![R-CMD-check](https://github.com/adamrsophie/bayescompR/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/adamrsophie/bayescompR/actions/workflows/R-CMD-check.yaml)
 [![pkgdown](https://github.com/adamrsophie/bayescompR/actions/workflows/pkgdown.yaml/badge.svg)](https://adamrsophie.github.io/bayescompR/)
+[![test-coverage](https://github.com/adamrsophie/bayescompR/actions/workflows/test-coverage.yaml/badge.svg)](https://github.com/adamrsophie/bayescompR/actions/workflows/test-coverage.yaml)
+[![R-hub](https://github.com/adamrsophie/bayescompR/actions/workflows/rhub.yaml/badge.svg)](https://github.com/adamrsophie/bayescompR/actions/workflows/rhub.yaml)
+[![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Stan language 2.40](https://img.shields.io/badge/Stan%20language-2.40-b2001d.svg)](https://mc-stan.org/docs/reference-manual/)
+[![R >= 4.3.0](https://img.shields.io/badge/R-%E2%89%A5%204.3.0-276DC3.svg)](https://www.r-project.org)
+<!-- CRAN badge: uncomment once the package is on CRAN. -->
+<!-- [![CRAN status](https://www.r-pkg.org/badges/version/bayescompR)](https://CRAN.R-project.org/package=bayescompR) -->
+<!-- DOI badge: Zenodo mints a concept DOI on the first GitHub release; replace XXXXXXXX and uncomment. -->
+<!-- [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXXX) -->
+<!-- Software Heritage archives public repositories only; uncomment once the repository is public. -->
+<!-- [![Archived on Software Heritage](https://archive.softwareheritage.org/badge/origin/https://github.com/adamrsophie/bayescompR/)](https://archive.softwareheritage.org/browse/origin/?origin_url=https://github.com/adamrsophie/bayescompR) -->
 <!-- badges: end -->
 
 **bayescompR** runs Stan programs in pure R. It implements the Stan
@@ -149,6 +161,20 @@ and these vignettes:
 | `vignette("backends")` | The IR and the interface for native backends |
 | `vignette("validation")` | How correctness is checked, including simulation based calibration |
 
+## Citation
+
+Run `citation("bayescompR")` for the package citation and the Stan
+reference. Machine-readable metadata is in `CITATION.cff`, `codemeta.json`,
+`.zenodo.json` and `ro-crate-metadata.json`.
+
+## Contributing
+
+See `CONTRIBUTING.md`. Report bugs and request features in the
+[issue tracker](https://github.com/adamrsophie/bayescompR/issues), and
+security problems as described in `SECURITY.md`. The project follows a
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## License
 
-GPL-3.
+GPL-3. Data and texts derived from stanc3 and CmdStan are under the BSD
+3-Clause License; see `inst/COPYRIGHTS`.
