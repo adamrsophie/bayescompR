@@ -10,6 +10,11 @@ First release.
 * Math, container, linear algebra and distribution library.
 * The `wiener` distribution with four, five and seven parameters and its
   defective distribution functions.
+* `bayescomp_sbc()` runs simulation based calibration, with rank
+  uniformity tests and rank histograms (`plot()`).
+* `bayescomp_reloo()` refits the model without each observation whose
+  PSIS-LOO Pareto k is too large and updates the LOO estimates with its
+  exact log predictive density.
 * An interrupt (Ctrl-C or Esc) while chains run sequentially returns the
   finished chains, or the draws of the interrupted chain, instead of
   losing them; `bayescomp_sample(resume = fit)` continues each chain from

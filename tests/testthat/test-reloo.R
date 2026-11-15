@@ -1,0 +1,17 @@
+test_that("reloo replaces unreliable observations with exact refits", {
+  skip_on_cran()
+  skip_if_not_installed("loo")
+  y <- c(-0.3, 0.1, 0.4, -0.2, 6)
+  code <- "data { int N; vector[N] y; } parameters { real mu; } model { mu ~ normal(0, 10); y ~ normal(mu, 1); }"
+  m <- bayescomp_model(code, data = list(N = 5, y = y))
+  fit <- bayescomp_sample(m, chains = 2, iter_warmup = 300, iter_sampling = 500, seed = 1, refresh = 0)
+  lo <- suppressWarnings(loo::loo(fit))
+  r <- bayescomp_reloo(fit, function(i) list(N = 4L, y = y[-i]), lo, k_threshold = -Inf, refresh = 0)
+  expect_equal(r$refits, 1:5)
+  expect_true(all(r$diagnostics$pareto_k == 0))
+  # exact: y[-i] gives mu | y[-i] ~ normal(m, v), predictive normal(m, sqrt(1 + v))
+  exact <- vapply(1:5, function(i) { v <- 1 / (4 + 1 / 100); stats::dnorm(y[i], v * sum(y[-i]), sqrt(1 + v), log = TRUE) }, 0)
+  expect_equal(unname(r$pointwise[, "elpd_loo"]), exact, tolerance = 0.05)
+  expect_equal(r$estimates["elpd_loo", "Estimate"], sum(r$pointwise[, "elpd_loo"]))
+  expect_equal(bayescomp_reloo(fit, function(i) NULL, lo, k_threshold = Inf)$refits, integer(0))
+})

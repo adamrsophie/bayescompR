@@ -396,7 +396,9 @@ test_that("posterior, bayesplot and loo generics accept a fit", {
   ll <- rstantools::log_lik(f)
   expect_equal(dim(ll), c(200L, 4L))
   expect_equal(unname(ll[101, 2]), unname(f$draws[1, 2, "log_lik[2]"]))
-  expect_error(rstantools::posterior_predict(f), "y_rep")
+  # no y_rep generated quantity: draws from the sampling statements instead
+  expect_equal(dim(rstantools::posterior_predict(f)), dim(ll))
+  expect_error(rstantools::posterior_predict(f, variable = "yy"), "unknown variable")
 })
 
 test_that("truncation works with user defined cumulative functions", {

@@ -94,9 +94,9 @@ log_posterior.bayescomp_fit <- function(object, ...) {
 #' @rdname bayescomp_interop
 #' @exportS3Method loo::loo
 loo.bayescomp_fit <- function(x, variable = "log_lik", r_eff = TRUE, ...) {
-  a <- unclass(fit_draws(x, variable))
   # no such generated quantity: take the terms from the model block
-  if (!dim(a)[3L] && identical(variable, "log_lik")) a <- bayescomp_log_lik(x, "array")
+  a <- if (identical(variable, "log_lik") && !has_variable(x, variable)) bayescomp_log_lik(x, "array")
+       else unclass(fit_draws(x, variable))
   if (!dim(a)[3L]) stop(sprintf("the fit has no variable '%s'", variable), call. = FALSE)
   if (isTRUE(r_eff)) {
     # relative efficiency does not change when each observation's likelihood
@@ -130,4 +130,7 @@ posterior_predict.bayescomp_fit <- function(object, variable = "y_rep", ...) {
   if (identical(variable, "y_rep") && !has_variable(object, variable)) return(bayescomp_posterior_predict(object))
   draws_matrix_of(object, variable)
 }
-has_variable <- function(fit, variable) dim(fit_draws(fit, variable))[3L] > 0L
+has_variable <- function(fit, variable) {
+  nm <- dimnames(fit$draws)[[3L]]
+  any(nm == variable | sub("\\[.*$", "", nm) == variable)
+}
