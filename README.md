@@ -5,15 +5,18 @@
 [![pkgdown](https://github.com/adamrsophie/bayescompR/actions/workflows/pkgdown.yaml/badge.svg)](https://adamrsophie.github.io/bayescompR/)
 <!-- badges: end -->
 
-bayescompR is an independent implementation of the Stan probabilistic
-programming language (version 2.40) written entirely in R. It parses and
-type checks Stan programs, compiles them into R closures running on a reverse
-mode automatic differentiation tape, and fits them with the No-U-Turn sampler
-and the other Stan inference algorithms. No C++ compiler, CmdStan, rstan or
-external inference engine is needed.
+**bayescompR** runs Stan programs in pure R. It implements the Stan
+modeling language (version 2.40): a parser and type checker, a compiler to
+R closures over a reverse mode automatic differentiation tape, the full
+math and distribution library with gradients, and Stan's inference
+algorithms with CmdStan's adaptation, output files and diagnostics.
 
-bayescompR is not affiliated with or endorsed by the Stan Development Team or
-NumFOCUS. "Stan" refers to the language specification it implements.
+There is nothing to compile. Models start in a fraction of a second, run
+wherever R runs, and need no C++ toolchain, CmdStan or rstan.
+
+bayescompR is an independent implementation. It is not affiliated with
+or endorsed by the Stan Development Team or NumFOCUS; "Stan" refers to the
+language specification it implements.
 
 ## Installation
 
@@ -22,10 +25,11 @@ NumFOCUS. "Stan" refers to the language specification it implements.
 remotes::install_github("adamrsophie/bayescompR")
 ```
 
-## Example
+## Quick start
 
 ```r
 library(bayescompR)
+options(mc.cores = parallel::detectCores())  # run chains in parallel
 
 code <- "
 data {
@@ -48,60 +52,103 @@ model {
   y ~ normal(theta, sigma);
 }
 "
-data <- list(J = 8, y = c(28, 8, -3, 7, -1, 1, 18, 12),
-             sigma = c(15, 10, 16, 11, 9, 11, 10, 18))
+schools <- list(J = 8, y = c(28, 8, -3, 7, -1, 1, 18, 12),
+                sigma = c(15, 10, 16, 11, 9, 11, 10, 18))
 
-model <- bayescomp_model(code, data = data)
-fit <- bayescomp_sample(model, chains = 4, seed = 1, cores = 4)
-fit
-summary(fit, c("mu", "tau"))
+model <- bayescomp_model(code, data = schools)
+fit <- bayescomp_sample(model, chains = 4, seed = 1)
+
+summary(fit, c("mu", "tau", "theta"))
 bayescomp_diagnose(fit)
+loo::loo(fit)                       # pointwise terms come from the model block
+yrep <- bayescomp_posterior_predict(fit)
 ```
 
-## What is included
+## Features
 
-| Area | Functions |
-|------|-----------|
-| Language | all program blocks, user functions (recursion, `_lpdf`, `_lp`, `_rng`, `_jacobian`), every constrained type including `sum_to_zero_vector`, stochastic matrices and Cholesky factors, truncation, `offset` and `multiplier` |
-| Library | elementwise math, containers, linear algebra with analytic gradients, 66 distribution families (31 with lcdf and lccdf, 61 with rng) |
-| MCMC | `bayescomp_sample()`: NUTS, static HMC, MALA, block or componentwise random walk Metropolis with adaptive covariance, slice sampling; diagonal or dense metric |
-| More MCMC | elliptical slice sampling, `bayescomp_parallel_tempering()` (non reversible), `bayescomp_ensemble()` (DE MCMC, stretch move), `bayescomp_gibbs()` (blocked, with conjugacy detection), `bayescomp_riemannian()` (smMALA, RMHMC), `bayescomp_mclmc()`, `bayescomp_pdmp()` (Zig-Zag, BPS), `bayescomp_sgmcmc()` (SGLD, SGHMC), `bayescomp_rjmcmc()` |
-| Sequential and evidence | `bayescomp_smc()` (tempered SMC with log evidence), `bayescomp_nested()`, `bayescomp_ssm()`, `bayescomp_particle_filter()`, `bayescomp_pmcmc()` (PMMH, particle Gibbs) |
-| Approximations | `bayescomp_optimize()`, `bayescomp_laplace()`, `bayescomp_variational()` (ADVI), `bayescomp_pathfinder()` (also as MCMC initializer), `bayescomp_flow_vi()`, `bayescomp_ep()`, `bayescomp_inla()`, `bayescomp_npe()`, `bayescomp_diffusion()` (experimental), `bayescomp_generate_quantities()` |
-| Model interface | `bayescomp_log_prob()`, `bayescomp_grad_log_prob()`, `bayescomp_constrain()`, `bayescomp_unconstrain()` |
-| Diagnostics | rank normalized split R-hat, bulk, tail and quantile ESS, MCSE, divergences, tree depth, E-BFMI; trace, density, rank and ESS plots |
-| Backends | typed versioned IR (`bayescomp_ir()`), backend registry with explicit fallback and `bayescomp_validate_backend()`; native backends bayescompRCranelift and bayescompRLLVM in [bayescomp-native-rs](https://github.com/adamrsophie/bayescomp-native-rs) |
+**The Stan language.** All program blocks; user defined functions,
+including recursion and `_lpdf`, `_lp`, `_rng` and `_jacobian` functions;
+every constrained type (simplexes, `sum_to_zero_vector`, stochastic
+matrices, correlation and covariance matrices and their Cholesky factors,
+`offset` and `multiplier`); tuples and complex numbers; truncation;
+`profile` blocks; ODE, DAE, algebraic solver, 1D integration, `map_rect`
+and `reduce_sum`; and every function and distribution of the Stan 2.40
+library, with gradients.
 
-Every function and distribution of Stan 2.40 is available, with
-gradients. See `vignette("stan-language")` for details.
+**CmdStan parity.** NUTS with Stan's windowed adaptation of the step size
+and a diagonal or dense metric, static HMC, optimization (L-BFGS, BFGS,
+Newton), Laplace approximation, Pathfinder, ADVI and standalone generated
+quantities. Stan CSV, metric, diagnostic, profile and configuration files
+are written and read in CmdStan's formats, so `bayescomp_read_csv()` also
+reads CmdStan output. `bayescomp_stansummary()` and `bayescomp_diagnose()`
+reproduce `stansummary` and `diagnose`, and the stanc tools are there too:
+`bayescomp_format()`, `bayescomp_info()`, `bayescomp_pedantic()`,
+`bayescomp_generate_data()` and `bayescomp_expose_functions()`.
 
-## Speed
+**Beyond CmdStan.**
 
-Everything runs in the R interpreter, so a gradient costs tens to hundreds of
-microseconds, far slower than compiled Stan. Densities are
-fused into single tape nodes with analytic partial derivatives, and the tape
-avoids copying. For large models, the native backends compile the same IR
-to machine code. See `vignette("performance")`.
+* Pointwise log likelihood and posterior predictive draws taken from the
+  model block (`bayescomp_log_lik()`, `bayescomp_posterior_predict()`), so
+  `loo` and predictive checks need no generated quantities.
+* Exact refits for observations with large Pareto k (`bayescomp_reloo()`)
+  and simulation based calibration (`bayescomp_sbc()`).
+* Where divergent trajectories failed, rejected proposals counted by reason,
+  and diagnostics that report only the checks that apply to the method.
+* Interrupt with Ctrl-C and keep the draws; continue chains with
+  `bayescomp_sample(resume = fit)`.
+* More samplers: MALA, Metropolis, slice and elliptical slice sampling,
+  parallel tempering, tempered SMC, nested sampling, ensemble samplers,
+  Gibbs sampling with conjugacy detection, Riemannian HMC, MCLMC,
+  piecewise deterministic samplers, SG-MCMC, reversible jump, particle
+  MCMC for state space models, and approximations including normalizing
+  flow VI, EP, INLA and neural posterior estimation.
+* Direct access to the log density, its gradient and the transforms
+  (`bayescomp_log_prob()`, `bayescomp_grad_log_prob()`,
+  `bayescomp_constrain()`), for use with other software.
 
-## Which algorithm?
+**The ecosystem.** Fits work with posterior, bayesplot, loo and
+rstantools generics. Programs written by brms (`make_stancode()` and
+`make_standata()`), rstanarm and multinma run unchanged; see
+`vignette("ecosystem")`.
 
-NUTS is the default for differentiable models. Pathfinder and Laplace give
-fast approximations and good starting points. Tempered SMC and parallel
-tempering handle multimodal posteriors and estimate the marginal likelihood;
-nested sampling and reversible jump compare models. Metropolis, slice,
-elliptical slice and ensemble samplers need no gradients. Gibbs sampling
-draws conjugate blocks exactly. Particle MCMC handles state space models
-with intractable likelihoods, NPE handles simulators, INLA latent Gaussian
-models, and EP or SG-MCMC large data. `vignette("algorithms")` compares them
-and `TODO.md` lists the roadmap.
+## Performance
+
+Everything runs in the R interpreter, so bayescompR is slower than
+compiled Stan. Its compiler works to keep the gap small:
+
+* Loops whose iterations are independent are rewritten into vectorized
+  statements, so models written observation by observation (as brms
+  writes them) run 10 to 30 times faster than the loops would.
+* Densities, GLM likelihoods and constraining transforms are single tape
+  nodes with hand written partial derivatives, and data only expressions
+  are computed once.
+* Chains run in parallel with `cores` or `options(mc.cores = ...)`, with
+  results identical to sequential runs for the same seed.
+
+A gradient of a small hierarchical model costs well under a millisecond.
+The typed, versioned IR (`bayescomp_ir()`) and the backend registry let
+native backends compile the same model to machine code; see
+`vignette("backends")` and `vignette("performance")`.
 
 ## Documentation
 
-The website <https://adamrsophie.github.io/bayescompR/> holds the reference
-and these vignettes: getting started, the Stan language, inference
-algorithms, diagnostics, automatic differentiation and transforms, backends
-and the IR, performance, and validation.
+The website <https://adamrsophie.github.io/bayescompR/> has the reference
+and these vignettes:
+
+| Vignette | Contents |
+|---|---|
+| `vignette("bayescompR")` | Getting started: the full workflow on one model |
+| `vignette("stan-language")` | What the implementation supports, and how it differs from stanc |
+| `vignette("inference")` | NUTS and every argument of `bayescomp_sample()`, HMC, MALA, Metropolis, slice, SMC, optimization, Laplace, ADVI, Pathfinder |
+| `vignette("algorithms")` | The other samplers and approximations |
+| `vignette("diagnostics")` | R-hat, ESS, divergences and where they occur, rejections |
+| `vignette("cmdstan-workflow")` | The stanc and CmdStan tools: files, CSV, stansummary, diagnose |
+| `vignette("ecosystem")` | posterior, bayesplot, loo, rstantools, brms, rstanarm, multinma |
+| `vignette("performance")` | Writing fast models; parallel chains |
+| `vignette("autodiff-and-transforms")` | The AD tape and the constraining transforms |
+| `vignette("backends")` | The IR and the interface for native backends |
+| `vignette("validation")` | How correctness is checked, including simulation based calibration |
 
 ## License
 
-GPL (>= 3).
+GPL-3.
