@@ -25,7 +25,7 @@ test_that("every release asset has a recorded checksum", {
     paste0("bcn-cranelift-", c("darwin-aarch64", "darwin-x86_64", "linux-aarch64", "linux-x86_64"), ".so"),
     "bcn-cranelift-windows-x86_64.dll", "bcn-llvm-darwin-aarch64.so", "bcn-llvm-linux-x86_64.so"))
   local_mocked_bindings(native_download = function(url, dest, quiet = TRUE) { writeBin(charToRaw("tampered"), dest); TRUE },
-                        native_platform = function() "linux-x86_64")
+                        native_asset = function(backend) "bcn-cranelift-linux-x86_64.so")
   skip_if(is.null(native_sha256()))
   old <- Sys.getenv("R_USER_DATA_DIR", NA)
   Sys.setenv(R_USER_DATA_DIR = tempfile())
