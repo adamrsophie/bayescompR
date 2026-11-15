@@ -73,3 +73,19 @@ test_that("a data covariance is factored once and gives the same density", {
   ref <- sum(apply(Y, 1, function(y) -0.5 * K * log(2 * pi) - sum(log(diag(R))) - 0.5 * sum(backsolve(R, y - u, transpose = TRUE)^2)))
   expect_equal(bayescomp_log_prob(m2, u, propto = FALSE), ref)
 })
+
+test_that("fused correlation and bound transforms have exact gradients", {
+  m <- bayescomp_model("data { vector[3] lo; } parameters { corr_matrix[4] R; cholesky_factor_corr[3] Lc; real<lower=-1, upper=2> a;
+      vector<lower=0, upper=5>[4] b; vector<lower=lo, upper=lo + 3>[3] c; real<lower=a, upper=a + 1> d; }
+    model { R ~ lkj_corr(2); Lc ~ lkj_corr_cholesky(1.5); target += R[1, 2] * 0.3 + sum(Lc); a ~ normal(0, 1); b ~ normal(1, 2); d ~ normal(0, 1); }",
+    data = list(lo = c(-1, 0, 1)))
+  set.seed(2); u <- rnorm(m$dim) * 2
+  for (jac in c(TRUE, FALSE)) {
+    f <- function(v) bayescomp_log_prob(m, v, jacobian = jac)
+    num <- vapply(seq_along(u), function(i) { e <- replace(numeric(length(u)), i, 1e-6); (f(u + e) - f(u - e)) / 2e-6 }, 0)
+    expect_equal(as.numeric(bayescomp_grad_log_prob(m, u, jacobian = jac)), num, tolerance = 1e-6)
+  }
+  R <- bayescomp_constrain(m, u)$R
+  expect_equal(diag(R), rep(1, 4))
+  expect_true(all(eigen(R)$values > 0))
+})

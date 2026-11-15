@@ -36,6 +36,10 @@ First release.
 * Scalar arithmetic, `row_vector * vector` and matrix product adjoints
   skip generic dispatch and transposes (1.4 to 1.8 times faster gradients
   on small models).
+* Correlation matrix and Cholesky correlation transforms, and lower and
+  upper bounds that are data, run as single nodes with hand written
+  adjoints (a model with a 3 x 3 correlation matrix: 1.9 to 1.1 ms per
+  gradient).
 * Element writes in loops that cannot be vectorized (`mu[n] = r * mu[n - 1]`)
   use linear rather than quadratic memory; multivariate normal densities
   factor a data covariance or precision matrix once.

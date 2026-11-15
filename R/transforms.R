@@ -75,6 +75,18 @@ tf_bounds <- list(
     if (has_lo && has_up) {
       vlo <- val(lo)
       vup <- val(up)
+      if (all(is.finite(vlo)) && all(is.finite(vup)) && !inherits(lo, "bcad") && !inherits(up, "bcad")) {
+        # constant bounds: two nodes instead of a chain of elementwise ones
+        w <- vup - vlo
+        uv <- val(u)
+        sg <- stats::plogis(uv)
+        x <- vlo + w * sg
+        lj <- sum(log(w) - abs(uv) - 2 * log1p(exp(-abs(uv))))
+        if (!inherits(u, "bcad")) return(list(x = x, lj = lj))
+        dx <- w * sg * (1 - sg)
+        return(list(x = ad_node(x, list(u), function(g) list(g * dx)),
+                    lj = ad_node(lj, list(u), function(g) list(g * (1 - 2 * sg)))))
+      }
       if (all(is.finite(vlo)) && all(is.finite(vup))) {
         w <- up - lo
         x <- lo + w * ad_inv_logit(u)
@@ -418,33 +430,42 @@ tf_cholesky_corr <- list(
 # Correlation matrix through column wise canonical partial correlations
 # (Stan's read_corr_L with the Lewandowski, Kurowicka and Joe Jacobian).
 corr_L_from_cpcs <- function(z, K) {
-  entries <- list(1)
-  rows <- 1L
-  cols <- 1L
-  # acc[i]: remaining squared length for row i
-  acc <- vector("list", K)
-  for (i in 2:K) acc[[i]] <- 1
-  pos <- 0L
-  for (j in 1:(K - 1L)) {
-    if (j > 1L) {
-      entries[[length(entries) + 1L]] <- sqrt(acc[[j]])
-      rows <- c(rows, j)
-      cols <- c(cols, j)
+  # each row i is its own recurrence over the partial correlations c_j of
+  # (i, j), j < i: L[i, j] = c_j sqrt(a_j), a_{j+1} = a_j (1 - c_j^2),
+  # L[i, i] = sqrt(a_i), a_1 = 1; one node with the reverse recurrence
+  zv <- as.numeric(val(z))
+  P <- matrix(0L, K, K)
+  P[lower.tri(P)] <- seq_along(zv)
+  L <- matrix(0, K, K)
+  A <- matrix(0, K, K)
+  for (i in seq_len(K)) {
+    a <- 1
+    for (j in seq_len(i - 1L)) {
+      c <- zv[P[i, j]]
+      A[i, j] <- a
+      L[i, j] <- c * sqrt(a)
+      a <- a * (1 - c * c)
     }
-    for (i in (j + 1L):K) {
-      pos <- pos + 1L
-      cpc <- ad_select(z, pos)
-      lij <- if (j == 1L) cpc else cpc * sqrt(acc[[i]])
-      entries[[length(entries) + 1L]] <- lij
-      rows <- c(rows, i)
-      cols <- c(cols, j)
-      acc[[i]] <- acc[[i]] * (1 - cpc * cpc)
-    }
+    A[i, i] <- a
+    L[i, i] <- sqrt(a)
   }
-  entries[[length(entries) + 1L]] <- sqrt(acc[[K]])
-  rows <- c(rows, K)
-  cols <- c(cols, K)
-  assemble_matrix(entries, rows, cols, K)
+  if (!inherits(z, "bcad")) return(L)
+  ad_node(L, list(z), function(g) {
+    g <- matrix(rep_len(as.numeric(g), K * K), K)
+    gz <- numeric(length(zv))
+    for (i in seq_len(K)) {
+      a <- A[i, i]
+      ga <- if (a > 0) g[i, i] * 0.5 / sqrt(a) else 0
+      for (j in rev(seq_len(i - 1L))) {
+        c <- zv[P[i, j]]
+        a <- A[i, j]
+        s <- sqrt(a)
+        gz[P[i, j]] <- g[i, j] * s - 2 * c * a * ga
+        ga <- (if (s > 0) g[i, j] * c * 0.5 / s else 0) + (1 - c * c) * ga
+      }
+    }
+    list(gz)
+  })
 }
 
 tf_corr_matrix <- list(
