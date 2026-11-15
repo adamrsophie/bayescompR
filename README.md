@@ -173,7 +173,7 @@ reference. Machine-readable metadata is in `CITATION.cff`, `codemeta.json`,
 See `CONTRIBUTING.md`. Report bugs and request features in the
 [issue tracker](https://github.com/adamrsophie/bayescompR/issues), and
 security problems as described in `SECURITY.md`. The project follows a
-[Code of Conduct](CODE_OF_CONDUCT.md).
+[Code of Conduct](https://github.com/adamrsophie/bayescompR/blob/main/CODE_OF_CONDUCT.md).
 
 ## License
 
