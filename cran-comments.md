@@ -18,8 +18,8 @@ This is the first submission of bayescompR.
 
 ## Notes for the reviewers
 
-* The package is an independent implementation of a subset of the Stan
-  language in R. It does not call or bundle Stan. The Description states that
+* The package is an independent implementation of the Stan
+  modeling language in R. It does not call or bundle Stan. The Description states that
   it is not affiliated with or endorsed by the Stan Development Team.
 * Statistical validation tests (long Markov chain runs) and the vignette code
   are skipped on CRAN to keep the check time short; they run on our continuous
