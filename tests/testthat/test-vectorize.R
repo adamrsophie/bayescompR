@@ -89,3 +89,24 @@ test_that("fused correlation and bound transforms have exact gradients", {
   expect_equal(diag(R), rep(1, 4))
   expect_true(all(eigen(R)$values > 0))
 })
+
+test_that("loops with lagged indices and parentheses are vectorized exactly", {
+  code <- "data { int N; array[N] real y; int K; } parameters { real mu; real<lower=-1, upper=1> phi; real<lower=0> s; vector[N] z; }
+    model { z[1] ~ normal(mu, s); for (t in 2:N) z[t] ~ normal(mu + phi * (z[t - 1] - mu), s); y ~ normal(z, 1);
+      for (t in (K + 1):N) target += normal_lpdf(z[t] | z[t - K], 10);
+      for (t in 1:(N - 1)) target += normal_lpdf(y[t + 1] | z[t], 5); }"
+  d <- list(N = 30, y = sin(1:30), K = 2L)
+  m1 <- bayescomp_model(code, data = d)
+  old <- options(bayescompR.vectorize = FALSE)
+  m0 <- bayescomp_model(code, data = d)
+  options(old)
+  expect_equal(attr(m1$ir, "vectorized_loops"), 3L)
+  u <- cos(seq_len(m1$dim))
+  expect_equal(bayescomp_log_prob(m1, u), bayescomp_log_prob(m0, u))
+  expect_equal(bayescomp_grad_log_prob(m1, u), bayescomp_grad_log_prob(m0, u))
+  # a recurrence on a variable written in the loop stays a loop
+  rec <- bayescomp_model("parameters { real a; } transformed parameters { vector[5] v; v[1] = a; for (t in 2:5) v[t] = v[t - 1] * 0.5; }
+                          model { a ~ normal(0, 1); }")
+  expect_equal(attr(rec$ir, "vectorized_loops") %||% 0L, 0L)
+  expect_equal(bayescomp_constrain(rec, 1)$v, 0.5^(0:4))
+})

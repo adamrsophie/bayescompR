@@ -88,8 +88,10 @@ attr(loop$ir, "vectorized_loops")
 Each iteration of a loop creates several tape nodes, so a loop over 500
 observations creates thousands per gradient where a vectorized statement
 creates a handful. In compiled Stan the difference is small; in bayescompR
-it is two orders of magnitude. Loops with dependence between iterations
-(`mu[n] = r * mu[n - 1]`), truncation or nested blocks with local
+it is two orders of magnitude. Lagged reads such as `z[t] ~ normal(phi *
+z[t - 1], s)` are vectorized too, since the loop only reads `z`. Loops
+with dependence between iterations, where an iteration reads what an
+earlier one wrote (`mu[n] = r * mu[n - 1]`), truncation or nested blocks with local
 variables are not vectorized; they still run, and element writes in them
 use memory linear in the length of the vector.
 

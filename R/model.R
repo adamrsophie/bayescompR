@@ -131,6 +131,7 @@ expand_includes <- function(lines, paths, seen, file = NA_character_) {
 bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL, backend = "r",
                             allow_fallback = FALSE, functions = list(), include_paths = NULL) {
   src <- read_stan_source(code, file, include_paths)
+  if (is.null(functions)) functions <- list()
   if (!is.list(functions) || (length(functions) && (is.null(names(functions)) || !all(vapply(functions, is.function, TRUE)))))
     stop("'functions' must be a named list of R functions", call. = FALSE)
   ast <- stan_parse(src)

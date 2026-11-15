@@ -40,6 +40,10 @@ First release.
   and up to 300 times on scalar regression loops, with the same density
   and gradient. Loops that do not qualify, or whose rewrite does not check,
   stay loops; `options(bayescompR.vectorize = FALSE)` turns the pass off.
+  Lagged reads of a variable the loop does not write (`z[t] ~ normal(phi *
+  z[t - 1], s)`, as in autoregressive and state space models) also
+  qualify: 27 times faster on a latent AR(1) model.
+* `bayescomp_model(functions = NULL)` is the same as no functions.
 * Scalar arithmetic, `row_vector * vector` and matrix product adjoints
   skip generic dispatch and transposes (1.4 to 1.8 times faster gradients
   on small models).

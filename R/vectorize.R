@@ -20,8 +20,10 @@
 # assignments `v[n] = e`, `v[n] += e` or `v[n] -= e` to a vector `v`, and
 # every expression is built from:
 #   * expressions that do not use the loop variable,
-#   * `x[n]` and `x[idx[n]]` with `x` a vector, row vector or one dimensional
-#     array, `X[n] * b` with `X` a matrix and `b` a vector, and `X[n, k]`,
+#   * `x[n]`, `x[n + c]`, `x[n - c]` (c an integer that does not depend on
+#     the loop) and `x[idx[n]]` with `x` a vector, row vector or one
+#     dimensional array, `X[n] * b` with `X` a matrix and `b` a vector, and
+#     `X[n, k]`,
 #   * arithmetic (`+ - * / ^`, unary minus) on scalars,
 #   * elementwise functions of one scalar (exp, log, inv_logit, ...).
 # A variable assigned in the loop may only be read as `v[n]` in the loop.
@@ -211,6 +213,13 @@ vec_out <- function(r, ctx, arith) {
 vec_expr <- function(a, t, ctx) {
   n <- ctx$n
   if (!vec_mentions(a, n)) return(list(ast = a, dep = FALSE, kind = "scalar"))
+  # the typed program has no parentheses
+  if (identical(a$kind, "paren") && !identical(t$kind, "paren")) {
+    r <- vec_expr(a$a, t, ctx)
+    if (is.null(r) || identical(r$kind, "mat")) return(NULL)
+    a$a <- r$ast
+    return(list(ast = a, dep = r$dep, kind = r$kind))
+  }
   if (!identical(a$kind, t$kind)) return(NULL)
   arith <- function(r) if (r$dep) vec_out(r, ctx, arith = TRUE) else r$ast
   switch(a$kind,
@@ -268,6 +277,13 @@ vec_index <- function(a, t, ctx) {
     if (!identical(ia$kind, "single")) return(NULL)
     e <- ia$e
     if (vec_is_n(e, n)) return(vec_range(ctx))
+    # x[n + c] or x[n - c] with an integer c that does not depend on the loop
+    if (identical(e$kind, "binop") && e$op %in% c("+", "-") && identical(it$e$kind, "binop") && vec_is_n(e$a, n) &&
+        !vec_mentions(e$b, n) && identical(it$e$b$type$base, "int") && (it$e$b$type$nd %||% 0L) == 0L) {
+      sh <- function(x) list(kind = "binop", op = e$op, a = list(kind = "paren", a = x, loc = e$loc),
+                             b = list(kind = "paren", a = e$b, loc = e$loc), loc = e$loc)
+      return(list(kind = "range", lo = sh(ctx$lo), hi = sh(ctx$hi), loc = ctx$loc))
+    }
     if (identical(e$kind, "index") && identical(it$e$kind, "index") && !vec_mentions(e$x, n) &&
         identical(it$e$x$type$base, "int") && (it$e$x$type$nd %||% 0L) == 1L && length(e$idx) == 1L &&
         identical(e$idx[[1L]]$kind, "single") && vec_is_n(e$idx[[1L]]$e, n))

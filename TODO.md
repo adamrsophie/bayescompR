@@ -82,8 +82,13 @@ Compiler
   be derived from the IR.
 * Richer flows (coupling layers) for normalizing flow VI and neural
   posterior estimation.
-* A code generator that emits the reverse sweep as R code instead of
-  interpreting the tape.
+* A code generator for the gradient. Measured on brms epilepsy, eight
+  schools, a regression loop, a latent AR(1) and rstanarm models: a
+  gradient costs 1.0 to 3.6 times a log density evaluation, and the
+  reverse sweep is 10 to 23 percent of it. A generated gradient would cost
+  about two to three evaluations, so neither a generated sweep nor a
+  tapeless gradient is worth its complexity until the forward pass is
+  faster.
 
 ## Known gaps found in review
 
