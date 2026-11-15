@@ -4,17 +4,24 @@
 # its release workflow, one per backend, operating system and architecture.
 # They do not link R: their entry points follow the calling convention of
 # .C(), so this package calls them without compiled code of its own. Each
-# download is checked against its SHA-256 checksum before it is loaded: the
-# one recorded below for the assets of the release this version was tested
-# with, otherwise the one in the release's SHA256SUMS file.
+# download is checked against its SHA-256 checksum, recorded below, before it
+# is loaded; an asset without a recorded checksum is never installed.
 
 native_release <- "v0.1.0"
 native_abi <- 2L
 native_engines <- c(interpreter = 0L, cranelift = 1L, llvm = 2L)
 native_state <- new.env(parent = emptyenv())
 
-# SHA-256 checksums of the release assets
-native_assets <- list()
+# SHA-256 checksums of the assets of release native_release
+native_assets <- c(
+  "bcn-cranelift-darwin-aarch64.so" = "12032e7a97bce718d12749ed291e8e657b17c682585ddf1a448e274054f08733",
+  "bcn-cranelift-darwin-x86_64.so" = "12492e73b1febb5bc747a91dc222902f625f2d9578123642b8add0508f2f8a0c",
+  "bcn-cranelift-linux-aarch64.so" = "daa133f4351e1b64add35b90c261be583cd95baec635a3daea4c00acd12030d1",
+  "bcn-cranelift-linux-x86_64.so" = "57c79d737debabb21840103ee94ac695cc2860a0095720f991bc891bcf2d0b80",
+  "bcn-cranelift-windows-x86_64.dll" = "ac3e6ebb37e64446922f9405066113496e5703d0455408d3e81c6d4ed6815ae1",
+  "bcn-llvm-darwin-aarch64.so" = "d597fec2b8659ded3934505a6fdf25ff03747b93ccbcc6f5f8b66fe79503c7af",
+  "bcn-llvm-linux-x86_64.so" = "976c5d595d254e84464a531d72e36a73141718978f5cb87e123146b0a5c9a15f"
+)
 
 native_root <- function() file.path(tools::R_user_dir("bayescompR", "data"), "backends")
 native_dir <- function() file.path(native_root(), native_release)
@@ -103,7 +110,7 @@ bayescomp_install_backend <- function(backend = c("cranelift", "llvm"), path = N
     if (is.null(native_sha256()))
       stop("downloading a native backend needs R 4.5 or newer (for tools::sha256sum()); build bcn-ffi and pass 'path'", call. = FALSE)
     asset <- native_asset(backend)
-    sums <- native_assets[[asset]] %||% native_release_sums(asset)
+    sums <- if (asset %in% names(native_assets)) native_assets[[asset]]
     if (is.null(sums))
       stop(sprintf("no prebuilt %s backend for %s in release %s of bayescomp-native-rs; build bcn-ffi and pass 'path'",
                    backend, native_platform(), native_release), call. = FALSE)
@@ -147,20 +154,6 @@ native_download <- function(url, dest, quiet = TRUE) {
   on.exit(options(old))
   tryCatch(if (utils::download.file(url, dest, mode = "wb", quiet = quiet) == 0L) TRUE else "download.file() failed",
            error = function(e) conditionMessage(e), warning = function(w) conditionMessage(w))
-}
-
-# the checksums published with the release; NULL when the release has no such
-# asset, an error when the checksums cannot be downloaded
-native_release_sums <- function(asset) {
-  f <- tempfile()
-  on.exit(unlink(f))
-  url <- native_url("SHA256SUMS")
-  ok <- native_download(url, f)
-  if (!isTRUE(ok)) stop(sprintf("could not download %s: %s", url, ok), call. = FALSE)
-  x <- strsplit(trimws(readLines(f, warn = FALSE)), "[[:space:]]+")
-  hit <- Filter(function(l) length(l) == 2L && sub("^\\*", "", l[2L]) == asset, x)
-  if (!length(hit)) return(NULL)
-  hit[[1L]][1L]
 }
 
 #' Remove an installed native backend

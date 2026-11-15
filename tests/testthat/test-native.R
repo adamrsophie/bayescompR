@@ -14,21 +14,24 @@ test_that("a missing native backend gives an informative error", {
   on.exit(if (is.na(old)) Sys.unsetenv("R_USER_DATA_DIR") else Sys.setenv(R_USER_DATA_DIR = old), add = TRUE)
   expect_error(native_load("llvm"), "bayescomp_install_backend")
   expect_error(bayescomp_install_backend("cranelift", path = tempfile()), "does not exist")
-  local_mocked_bindings(native_platform = function() "plan9-mips", native_release_sums = function(asset) NULL)
+  local_mocked_bindings(native_platform = function() "plan9-mips")
   if (is.null(native_sha256())) expect_error(bayescomp_install_backend("cranelift"), "R 4.5")
   else expect_error(bayescomp_install_backend("cranelift"), "no prebuilt cranelift backend for plan9-mips")
 })
 
-test_that("the checksums published with a release are read", {
-  local_mocked_bindings(native_download = function(url, dest, quiet = TRUE) {
-    writeLines(c("abc123  bcn-cranelift-linux-x86_64.so", "def456 *bcn-llvm-linux-x86_64.so"), dest)
-    TRUE
-  })
-  s <- native_release_sums("bcn-llvm-linux-x86_64.so")
-  expect_equal(s, "def456")
-  expect_null(native_release_sums("bcn-llvm-windows-x86_64.dll"))
-  local_mocked_bindings(native_download = function(url, dest, quiet = TRUE) "cannot open URL")
-  expect_error(native_release_sums("bcn-llvm-linux-x86_64.so"), "could not download .*cannot open URL")
+test_that("every release asset has a recorded checksum", {
+  expect_true(all(grepl("^[0-9a-f]{64}$", native_assets)))
+  expect_setequal(names(native_assets), c(
+    paste0("bcn-cranelift-", c("darwin-aarch64", "darwin-x86_64", "linux-aarch64", "linux-x86_64"), ".so"),
+    "bcn-cranelift-windows-x86_64.dll", "bcn-llvm-darwin-aarch64.so", "bcn-llvm-linux-x86_64.so"))
+  local_mocked_bindings(native_download = function(url, dest, quiet = TRUE) { writeBin(charToRaw("tampered"), dest); TRUE },
+                        native_platform = function() "linux-x86_64")
+  skip_if(is.null(native_sha256()))
+  old <- Sys.getenv("R_USER_DATA_DIR", NA)
+  Sys.setenv(R_USER_DATA_DIR = tempfile())
+  on.exit(if (is.na(old)) Sys.unsetenv("R_USER_DATA_DIR") else Sys.setenv(R_USER_DATA_DIR = old), add = TRUE)
+  expect_error(bayescomp_install_backend("cranelift"), "checksum")
+  expect_false(file.exists(native_file("cranelift")))
 })
 
 test_that("installing removes the libraries of other releases", {
