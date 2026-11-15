@@ -171,22 +171,37 @@ simulated from it, and the posterior is sampled. If the sampler is right,
 the rank of the true parameter among the posterior draws is uniform. The
 package tests run this with many replications; here is a small version.
 
+`bayescomp_sbc()` runs the loop: `simulate(i)` returns the true
+parameters and the simulated data, each fit is thinned to `max_rank`
+draws, and the ranks of the true values are tested for uniformity.
+
 ```{r}
 sbc_model <- "
   data { int N; vector[N] y; }
-  parameters { real mu; }
-  model { mu ~ normal(0, 1); y ~ normal(mu, 1); }
+  parameters { real mu; real<lower=0> sigma; }
+  model { mu ~ normal(0, 1); sigma ~ lognormal(0, 0.5); y ~ normal(mu, sigma); }
 "
-set.seed(2)
-ranks <- vapply(1:40, function(r) {
+simulate <- function(i) {
   mu <- rnorm(1)
-  yy <- rnorm(5, mu, 1)
-  f <- bayescomp_sample(bayescomp_model(sbc_model, data = list(N = 5, y = yy)), chains = 1,
-                        iter_warmup = 200, iter_sampling = 99, thin = 1, seed = r, refresh = 0)
-  sum(bayescomp_extract(f, "mu") < mu)
-}, 0)
-hist(ranks, breaks = seq(-0.5, 99.5, length.out = 11), main = "SBC ranks", xlab = "rank")
-stats::chisq.test(table(cut(ranks, seq(-0.5, 99.5, length.out = 6))))$p.value
+  sigma <- rlnorm(1, 0, 0.5)
+  list(parameters = list(mu = mu, sigma = sigma), data = list(N = 5, y = rnorm(5, mu, sigma)))
+}
+sbc <- bayescomp_sbc(sbc_model, simulate, n_sims = 40, max_rank = 49, seed = 2,
+                     chains = 1, iter_warmup = 300, iter_sampling = 490, refresh = 0)
+sbc
+plot(sbc)
+```
+
+A model whose prior does not match the simulator fails, which is how SBC
+finds mistakes in a model as well as in a sampler:
+
+```{r}
+wrong <- function(i) {
+  mu <- rnorm(1, 0, 3) # wider than the prior in the model
+  list(parameters = list(mu = mu, sigma = 1), data = list(N = 5, y = rnorm(5, mu, 1)))
+}
+bayescomp_sbc(sbc_model, wrong, n_sims = 40, max_rank = 49, seed = 2,
+              chains = 1, iter_warmup = 300, iter_sampling = 490, refresh = 0)$summary
 ```
 
 A histogram far from flat (a smile, a frown or a slope) points to a sampler

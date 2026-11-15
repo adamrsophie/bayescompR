@@ -62,15 +62,42 @@ glm <- bayescomp_model("
 data { int N; vector[N] x; vector[N] y; }
 parameters { real a; real b; real<lower=0> s; }
 model { y ~ normal_id_glm(to_matrix(x), a, [b]', s); }", data = d)
-c(loop = time_grad(loop, 10), vectorized = time_grad(vec), glm = time_grad(glm))
+c(loop = time_grad(loop), vectorized = time_grad(vec), glm = time_grad(glm))
 ```
 
-The loop creates thousands of tape nodes per gradient; the vectorized
-statement creates a handful. In compiled Stan the difference is small; in
-bayescompR it is two orders of magnitude.
+The three take about the same time because the compiler vectorizes the
+loop itself. A loop whose iterations only read and write their own element
+(sampling statements on `y[n]`, `target += normal_lpdf(y[n] | ...)`,
+assignments to `mu[n]`, indexing such as `x[n]`, `z[g[n]]`, `X[n] * b`
+and `X[n, k]`) is rewritten into one statement on slices, the rewritten
+program is type checked again, and loops that do not qualify or do not
+check stay as written. The result is the same density and gradient.
+Turning the pass off shows what the loop costs as written:
+
+```{r}
+options(bayescompR.vectorize = FALSE)
+loop_as_written <- bayescomp_model("
+data { int N; vector[N] x; vector[N] y; }
+parameters { real a; real b; real<lower=0> s; }
+model { for (n in 1:N) y[n] ~ normal(a + b * x[n], s); }", data = d)
+options(bayescompR.vectorize = TRUE)
+c(as_written = time_grad(loop_as_written, 10), vectorized_by_compiler = time_grad(loop))
+attr(loop$ir, "vectorized_loops")
+```
+
+Each iteration of a loop creates several tape nodes, so a loop over 500
+observations creates thousands per gradient where a vectorized statement
+creates a handful. In compiled Stan the difference is small; in bayescompR
+it is two orders of magnitude. Loops with dependence between iterations
+(`mu[n] = r * mu[n - 1]`), truncation or nested blocks with local
+variables are not vectorized; they still run, and element writes in them
+use memory linear in the length of the vector.
 
 Guidelines:
 
+* Write vectorized sampling statements and functions where you can; the
+  compiler handles simple loops, but not loops with local variables,
+  conditions or dependence between iterations.
 * Use vectorized sampling statements and functions (`y ~ normal(mu, s)`
   with vector `mu`), not loops over observations.
 * Use the GLM densities (`normal_id_glm`, `bernoulli_logit_glm`,

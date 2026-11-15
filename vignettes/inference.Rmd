@@ -84,6 +84,52 @@ Raise `adapt_delta` (for example to 0.95) when there are divergent
 transitions, and use `metric = "dense_e"` for strongly correlated
 posteriors.
 
+### Controlling a run
+
+`bayescomp_sample()` takes CmdStan's sampler arguments under the same
+names:
+
+| Argument | Meaning |
+|---|---|
+| `chains`, `iter_warmup`, `iter_sampling`, `thin` | number of chains, warmup and kept iterations, thinning |
+| `seed` | one seed for the run; each chain gets its own stream, so results do not depend on `cores` |
+| `cores` | chains in parallel; defaults to `getOption("mc.cores", 1)` |
+| `init` | a radius (uniform on `(-init, init)` on the unconstrained scale, default 2), `0`, a named list, a list of lists (one per chain), a function, JSON file names, or a fit whose draws start the chains |
+| `algorithm` | `"nuts"`, `"hmc"`, `"mala"`, `"metropolis"`, `"slice"`, `"elliptical_slice"` or `"fixed_param"` |
+| `metric`, `inv_metric` | `"diag_e"`, `"dense_e"` or `"unit_e"`; an initial inverse metric, or a `metric_file` |
+| `step_size`, `step_size_jitter`, `max_treedepth`, `int_time` | integrator settings |
+| `adapt_engaged`, `adapt_metric`, `adapt_delta`, `adapt_gamma`, `adapt_kappa`, `adapt_t0` | step size and metric adaptation |
+| `adapt_init_buffer`, `adapt_term_buffer`, `adapt_window` | warmup windows |
+| `save_warmup`, `save_diagnostics` | keep warmup draws; keep momenta and gradients (CmdStan's `diagnostic_file`) |
+| `refresh`, `show_print` | progress every `refresh` iterations (0 for none); output of Stan `print()` |
+| `resume` | continue the chains of an earlier fit |
+
+```{r}
+fit_ctrl <- bayescomp_sample(model, chains = 2, iter_warmup = 300, iter_sampling = 600, thin = 2,
+                             init = list(beta = c(0, 0, 0)), metric = "dense_e", adapt_delta = 0.9,
+                             max_treedepth = 8, save_warmup = TRUE, seed = 2, refresh = 300)
+dim(fit_ctrl$draws)        # 150 warmup and 300 sampling draws per chain are kept
+fit_ctrl$step_size
+fit_ctrl$inv_metric[[1]]
+```
+
+### Interrupting and resuming
+
+Pressing Ctrl-C (Esc in RStudio) while chains run one after another stops
+sampling and returns what is done, with a warning: the chains that
+finished, or the draws of the interrupted chain when none did. The fit has
+`interrupted = TRUE`. `resume` continues every chain of a fit from its last
+draw with its adapted step size and metric, without warmup, so a short run
+can be extended:
+
+```{r}
+more <- bayescomp_sample(model, resume = nuts, iter_sampling = 300, seed = 3, refresh = 0)
+dim(more$draws)
+both <- posterior::bind_draws(posterior::as_draws_array(nuts), posterior::as_draws_array(more),
+                              along = "iteration")
+posterior::summarise_draws(both, "mean", "rhat", "ess_bulk")
+```
+
 ## Static HMC
 
 Fixed integration time `int_time`; the number of leapfrog steps is

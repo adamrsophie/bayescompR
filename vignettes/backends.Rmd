@@ -166,6 +166,16 @@ sampling statements are dropped when `propto` is `TRUE`. Points outside the
 support return `-Inf`; a `reject()` in the program raises a condition of
 class `bayescomp_reject_error`.
 
+`bayescomp_native_inputs(model)` returns what a compiled backend needs:
+the IR as a JSON string, the values of every data and transformed data
+variable (computed by the R implementation and flattened in Stan order)
+as JSON, and the number of unconstrained parameters. A native runtime
+reports errors as strings with a code prefix (`"E_DOMAIN: scale is
+negative"`, `"E_REJECT: ..."`, `"E_FATAL: ..."`, `"E_SHAPE: ..."`), and
+`bayescomp_native_error()` turns them into the condition classes of the R
+backend, so the samplers reject a proposal the same way whichever backend
+raised the error.
+
 ### Capability negotiation
 
 The capabilities are `log_density`, `gradient`, `constrain` (the

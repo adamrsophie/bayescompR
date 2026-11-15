@@ -109,10 +109,48 @@ plot(d[, "x[1]"], d[, "v"], pch = 16, cex = 0.5, col = ifelse(div, "red", "grey5
      xlab = "x[1]", ylab = "v", main = "Centered funnel (divergences in red)")
 ```
 
+Each fit also records where the divergent trajectories failed: element
+`divergences` of the fit has the chain, the iteration and the parameter
+values at the last point of the trajectory before its energy error grew
+too large. These points sit in the neck of the funnel, which is more
+informative than the draws of the divergent iterations, since those are
+taken from the whole trajectory:
+
+```{r}
+head(fit_c$divergences[, c("chain", "iteration", "v", "x[1]")])
+summary(fit_c$divergences$v)
+plot(d[, "x[1]"], d[, "v"], pch = 16, cex = 0.5, col = "grey60", xlab = "x[1]", ylab = "v",
+     main = "Where divergent trajectories failed")
+points(fit_c$divergences[["x[1]"]], fit_c$divergences$v, pch = 16, col = "red")
+```
+
+## Rejected proposals
+
+A proposal is rejected when the log density cannot be evaluated: a
+domain error (a negative scale), a `reject()` statement or a non finite
+value. Stan prints these as informational messages; bayescompR counts
+them by chain and reason, and `bayescomp_diagnose()` lists them. A few
+rejections in early warmup are harmless; many during sampling point to
+missing constraints on parameters.
+
+```{r}
+m_rej <- bayescomp_model("
+parameters { real mu; real s; }
+model { mu ~ normal(0, 1); s ~ normal(1, 0.5); 0.5 ~ normal(mu, s); }")
+fit_rej <- bayescomp_sample(m_rej, chains = 2, iter_warmup = 200, iter_sampling = 200,
+                            seed = 1, refresh = 0)
+fit_rej$rejections
+```
+
+Declaring `real<lower=0> s;` removes them.
+
 ## Approximate methods
 
 R-hat and ESS do not apply to Laplace, ADVI or Pathfinder draws, which are
-independent draws from an approximation. Their reliability is assessed
+independent draws from an approximation, and `bayescomp_diagnose()` says
+so instead of reporting checks that cannot fail. Likewise tree depth is
+checked only for NUTS, and divergences and E-BFMI only for NUTS and static
+HMC. Their reliability is assessed
 differently: Pathfinder reports the Pareto $\hat k$ of its importance
 weights (`fit$pareto_k`, above 0.7 is unreliable), and the `log_p__` and
 `log_g__` columns of Laplace and ADVI fits give the importance ratios for a

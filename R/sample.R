@@ -270,6 +270,12 @@ run_psock <- function(n, cores, f) {
   on.exit(unlink(files), add = TRUE)
   cl <- parallel::makePSOCKcluster(cores)
   on.exit(parallel::stopCluster(cl), add = TRUE)
+  # workers load the installed package; without one (a source checkout, or
+  # while the package itself is being built) run the chains here instead
+  if (!all(unlist(parallel::clusterEvalQ(cl, requireNamespace("bayescompR", quietly = TRUE))))) {
+    message("bayescompR is not installed for the worker processes; running the chains sequentially")
+    return(lapply(seq_len(n), f))
+  }
   out <- parallel::clusterApplyLB(cl, seq_len(n), function(i, chain_fun, files) {
     assign("file", files[i], envir = get(".progress", envir = asNamespace("bayescompR")))
     try(chain_fun(i), silent = TRUE)

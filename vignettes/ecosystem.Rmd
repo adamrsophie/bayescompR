@@ -77,7 +77,7 @@ draws.
 ```{r}
 a <- posterior::as_draws_array(fit)
 bayesplot::mcmc_trace(a, pars = c("alpha", "beta"))
-bayesplot::mcmc_pairs(a, pars = c("alpha", "beta"), np = bayesplot::nuts_params(fit))
+bayesplot::mcmc_scatter(a, pars = c("alpha", "beta"), np = bayesplot::nuts_params(fit))
 bayesplot::mcmc_nuts_energy(bayesplot::nuts_params(fit))
 ```
 
