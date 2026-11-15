@@ -26,7 +26,15 @@
 .ad$n <- 0L
 
 tape_start <- function() {
-  old <- list(tape = .ad$tape, n = .ad$n, gr = .ad$gr, ids = .ad$ids, adj = .ad$adj, cap = .ad$cap)
+  # an environment, not a list: tape_restore() moves the outer lists back and
+  # drops these bindings, so the outer tape is not shared and not copied by
+  # its next node
+  old <- new.env(parent = emptyenv())
+  old$tape <- .ad$tape; old$n <- .ad$n; old$cap <- .ad$cap
+  old$gr <- .ad$gr; .ad$gr <- NULL
+  old$ids <- .ad$ids; .ad$ids <- NULL
+  old$adj <- .ad$adj; .ad$adj <- NULL
+  old$marks <- .ad$marks; .ad$marks <- NULL
   .ad$tape <- TRUE
   .ad$n <- 0L
   .ad$gr <- vector("list", 64L)
@@ -36,7 +44,11 @@ tape_start <- function() {
   old
 }
 tape_restore <- function(old) {
-  .ad$tape <- old$tape; .ad$n <- old$n; .ad$gr <- old$gr; .ad$ids <- old$ids; .ad$adj <- old$adj; .ad$cap <- old$cap
+  .ad$tape <- old$tape; .ad$n <- old$n; .ad$cap <- old$cap
+  .ad$gr <- old$gr; old$gr <- NULL
+  .ad$ids <- old$ids; old$ids <- NULL
+  .ad$adj <- old$adj; old$adj <- NULL
+  .ad$marks <- old$marks
 }
 
 # never call length(.ad$gr): reading the list marks it shared and the next
@@ -102,7 +114,18 @@ ad_backward <- function(out) {
   grl <- .ad$gr
   idl <- .ad$ids
   adj[[out$id]] <- 1
+  # profile blocks on this tape: node ranges whose reverse pass is timed
+  marks <- .ad$marks
+  if (length(marks)) {
+    from <- vapply(marks, `[[`, 0L, "from"); to <- vapply(marks, `[[`, 0L, "to")
+    t_in <- rep(NA_real_, length(marks)); rev_t <- numeric(length(marks))
+  }
   for (i in seq.int(out$id, 1L)) {
+    if (length(marks)) {
+      now <- NULL
+      for (k in which(to == i)) { now <- now %||% proc.time()[["elapsed"]]; t_in[k] <- now }
+      for (k in which(from == i + 1L & !is.na(t_in))) { now <- now %||% proc.time()[["elapsed"]]; rev_t[k] <- rev_t[k] + now - t_in[k]; t_in[k] <- NA }
+    }
     g <- adj[[i]]
     # a zero adjoint contributes nothing; skipping it also keeps 0 * Inf
     # partials (a log at a boundary) from turning the gradient into NaN
@@ -136,6 +159,11 @@ ad_backward <- function(out) {
     }
   }
   .ad$adj <- adj
+  if (length(marks)) {
+    now <- proc.time()[["elapsed"]]
+    for (k in which(!is.na(t_in))) rev_t[k] <- rev_t[k] + now - t_in[k]
+    for (k in seq_along(marks)) profile_add_reverse(marks[[k]]$name, rev_t[k])
+  }
   invisible(NULL)
 }
 

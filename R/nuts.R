@@ -11,14 +11,26 @@
 
 hmc_potential <- function(model, print = FALSE) {
   lpg <- model_lpg(model, jacobian = TRUE, propto = TRUE, print = print)
-  function(q) {
+  # rejected proposals counted by reason (CmdStan prints each one);
+  # attr(pot, "rejections")() returns them
+  rej <- new.env(parent = emptyenv())
+  note <- function(msg) assign(msg, (rej[[msg]] %||% 0L) + 1L, envir = rej)
+  pot <- function(q) {
     r <- tryCatch(lpg(q), bayescomp_fatal_error = function(e) stop(e),
-       bayescomp_domain_error = function(e) NULL,
-       bayescomp_reject_error = function(e) NULL)
-    if (is.null(r) || !is.finite(r$value) || any(!is.finite(r$grad)))
+       bayescomp_domain_error = function(e) { note(conditionMessage(e)); NULL },
+       bayescomp_reject_error = function(e) { note(conditionMessage(e)); NULL })
+    if (is.null(r)) return(list(V = Inf, g = rep(0, length(q))))
+    if (!is.finite(r$value) || any(!is.finite(r$grad))) {
+      note(if (!is.finite(r$value)) "the log density is not finite" else "the gradient is not finite")
       return(list(V = Inf, g = rep(0, length(q))))
+    }
     list(V = -r$value, g = -r$grad)
   }
+  attr(pot, "rejections") <- function() {
+    nm <- ls(rej, all.names = TRUE)
+    stats::setNames(vapply(nm, function(n) rej[[n]], 0L), nm)
+  }
+  pot
 }
 
 # ---- metrics --------------------------------------------------------------------
@@ -364,6 +376,7 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   if (nw == 0L) t_warm <- 0
   t_total <- proc.time()[["elapsed"]] - t_start
   list(q = qs, diag = diag_out, step_size = st$eps, inv_metric = st$metric$inv,
+       rejections = if (is.function(attr(pot, "rejections"))) attr(pot, "rejections")(),
        n_warmup_saved = sum(thin_idx <= nw), time = c(warmup = t_warm, sampling = t_total - t_warm),
        diagnostics = if (keep_pg) list(p = dp, g = dg))
 }

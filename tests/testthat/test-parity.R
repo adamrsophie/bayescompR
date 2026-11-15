@@ -170,3 +170,52 @@ test_that("refresh reports progress without changing the results", {
   expect_identical(l$draws, bayescomp_laplace(m, draws = 4, seed = 1)$draws)
   expect_silent(bayescomp_laplace(m, draws = 4, seed = 1))
 })
+
+test_that("propto keeps density terms of parameter dependent values", {
+  d <- function(code, a, b) {
+    m <- bayescomp_model(code)
+    f <- function(u) bayescomp_log_prob(m, u) - bayescomp_log_prob(m, u, propto = TRUE)
+    f(a) - f(b)
+  }
+  expect_equal(d("parameters { real x; } model { 0 ~ normal(floor(x), 1); }", 0.2, 1.2), 0)
+  expect_equal(d("parameters { real x; } model { real z = 0; if (x > 0) z = 1; 0 ~ normal(z, 1); }", -1, 1), 0)
+  expect_equal(d("parameters { real x; } model { target += normal_lupdf(0 | floor(x), 1); }", 0.2, 1.2), 0)
+})
+
+test_that("integer division binds and warns as in stanc", {
+  code <- "transformed data { int a = 8 * 3 %/% 2; int h = 8 * 3 %/% 2 * 5; int n = 7; int b = n / 2; }"
+  expect_warning(bayescomp_model(code), "Found int division")
+  m <- suppressWarnings(bayescomp_model(code))
+  expect_equal(c(get("V.a", m$env), get("V.h", m$env), get("V.b", m$env)), c(8L, 40L, 3L))
+  expect_match(bayescomp_pedantic("transformed data { int a = 1 / 2; }")$message, "Found int division: 1 / 2")
+  expect_error(bayescomp_sample(bayescomp_model("parameters { real x; } model { x ~ std_normal(); }"), iter_warmup = Inf),
+               "must be an integer")
+})
+
+test_that("profiles time the reverse pass and cannot nest under one name", {
+  m <- bayescomp_model('parameters { vector[50] mu; } model { profile("lp") { for (n in 1:50) target += -0.5 * mu[n]^2; } }')
+  profile_reset()
+  bayescomp_grad_log_prob(m, rep(0.1, 50))
+  p <- profile_table()
+  expect_gt(p$chain_stack, 0)
+  expect_true(p$reverse_time >= 0)
+  expect_error(bayescomp_model('transformed data { real s = 0; profile("p") { profile("p") { s += 1; } } }'), "already started")
+  profile_reset()
+})
+
+test_that("rejections are counted by reason", {
+  m <- bayescomp_model('parameters { real x; } model { if (x > 1.5) reject("too big"); x ~ normal(0, 1); }')
+  f <- bayescomp_sample(m, chains = 1, iter_warmup = 100, iter_sampling = 100, seed = 1, refresh = 0)
+  expect_match(f$rejections$reason, "too big")
+  expect_gt(sum(f$rejections$count), 0)
+  expect_equal(bayescomp_diagnose(f, quiet = TRUE)$rejections, f$rejections)
+})
+
+test_that("a nested tape leaves the outer tape intact", {
+  m <- bayescomp_model("functions { vector f(vector y, real k) { return y - k; } }
+    parameters { real<lower=0> k; } model { vector[1] s = solve_newton(f, [1]', k); target += -0.5 * square(s[1] - 2); }")
+  g <- bayescomp_grad_log_prob(m, log(2))
+  h <- 1e-6
+  fd <- (bayescomp_log_prob(m, log(2) + h) - bayescomp_log_prob(m, log(2) - h)) / (2 * h)
+  expect_equal(as.vector(g), fd, tolerance = 1e-5)
+})

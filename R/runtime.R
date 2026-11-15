@@ -366,23 +366,53 @@ rt_truncate <- function(ctx, y, lo, hi, lcdf, lccdf, args, discrete, fam) {
 # split by whether automatic differentiation was active (CmdStan's
 # autodiff_calls and no_autodiff_calls)
 .prof <- new.env(parent = emptyenv())
-rt_profile_start <- function() proc.time()[["elapsed"]]
+.prof_active <- new.env(parent = emptyenv())
+prof_new <- function() c(total = 0, ad_time = 0, reverse = 0, chain_stack = 0, autodiff_calls = 0, no_autodiff_calls = 0)
+rt_profile_start <- function(name) {
+  # as Stan Math, a profile cannot be entered again while it is running
+  if (isTRUE(.prof_active[[name]])) stop_domain(sprintf("Profile '%s' already started!", name))
+  assign(name, TRUE, envir = .prof_active)
+  c(t = proc.time()[["elapsed"]], n = .ad$n)
+}
 rt_profile_end <- function(name, t0) {
-  dt <- proc.time()[["elapsed"]] - t0
-  r <- .prof[[name]] %||% c(total = 0, ad_time = 0, autodiff_calls = 0, no_autodiff_calls = 0)
+  assign(name, FALSE, envir = .prof_active)
+  dt <- proc.time()[["elapsed"]] - t0[["t"]]
+  r <- .prof[[name]] %||% prof_new()
   ad <- !is.null(.ad$tape)
   r[["total"]] <- r[["total"]] + dt
-  if (ad) { r[["ad_time"]] <- r[["ad_time"]] + dt; r[["autodiff_calls"]] <- r[["autodiff_calls"]] + 1 }
-  else r[["no_autodiff_calls"]] <- r[["no_autodiff_calls"]] + 1
+  if (ad) {
+    r[["ad_time"]] <- r[["ad_time"]] + dt; r[["autodiff_calls"]] <- r[["autodiff_calls"]] + 1
+    # nodes made in the block (Stan's chain_stack); their reverse pass is
+    # timed by ad_backward()
+    k <- .ad$n - t0[["n"]]
+    r[["chain_stack"]] <- r[["chain_stack"]] + k
+    if (k > 0L) .ad$marks[[length(.ad$marks) + 1L]] <- list(name = name, from = as.integer(t0[["n"]]) + 1L, to = .ad$n)
+  } else r[["no_autodiff_calls"]] <- r[["no_autodiff_calls"]] + 1
   assign(name, r, envir = .prof)
   invisible()
 }
-profile_reset <- function() rm(list = ls(.prof, all.names = TRUE), envir = .prof)
+profile_add_reverse <- function(name, dt) {
+  r <- .prof[[name]] %||% prof_new()
+  r[["reverse"]] <- r[["reverse"]] + dt
+  r[["total"]] <- r[["total"]] + dt
+  assign(name, r, envir = .prof)
+}
+profile_reset <- function() {
+  rm(list = ls(.prof, all.names = TRUE), envir = .prof)
+  rm(list = ls(.prof_active, all.names = TRUE), envir = .prof_active)
+}
 profile_table <- function() {
   nm <- sort(ls(.prof, all.names = TRUE))
   if (!length(nm)) return(NULL)
   v <- do.call(rbind, lapply(nm, function(n) .prof[[n]]))
-  data.frame(name = nm, thread_id = 1L, total_time = signif(v[, "total"], 6), forward_time = signif(v[, "ad_time"], 6), reverse_time = 0,
-             chain_stack = 0L, no_chain_stack = 0L, autodiff_calls = as.integer(v[, "autodiff_calls"]),
+  data.frame(name = nm, thread_id = 1L, total_time = signif(v[, "total"], 6), forward_time = signif(v[, "ad_time"], 6),
+             reverse_time = signif(v[, "reverse"], 6), chain_stack = as.integer(v[, "chain_stack"]), no_chain_stack = 0L, autodiff_calls = as.integer(v[, "autodiff_calls"]),
              no_autodiff_calls = as.integer(v[, "no_autodiff_calls"]), row.names = NULL)
+}
+
+# a parameter dependent value that lost its derivative node (floor(), an
+# assigned constant) as a constant node, so propto keeps its density terms
+rt_keep <- function(x) {
+  if (inherits(x, "bcad") || !is.numeric(x) || is.null(.ad$tape)) return(x)
+  ad_leaf(x)
 }

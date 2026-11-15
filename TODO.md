@@ -83,17 +83,11 @@ Diagnostics
   gradients, transforms and generated quantities; extend the compatibility
   matrix to individual signatures.
 * Native backend ABI for transforms, generated quantities and RNG.
-* Missing cumulative functions such as `bernoulli_lccdf` and the skew
-  normal family.
 
 ## Language features not yet supported
 
-Complex numbers, tuples, ODE and DAE solvers, algebraic solvers, 1D
-integrators, HMM functions, the embedded Laplace functions, `map_rect` and
-`reduce_sum`, sparse CSR functions, FFT, SVD and general eigendecomposition,
-and the Wiener, Gaussian DLM, multi GP and beta negative binomial
-distributions. Programs that use them fail at checking with
-`bayescomp_unsupported_error`.
+None: every Stan 2.40 language feature and library function is supported.
+See `bayescomp_compatibility()` for the feature matrix.
 
 ## Developer bibliography
 

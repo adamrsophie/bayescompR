@@ -529,9 +529,9 @@ binary_prec <- c(
   "||" = 1L, "&&" = 2L, "==" = 3L, "!=" = 3L,
   "<" = 4L, "<=" = 4L, ">" = 4L, ">=" = 4L,
   "+" = 5L, "-" = 5L,
-  # as in stanc3: .* and ./ share the level of * and /, and \ binds tighter
-  "*" = 6L, "/" = 6L, "%" = 6L, "%/%" = 6L, ".*" = 6L, "./" = 6L,
-  "\\" = 7L
+  # as in stanc3: .* and ./ share the level of * and /; \ and %/% bind tighter
+  "*" = 6L, "/" = 6L, "%" = 6L, ".*" = 6L, "./" = 6L,
+  "\\" = 7L, "%/%" = 7L
 )
 
 parse_expr <- function(p, no_gt = FALSE) {

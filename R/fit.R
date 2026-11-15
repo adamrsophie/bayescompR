@@ -23,8 +23,18 @@ make_fit <- function(model, res, cfg, method, seed, elapsed) {
     time = list(chains = do.call(rbind, lapply(res, `[[`, "time")), total = elapsed),
     config = cfg, seed = if (is.null(seed)) attr(res, "seed") else seed,
     diagnostics = if (!is.null(res[[1L]]$diagnostics)) lapply(res, `[[`, "diagnostics"),
-    profile = profile_of(res)),
+    profile = profile_of(res), rejections = rejections_of(res)),
     class = c("bayescomp_fit"))
+}
+
+# rejected proposals by chain and reason
+rejections_of <- function(res) {
+  p <- lapply(seq_along(res), function(i) {
+    r <- res[[i]]$rejections
+    if (length(r)) data.frame(chain = i, reason = names(r), count = as.integer(r), stringsAsFactors = FALSE)
+  })
+  p <- Filter(Negate(is.null), p)
+  if (length(p)) do.call(rbind, p) else NULL
 }
 
 # methods whose draws are Markov chains, for which R-hat and ESS apply
@@ -201,9 +211,11 @@ print.bayescomp_fit <- function(x, variables = NULL, max_rows = 10L, ...) {
 #'   Stan CSV files (for example from CmdStan).
 #' @param quiet Do not print the report.
 #' @return A list with `num_divergent`, `num_max_treedepth`, `ebfmi` (per
-#'   chain), `ebfmi_all`, `low_ess` and `high_rhat` (parameter names), and
-#'   `problems`
-#'   (`TRUE` when any check failed), invisibly.
+#'   chain), `ebfmi_all`, `low_ess` and `high_rhat` (parameter names),
+#'   `rejections` (proposals rejected by a domain error, `reject()` or a
+#'   non finite density, by chain and reason; for fits from
+#'   [bayescomp_sample()]) and `problems` (`TRUE` when any check failed),
+#'   invisibly. Rejections are reported but are not problems by themselves.
 #' @examples
 #' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
 #' fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
@@ -236,9 +248,11 @@ bayescomp_diagnose <- function(fit, quiet = FALSE) {
     if (isTRUE(d[["rhat"]] > 1.01)) high <- c(high, v)
   }
   bad_e <- isTRUE(ebfmi_all < 0.3)
+  # the pooled value is CmdStan's; one chain can be low while the pool is not
+  bad_chain <- which(ebfmi < 0.3)
   r <- list(num_divergent = as.integer(div), num_max_treedepth = as.integer(hit), ebfmi = ebfmi, ebfmi_all = ebfmi_all,
-            low_ess = low, high_rhat = high,
-            problems = div > 0 || hit > 0 || bad_e || length(low) > 0 || length(high) > 0)
+            low_ess = low, high_rhat = high, rejections = if (inherits(fit, "bayescomp_fit")) fit$rejections,
+            problems = div > 0 || hit > 0 || bad_e || length(bad_chain) > 0 || length(low) > 0 || length(high) > 0)
   if (!quiet) {
     pct <- function(k) sprintf("%d of %d (%s%%)", as.integer(k), as.integer(nt), format(100 * k / nt, digits = 6))
     cat("Checking sampler transitions treedepth.\n")
@@ -250,11 +264,20 @@ bayescomp_diagnose <- function(fit, quiet = FALSE) {
     cat("Checking E-BFMI - sampler transitions HMC potential energy.\n")
     if (bad_e) {
       cat(sprintf("The E-BFMI, %s, is below the nominal threshold of 0.3 which suggests that HMC may have trouble exploring the target distribution.\nIf possible, try to reparameterize the model.\n\n", format(ebfmi_all, digits = 6)))
+    } else if (length(bad_chain)) {
+      cat(sprintf("The E-BFMI of chain %s is below the nominal threshold of 0.3 which suggests that HMC may have trouble exploring the target distribution.\nIf possible, try to reparameterize the model.\n\n",
+                  paste(sprintf("%d (%s)", bad_chain, format(ebfmi[bad_chain], digits = 6)), collapse = ", ")))
     } else cat("E-BFMI satisfactory.\n\n")
     if (length(low)) cat(sprintf("The following parameters had fewer than 0.001 effective draws per transition:\n  %s\nSuch low values indicate that the effective sample size estimators may be biased high and actual performance may be substantially lower than quoted.\n\n", paste(low, collapse = ", ")))
     else cat("Rank-normalized split effective sample size satisfactory for all parameters.\n\n")
     if (length(high)) cat(sprintf("The following parameters had rank-normalized split R-hat greater than 1.01:\n  %s\nSuch high values indicate incomplete mixing and biased estimation.\nYou should consider regularizing your model with additional prior information or a more effective parameterization.\n\n", paste(high, collapse = ", ")))
     else cat("Rank-normalized split R-hat values satisfactory for all parameters.\n\n")
+    if (length(r$rejections)) {
+      agg <- stats::aggregate(count ~ reason, r$rejections, sum)
+      cat("Rejected proposals (the sampler moved away from these points):\n")
+      cat(sprintf("  %d x %s\n", agg$count, agg$reason), sep = "")
+      cat("\n")
+    }
     cat(if (r$problems) "Processing complete.\n" else "Processing complete, no problems detected.\n")
   }
   invisible(r)

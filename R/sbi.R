@@ -130,6 +130,7 @@ bayescomp_npe <- function(model, simulator, observed, num_simulations = 2000L, c
     xm <- colMeans(X); xs <- pmax(apply(X, 2L, stats::sd), 1e-12)
     um <- colMeans(Uk); us <- pmax(apply(Uk, 2L, stats::sd), 1e-12)
     Xs <- sweep(sweep(X, 2L, xm), 2L, xs, "/"); Ts <- sweep(sweep(Uk, 2L, um), 2L, us, "/")
+    if (nrow(Xs) < 2L) stop("fewer than two simulations are finite; check the simulator", call. = FALSE)
     nv <- max(1L, floor(0.1 * nrow(Xs)))
     vi <- sample.int(nrow(Xs), nv); tr <- setdiff(seq_len(nrow(Xs)), vi)
     w <- mdn_init(ncol(Xs), n, K, h)
@@ -137,7 +138,7 @@ bayescomp_npe <- function(model, simulator, observed, num_simulations = 2000L, c
     best <- w; best_v <- -Inf; patience <- 0L; step <- 0L
     trace <- matrix(NA_real_, 0, 2, dimnames = list(NULL, c("train", "validation")))
     for (ep in seq_len(epochs)) {
-      ord <- sample(tr)
+      ord <- tr[sample.int(length(tr))]
       bs <- split(ord, ceiling(seq_along(ord) / batch_size))
       tl <- 0
       for (b in bs) {

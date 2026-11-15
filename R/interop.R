@@ -93,7 +93,12 @@ log_posterior.bayescomp_fit <- function(object, ...) {
 loo.bayescomp_fit <- function(x, variable = "log_lik", r_eff = TRUE, ...) {
   a <- unclass(fit_draws(x, variable))
   if (!dim(a)[3L]) stop(sprintf("the fit has no variable '%s'", variable), call. = FALSE)
-  if (isTRUE(r_eff)) r_eff <- loo::relative_eff(exp(a))
+  if (isTRUE(r_eff)) {
+    # relative efficiency does not change when each observation's likelihood
+    # is rescaled, so shift by its maximum to avoid underflow
+    mx <- apply(a, 3L, function(z) { z <- z[is.finite(z)]; if (length(z)) max(z) else 0 })
+    r_eff <- loo::relative_eff(exp(sweep(a, 3L, mx)))
+  }
   else if (isFALSE(r_eff)) r_eff <- NULL
   loo::loo(a, r_eff = r_eff, ...)
 }

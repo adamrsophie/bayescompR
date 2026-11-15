@@ -24,9 +24,9 @@
 #'   `save_diagnostics = TRUE` also get `<file>_diagnostic.csv` (CmdStan's
 #'   `diagnostic_file`). Programs with `profile` blocks also get
 #'   `<file>_profile.csv` (CmdStan's `profile_file`) from element `profile`
-#'   of the fit. Profile times are measured while the block runs; the
-#'   reverse pass of the gradient is not attributed to blocks, so
-#'   `reverse_time`, `chain_stack` and `no_chain_stack` are 0.
+#'   of the fit. `forward_time` is measured while the block runs and
+#'   `reverse_time` while the gradient passes back through the nodes it
+#'   made; `chain_stack` counts those nodes and `no_chain_stack` is 0.
 #' @param save_config Also write the run configuration as
 #'   `<basename>_config.json` (CmdStan's `save_cmdstan_config`).
 #' @param sig_figs Significant digits of the values (CmdStan's default is

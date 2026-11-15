@@ -25,7 +25,27 @@
 #' @export
 bayescomp_pedantic <- function(x, include_paths = NULL) {
   ir <- ped_ir(x, include_paths)
-  ped_result(c(ped_checks(ir), ped_uninit(ir)))
+  ped_result(c(ped_int_division(ir), ped_checks(ir), ped_uninit(ir)))
+}
+
+# stanc warns on every division of two integers, also outside pedantic mode
+ped_int_division <- function(ir) {
+  st <- new.env(parent = emptyenv())
+  st$comments <- list(); st$width <- 1000L; st$parens <- FALSE; st$braces <- FALSE
+  out <- list()
+  walk <- function(n) {
+    if (!is.list(n) || is.function(n)) return()
+    if (identical(n$kind, "binop") && identical(n$op, "/") && identical(n$a$type$base, "int") && identical(n$b$type$base, "int")) {
+      ex <- fmt_e(n, st)
+      alt <- paste0(fmt_e(n$a, st), ".0 / ", fmt_e(n$b, st))
+      if (!identical(n$a$kind, "int")) alt <- paste0("1.0 * ", ex)
+      out[[length(out) + 1L]] <<- pw(n$loc, sprintf(paste0("Found int division: %s. Values will be rounded towards zero. ",
+        "If rounding is not desired you can write the division as %s. If rounding is intended please use the integer division operator %%/%%."), ex, alt))
+    }
+    for (v in n) if (is.list(v) && !is.function(v)) walk(v)
+  }
+  walk(ir$blocks)
+  out
 }
 
 #' @rdname bayescomp_pedantic

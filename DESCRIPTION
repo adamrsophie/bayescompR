@@ -1,5 +1,5 @@
 Package: bayescompR
-Title: Pure R Implementation of the 'Stan' Probabilistic Programming Language
+Title: Pure R Implementation of the 'Stan' Modeling Language
 Version: 0.1.0
 Authors@R:
     c(person("Adam R", "Sophie", email = "adamrsophie@gmail.com",

@@ -215,6 +215,16 @@ gradients. Singular vectors and eigenvectors are unique only up to sign
 eigenvector functions can differ from CmdStan by column signs; their
 gradients assume distinct singular values or eigenvalues, as in Stan Math.
 
+## Integers
+
+Integers are R integers: 32 bits, from -2147483647 to 2147483647. R has
+no representation for -2147483648, the smallest 32 bit integer, and
+arithmetic that overflows is a domain error rather than wrapping around as
+it does in compiled Stan (where overflow is undefined behavior). Integer
+division by zero is also a domain error. Dividing two integers with `/`
+rounds toward zero, as in Stan, and gives stanc's "Found int division"
+warning; use `%/%` to say the rounding is intended.
+
 ## Drift diffusion models
 
 `wiener_lpdf()` has Stan's four, five (with drift variability `sv`) and

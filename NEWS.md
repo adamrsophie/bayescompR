@@ -163,6 +163,16 @@ First release.
   comma of a one element tuple and prints empty blocks as stanc does;
   `bayescomp_info()` lists `print`, `reject` and operators called by name.
 * `bayescomp_write_csv()` needs an explicit `dir`.
+* `%/%` binds tighter than `*`, as in stanc; dividing two integers with `/`
+  gives stanc's "Found int division" warning, also in `bayescomp_pedantic()`.
+* Under `propto`, densities keep the terms of parameter dependent arguments
+  that are plain numbers (after `floor()` or an assigned constant), as Stan does.
+* Profiles record the reverse pass time and node count, and a profile cannot
+  start again under a name that is still running. Sampling fits record
+  rejected proposals by reason (`fit$rejections`), which `bayescomp_diagnose()`
+  reports; it also checks E-BFMI per chain.
+* LOO relative efficiencies no longer underflow; non finite counts are
+  rejected; a nested tape no longer copies the outer tape.
 * `matrix_normal_prec` is removed, as stanc 2.40 rejects it.
 * `bayescomp_compatibility()` returns the machine readable feature matrix
   (implemented, partial, not implemented, not applicable) with the test

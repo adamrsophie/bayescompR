@@ -180,7 +180,7 @@ cg_call <- function(e) {
   if (grepl("_(lupdf|lupmf)$", e$name)) {
     full <- lib_impl(sub("_lup", "_lp", e$name), types)
     return(cl(as.name("if"), cl(as.name("isTRUE"), cl(as.name("$"), CTX, as.name("propto"))),
-              cg_size_guard(e$name, sg, types, cl_list(sg$impl, unname(args))),
+              cg_size_guard(e$name, sg, types, cl_list(sg$impl, cg_keep_args(unname(args), e$args))),
               cg_size_guard(e$name, sg, types, cl_list(full, unname(args)))))
   }
   # library functions that touch the target (the _jacobian transforms)
@@ -274,7 +274,25 @@ cg_print_items <- function(items) {
     else cg_expr(it)))
 }
 
+# block being generated, read by cg_call() for _lupdf calls
+.cg <- new.env(parent = emptyenv())
+
+# Under propto Stan keeps a density term when an argument is an autodiff
+# variable, which in the model block is every real valued expression that is
+# not data only, also after floor() or an assignment of a constant. Such
+# arguments are wrapped so the density sees them as differentiable.
+cg_keep_args <- function(codes, exprs) {
+  if (!identical(.cg$block, "model")) return(codes)
+  Map(function(code, e) {
+    t <- e$type
+    if (isTRUE(e$data_only) || identical(t$base, "int") || is.null(t$base)) code else cl(rt_keep, code)
+  }, codes, exprs)
+}
+
 cg_stmt <- function(st, ctx) {
+  old <- .cg$block
+  .cg$block <- ctx$block
+  on.exit(.cg$block <- old)
   switch(st$kind,
     empty = list(),
     decl = if (identical(st$type$base, "tuple")) {
@@ -308,12 +326,11 @@ cg_stmt <- function(st, ctx) {
     block_stmt = {
       body <- cg_stmts(st$body, ctx)
       if (!is.null(st$profile)) {
-        # profile("name") { }: time each execution (an early return or break
-        # skips the record)
+        # profile("name") { }: time each execution
         tv <- as.name(sprintf(".prof_%d", prof_counter()))
         # the record is written however the block is left (return, break,
         # continue or an error): tryCatch evaluates the body in this frame
-        body <- list(cl(as.name("<-"), tv, cl(rt_profile_start)),
+        body <- list(cl(as.name("<-"), tv, cl(rt_profile_start, st$profile)),
                      cl(quote(tryCatch), blk(body), finally = cl(rt_profile_end, st$profile, tv)))
       }
       list(blk(body))
@@ -357,8 +374,9 @@ cg_stmt <- function(st, ctx) {
       } else {
         types <- c(list(st$lhs$type), lapply(st$args, `[[`, "type"))
         full <- lib_impl(sub("_lup", "_lp", st$fname), types)
+        kept <- cg_keep_args(c(list(lhs), unname(args)), c(list(st$lhs), st$args))
         cl(as.name("if"), cl(as.name("isTRUE"), cl(as.name("$"), CTX, as.name("propto"))),
-           cg_size_guard(st$fname, sg, types, cl_list(sg$impl, c(list(lhs), unname(args)))),
+           cg_size_guard(st$fname, sg, types, cl_list(sg$impl, kept)),
            cg_size_guard(st$fname, sg, types, cl_list(full, c(list(lhs), unname(args)))))
       }
       out <- list(cl(rt_target_add, CTX, call))

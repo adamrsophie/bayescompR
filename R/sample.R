@@ -143,7 +143,7 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
 }
 
 as_count <- function(x, name, min = 0L) {
-  if (!is.numeric(x) || length(x) != 1L || is.na(x) || x < min || x != round(x))
+  if (!is.numeric(x) || length(x) != 1L || !is.finite(x) || x < min || x != round(x) || x > .Machine$integer.max)
     stop(sprintf("'%s' must be an integer >= %d", name, min), call. = FALSE)
   as.integer(x)
 }

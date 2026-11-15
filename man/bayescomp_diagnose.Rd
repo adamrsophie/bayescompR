@@ -14,9 +14,11 @@ Stan CSV files (for example from CmdStan).}
 }
 \value{
 A list with \code{num_divergent}, \code{num_max_treedepth}, \code{ebfmi} (per
-chain), \code{ebfmi_all}, \code{low_ess} and \code{high_rhat} (parameter names), and
-\code{problems}
-(\code{TRUE} when any check failed), invisibly.
+chain), \code{ebfmi_all}, \code{low_ess} and \code{high_rhat} (parameter names),
+\code{rejections} (proposals rejected by a domain error, \code{reject()} or a
+non finite density, by chain and reason; for fits from
+\code{\link[=bayescomp_sample]{bayescomp_sample()}}) and \code{problems} (\code{TRUE} when any check failed),
+invisibly. Rejections are reported but are not problems by themselves.
 }
 \description{
 Checks what CmdStan's \code{diagnose} utility checks: transitions that

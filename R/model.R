@@ -134,6 +134,8 @@ bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL
   if (!is.list(functions) || (length(functions) && (is.null(names(functions)) || !all(vapply(functions, is.function, TRUE)))))
     stop("'functions' must be a named list of R functions", call. = FALSE)
   ir <- stan_check(stan_parse(src), external = names(functions))
+  for (w in ped_int_division(ir))
+    warning(sprintf("line %s, column %s: %s", w$loc$line %||% "?", w$loc$col %||% "?", w$msg), call. = FALSE)
   if (is.null(data)) data <- list()
   data <- data_arg(data)
   if (!is.list(data)) stop("'data' must be a named list or the name of a JSON or R dump file", call. = FALSE)
