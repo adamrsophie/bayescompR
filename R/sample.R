@@ -284,6 +284,11 @@ run_psock <- function(n, cores, f) {
   out
 }
 
+force_frame <- function(env) {
+  for (nm in ls(env, all.names = TRUE)) tryCatch(get(nm, envir = env), error = function(e) NULL)
+  invisible()
+}
+
 bind_chain_id <- function(model, id) {
   if (identical(model$env$V.CHAIN_ID, as.integer(id))) return(invisible())
   d <- model$data
@@ -332,6 +337,10 @@ run_chains <- function(model, chains, seed, cores, f) {
     r
   }
   if (cores > 1L && chains > 1L) {
+    # unevaluated arguments of the caller (such as init = fit) would be
+    # evaluated in a worker's global environment, where their names mean
+    # something else or nothing: evaluate them before f is serialized
+    if (parallel_backend() == "psock") force_frame(environment(f))
     out <- if (parallel_backend() == "fork") run_forked(chains, min(cores, chains), one)
            else run_psock(chains, min(cores, chains), one)
     bad <- vapply(out, inherits, TRUE, what = "try-error")

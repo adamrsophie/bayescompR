@@ -11,7 +11,9 @@ First release.
 * The `wiener` distribution with four, five and seven parameters and its
   defective distribution functions.
 * Parallel chains on a socket cluster (Windows) run sequentially, with a
-  message, when the worker processes cannot load an installed bayescompR.
+  message, when the worker processes cannot load an installed bayescompR,
+  and see arguments such as `init = fit` correctly (they were evaluated in
+  the worker, where `pf` meant `stats::pf()`).
 * `bayescomp_diagnose()` runs only the checks that apply: tree depth for
   NUTS, divergences and E-BFMI for NUTS and static HMC, and Pareto k for
   approximate methods (it failed on Pathfinder and Laplace fits).

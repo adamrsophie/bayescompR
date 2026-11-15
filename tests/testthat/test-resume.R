@@ -44,3 +44,17 @@ test_that("divergence locations are stored with the chain and iteration", {
   for (k in seq_len(nrow(d))) expect_equal(unname(fit$sampler_diagnostics[d$iteration[k], d$chain[k], "divergent__"]), 1)
   expect_true(all(d$tau > 0))
 })
+
+test_that("socket cluster chains see the caller's arguments and match forked chains", {
+  skip_on_cran()
+  m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+  pf <- bayescomp_pathfinder(m, seed = 1, refresh = 0)
+  old <- options(bayescompR.parallel = "psock")
+  on.exit(options(old))
+  # without an installed package the chains run sequentially, with the same draws
+  a <- suppressMessages(bayescomp_sample(m, chains = 2, cores = 2, iter_warmup = 50, iter_sampling = 50,
+                                         init = pf, seed = 1, refresh = 0))
+  options(bayescompR.parallel = NULL)
+  b <- bayescomp_sample(m, chains = 2, cores = 1, iter_warmup = 50, iter_sampling = 50, init = pf, seed = 1, refresh = 0)
+  expect_identical(a$draws, b$draws)
+})
