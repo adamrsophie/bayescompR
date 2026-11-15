@@ -73,7 +73,19 @@
 #'   whose workers load the installed package and print their progress
 #'   when they finish.
 #' @param show_print Show output of Stan `print()` statements.
-#' @return A `bayescomp_fit` object.
+#' @param resume A fit from `bayescomp_sample()` to continue: each chain
+#'   starts at its last draw with its adapted step size and metric, and runs
+#'   `iter_sampling` further iterations without warmup. Bind the draws of the
+#'   two fits with `posterior::bind_draws(..., along = "iteration")`.
+#' @return A `bayescomp_fit` object. An interrupt (Ctrl-C or Esc) while
+#'   chains run one after another stops sampling and returns the finished
+#'   chains, or the draws of the interrupted chain when none finished, with
+#'   a warning and element `interrupted = TRUE`; continue with `resume`.
+#'   Element `divergences` is a data frame with the chain, the iteration and
+#'   the parameter values at the last point of each divergent NUTS
+#'   trajectory after warmup before its energy error grew too large (`NULL`
+#'   without divergences): plotting them against the draws shows where the
+#'   sampler fails, such as the neck of a funnel.
 #' @examples
 #' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(1, 2); }")
 #' fit <- bayescomp_sample(m, chains = 2, iter_warmup = 200, iter_sampling = 200,
@@ -88,8 +100,19 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
                              adapt_kappa = 0.75, adapt_t0 = 10, adapt_init_buffer = 75L,
                              adapt_term_buffer = 50L, adapt_window = 25L, thin = 1L,
                              save_warmup = FALSE, refresh = 200L, cores = getOption("mc.cores", 1L), show_print = TRUE,
-                             save_diagnostics = FALSE) {
+                             save_diagnostics = FALSE, resume = NULL) {
   check_model(model)
+  if (!is.null(resume)) {
+    if (!inherits(resume, "bayescomp_fit") || !identical(resume$method, "sample") || is.null(resume$unconstrained))
+      stop("'resume' must be a fit from bayescomp_sample()", call. = FALSE)
+    if (ncol(resume$unconstrained[[1L]]) != model$dim)
+      stop("the model and the fit in 'resume' have different numbers of parameters", call. = FALSE)
+    chains <- length(resume$unconstrained)
+    algorithm <- resume$config$algorithm
+    metric <- resume$config$metric
+    iter_warmup <- 0L
+    adapt_engaged <- FALSE
+  }
   algorithm <- match.arg(algorithm)
   metric <- match.arg(metric)
   chains <- as_count(chains, "chains", min = 1L)
@@ -134,12 +157,38 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
               diagnostic = isTRUE(save_diagnostics))
   t0 <- proc.time()[["elapsed"]]
   res <- run_chains(model, chains, seed, cores, function(id) {
-    q0 <- find_init(model, init, id, gradient = !(algorithm %in% c("metropolis", "slice", "elliptical_slice", "fixed_param")))
-    out <- if (n == 0L || algorithm == "fixed_param") fixed_param_chain(cfg, q0) else run_hmc_chain(model, q0, cfg, id)
+    cf <- cfg
+    if (!is.null(resume)) {
+      # continue the chain: its last draw, step size and metric, no warmup
+      q0 <- resume$unconstrained[[id]][nrow(resume$unconstrained[[id]]), ]
+      cf$step_size <- resume$step_size[[id]]
+      cf$inv_metric <- resume$inv_metric[[id]]
+    } else q0 <- find_init(model, init, id, gradient = !(algorithm %in% c("metropolis", "slice", "elliptical_slice", "fixed_param")))
+    out <- if (n == 0L || algorithm == "fixed_param") fixed_param_chain(cf, q0) else run_hmc_chain(model, q0, cf, id)
     out$gq <- chain_write_draws(model, out$q, show_print)
     out
   })
-  make_fit(model, res, cfg, method = "sample", seed = seed, elapsed = proc.time()[["elapsed"]] - t0)
+  res <- interrupted_chains(res)
+  fit <- make_fit(model, res, cfg, method = "sample", seed = seed, elapsed = proc.time()[["elapsed"]] - t0)
+  fit$interrupted <- isTRUE(attr(res, "interrupted"))
+  fit
+}
+
+# After an interrupt: the finished chains, or the interrupted one when no
+# chain finished
+interrupted_chains <- function(res) {
+  stopped <- vapply(res, function(r) isTRUE(r$interrupted), TRUE)
+  if (!any(stopped)) return(res)
+  seed <- attr(res, "seed")
+  keep <- if (all(stopped)) which(stopped)[1L] else which(!stopped)
+  out <- res[keep]
+  if (!nrow(out[[1L]]$q)) stop("sampling was interrupted before any draw was kept", call. = FALSE)
+  warning(sprintf("sampling was interrupted; the fit has %s", if (all(stopped))
+    sprintf("the %d draws of chain %d kept before the interrupt", nrow(out[[1L]]$q), keep)
+    else sprintf("the %d chains that finished", length(keep))), call. = FALSE)
+  attr(out, "seed") <- seed
+  attr(out, "interrupted") <- TRUE
+  out
 }
 
 as_count <- function(x, name, min = 0L) {
@@ -282,7 +331,12 @@ run_chains <- function(model, chains, seed, cores, f) {
     bad <- vapply(out, inherits, TRUE, what = "try-error")
     if (any(bad)) stop(sprintf("chain %d failed: %s", which(bad)[1L], attr(out[[which(bad)[1L]]], "condition")$message), call. = FALSE)
   } else {
-    out <- lapply(seq_len(chains), one)
+    # chains after an interrupted one are not run
+    out <- list()
+    for (i in seq_len(chains)) {
+      out[[i]] <- one(i)
+      if (isTRUE(out[[i]]$interrupted)) break
+    }
   }
   attr(out, "seed") <- seed
   out

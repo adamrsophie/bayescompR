@@ -23,8 +23,24 @@ make_fit <- function(model, res, cfg, method, seed, elapsed) {
     time = list(chains = do.call(rbind, lapply(res, `[[`, "time")), total = elapsed),
     config = cfg, seed = if (is.null(seed)) attr(res, "seed") else seed,
     diagnostics = if (!is.null(res[[1L]]$diagnostics)) lapply(res, `[[`, "diagnostics"),
-    profile = profile_of(res), rejections = rejections_of(res)),
+    profile = profile_of(res), rejections = rejections_of(res), divergences = divergences_of(model, res)),
     class = c("bayescomp_fit"))
+}
+
+# where the divergent transitions after warmup left the typical set: chain,
+# iteration and the parameter values at the last point of the trajectory
+# before the energy error grew too large
+divergences_of <- function(model, res) {
+  nm <- bayescomp_param_names(model, FALSE, FALSE)
+  p <- lapply(seq_along(res), function(i) {
+    d <- res[[i]]$divergent_q
+    if (is.null(d)) return(NULL)
+    v <- matrix(vapply(seq_len(nrow(d)), function(k) flatten_draw(write_array(model, d[k, -1L], FALSE, FALSE, print = FALSE)[[1L]]),
+                       numeric(length(nm))), ncol = length(nm), byrow = TRUE, dimnames = list(NULL, nm))
+    data.frame(chain = i, iteration = as.integer(d[, 1L]), v, check.names = FALSE)
+  })
+  p <- Filter(Negate(is.null), p)
+  if (length(p)) do.call(rbind, p) else NULL
 }
 
 # rejected proposals by chain and reason

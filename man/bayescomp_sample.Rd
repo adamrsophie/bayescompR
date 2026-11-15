@@ -34,7 +34,8 @@ bayescomp_sample(
   refresh = 200L,
   cores = getOption("mc.cores", 1L),
   show_print = TRUE,
-  save_diagnostics = FALSE
+  save_diagnostics = FALSE,
+  resume = NULL
 )
 }
 \arguments{
@@ -117,9 +118,22 @@ when they finish.}
 \item{save_diagnostics}{Keep the unconstrained values, momenta and
 potential gradients of each saved draw (CmdStan's \code{diagnostic_file}) in
 element \code{diagnostics} of the fit; \code{\link[=bayescomp_write_csv]{bayescomp_write_csv()}} writes them.}
+
+\item{resume}{A fit from \code{bayescomp_sample()} to continue: each chain
+starts at its last draw with its adapted step size and metric, and runs
+\code{iter_sampling} further iterations without warmup. Bind the draws of the
+two fits with \code{posterior::bind_draws(..., along = "iteration")}.}
 }
 \value{
-A \code{bayescomp_fit} object.
+A \code{bayescomp_fit} object. An interrupt (Ctrl-C or Esc) while
+chains run one after another stops sampling and returns the finished
+chains, or the draws of the interrupted chain when none finished, with
+a warning and element \code{interrupted = TRUE}; continue with \code{resume}.
+Element \code{divergences} is a data frame with the chain, the iteration and
+the parameter values at the last point of each divergent NUTS
+trajectory after warmup before its energy error grew too large (\code{NULL}
+without divergences): plotting them against the draws shows where the
+sampler fails, such as the neck of a funnel.
 }
 \description{
 Runs the No-U-Turn sampler (default), static HMC, the Metropolis adjusted

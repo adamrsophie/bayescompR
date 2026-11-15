@@ -73,11 +73,16 @@ nuts_criterion <- function(ps_minus, ps_plus, rho) sum(ps_plus * rho) > 0 && sum
 # the summed momentum rho and the log sum of weights of the subtree.
 nuts_build_tree <- function(st, depth, sign, H0) {
   if (depth == 0L) {
+    q_prev <- st$z$q
     st$z <- leapfrog(st$pot, st$metric, st$z, sign * st$eps)
     st$n_leapfrog <- st$n_leapfrog + 1L
     h <- ps_H(st$metric, st$z)
     if (is.nan(h)) h <- Inf
-    if ((h - H0) > st$max_deltaH) st$divergent <- TRUE
+    if ((h - H0) > st$max_deltaH) {
+      # the last point of the trajectory before the energy blew up
+      st$div_q <- q_prev
+      st$divergent <- TRUE
+    }
     st$sum_metro <- st$sum_metro + if (H0 - h > 0) 1 else exp(H0 - h)
     ps <- metric_dtau(st$metric, st$z$p)
     return(list(valid = !st$divergent, propose = st$z, psb = ps, pse = ps, rho = st$z$p,
@@ -156,7 +161,7 @@ nuts_transition <- function(st, q) {
   st$last_r <- list(V = z_sample$V, g = z_sample$g)
   list(q = z_sample$q, lp = -z_sample$V, accept_stat = if (st$n_leapfrog > 0L) st$sum_metro / st$n_leapfrog else 0,
        treedepth = depth, n_leapfrog = st$n_leapfrog, divergent = st$divergent,
-       energy = ps_H(m, z_sample), p = z_sample$p, g = z_sample$g)
+       energy = ps_H(m, z_sample), p = z_sample$p, g = z_sample$g, div_q = if (st$divergent) st$div_q)
 }
 
 # static HMC with integration time int_time (Stan's static_hmc)
@@ -325,10 +330,12 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   if (keep_pg) dp <- dg <- matrix(NA_real_, length(thin_idx), n)
   q <- q0
   row <- 0L
+  divs <- list()
   total <- nw + ns
   t_start <- proc.time()[["elapsed"]]
   t_warm <- NA_real_
-  for (it in seq_len(total)) {
+  # an interrupt (Ctrl-C) ends the chain with the draws kept so far
+  stopped <- tryCatch({ for (it in seq_len(total)) {
     if (it == nw + 1L) {
       t_warm <- proc.time()[["elapsed"]] - t_start
       if (tune_step) st$eps <- exp(da$x_bar)
@@ -362,6 +369,7 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
         }
       }
     }
+    if (it > nw && !is.null(s$div_q)) divs[[length(divs) + 1L]] <- c(it - nw, s$div_q)
     if (keep_it[it]) {
       row <- row + 1L
       qs[row, ] <- q
@@ -372,11 +380,20 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
       chain_message(sprintf("Chain %d: Iteration: %*d / %d [%3.0f%%]  (%s)", chain_id, nchar(total), it, total,
                       100 * it / total, if (it <= nw) "Warmup" else "Sampling"))
     }
+  }; FALSE }, interrupt = function(e) TRUE)
+  if (stopped) {
+    keep <- seq_len(row)
+    qs <- qs[keep, , drop = FALSE]
+    diag_out <- diag_out[keep, , drop = FALSE]
+    if (keep_pg) { dp <- dp[keep, , drop = FALSE]; dg <- dg[keep, , drop = FALSE] }
+    thin_idx <- thin_idx[keep]
+    if (is.na(t_warm)) t_warm <- proc.time()[["elapsed"]] - t_start
   }
   if (nw == 0L) t_warm <- 0
   t_total <- proc.time()[["elapsed"]] - t_start
   list(q = qs, diag = diag_out, step_size = st$eps, inv_metric = st$metric$inv,
        rejections = if (is.function(attr(pot, "rejections"))) attr(pot, "rejections")(),
-       n_warmup_saved = sum(thin_idx <= nw), time = c(warmup = t_warm, sampling = t_total - t_warm),
+       n_warmup_saved = sum(thin_idx <= nw), time = c(warmup = t_warm, sampling = t_total - t_warm), interrupted = stopped,
+       divergent_q = if (length(divs)) do.call(rbind, divs),
        diagnostics = if (keep_pg) list(p = dp, g = dg))
 }

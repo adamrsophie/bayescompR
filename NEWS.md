@@ -10,6 +10,13 @@ First release.
 * Math, container, linear algebra and distribution library.
 * The `wiener` distribution with four, five and seven parameters and its
   defective distribution functions.
+* An interrupt (Ctrl-C or Esc) while chains run sequentially returns the
+  finished chains, or the draws of the interrupted chain, instead of
+  losing them; `bayescomp_sample(resume = fit)` continues each chain from
+  its last draw with its adapted step size and metric.
+* Fits from `bayescomp_sample()` record where divergent trajectories left
+  the typical set (element `divergences`: chain, iteration and parameter
+  values).
 * `bayescomp_log_lik()` and `bayescomp_posterior_predict()` take the
   pointwise log likelihood and predictive draws from the sampling
   statements of the model block, so `loo::loo()`, `rstantools::log_lik()`
