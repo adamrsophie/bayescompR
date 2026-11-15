@@ -158,7 +158,7 @@ test_that("no two internal functions share a name", {
     l <- readLines(f)
     sub(" <- function.*", "", grep("^[A-Za-z_.][A-Za-z0-9_.]* <- function", l, value = TRUE))
   }))
-  expect_identical(unique(nm[duplicated(nm)]), character(0))
+  expect_length(unique(nm[duplicated(nm)]), 0L)
 })
 
 test_that("refresh reports progress without changing the results", {

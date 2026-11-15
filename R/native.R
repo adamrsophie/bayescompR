@@ -65,8 +65,9 @@ native_hash_ok <- function(file, sha256) {
 #' on older versions of R, install a library from a file with `path`. The
 #' Cranelift libraries need glibc 2.28 or newer on Linux and macOS 11 or
 #' newer. The LLVM libraries link LLVM statically; on Linux they need glibc
-#' 2.35 or newer, libstdc++, zlib, zstd and libxml2 (`libxml2.so.2`), and on
-#' macOS they are built and tested on macOS 15 (Apple silicon). Installing
+#' 2.35 or newer, libstdc++, zlib, zstd, libffi and libxml2
+#' (`libxml2.so.2`, which distributions with libxml2 2.14 or newer, such as
+#' Ubuntu 26.04, no longer ship), and on macOS they are built and tested on macOS 15 (Apple silicon). Installing
 #' removes the libraries of other releases from the user data directory.
 #'
 #' @param backend `"cranelift"` or `"llvm"`.

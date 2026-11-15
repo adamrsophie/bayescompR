@@ -2,7 +2,7 @@ test_that("native backend assets are named by platform and checked by checksum",
   expect_match(native_platform(), "^[a-z]+-[a-z0-9_]+$")
   expect_match(native_asset("cranelift"), paste0("^bcn-cranelift-", native_platform(), "\\", .Platform$dynlib.ext, "$"))
   f <- tempfile()
-  writeLines("abc", f)
+  writeBin(charToRaw("abc\n"), f)
   skip_if(is.null(native_sha256()))
   expect_true(native_hash_ok(f, "edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb"))
   expect_false(native_hash_ok(f, "0"))
