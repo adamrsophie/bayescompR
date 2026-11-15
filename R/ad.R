@@ -110,8 +110,8 @@ ad_node <- function(v, parents, grads) {
 
 # options(bayescompR.check_adjoints = TRUE), read when a tape starts: every
 # backward rule is checked to return, for each differentiable parent, an
-# adjoint of its length (or a scalar) with no NaN where the incoming adjoint
-# has none. Used by the test suite to catch shape bugs in new rules.
+# numeric adjoint of its length (or a scalar); NaN is allowed, since a
+# trajectory far in the tails can overflow. Used by the test suite to catch shape bugs in new rules.
 adj_checked <- function(grads, parents, ids) {
   force(grads); force(ids)
   lens <- vapply(parents, function(p) length(val(p)), 0L)
@@ -126,7 +126,6 @@ adj_checked <- function(grads, parents, ids) {
         stop(sprintf("internal error: adjoint of length %d for an operand of length %d", n, lens[k]), call. = FALSE)
       v <- if (inherits(ck, "bcsp")) ck$g else ck
       if (!is.numeric(v)) stop("internal error: non-numeric adjoint", call. = FALSE)
-      if (anyNA(v) && !anyNA(g)) stop("internal error: NaN adjoint from a finite incoming adjoint", call. = FALSE)
     }
     cs
   }

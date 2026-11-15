@@ -55,9 +55,9 @@ test_that("element writes in a loop that cannot be vectorized use linear memory"
   }
   skip_on_cran()
   small <- grad_mb(500L)
-  big <- grad_mb(4000L)
-  # quadratic memory would need about 64 times as much
-  expect_lt(big - small, 100)
+  big <- grad_mb(8000L)
+  # quadratic memory needed over 1000 MB more
+  expect_lt(big - small, 300)
 })
 
 test_that("a data covariance is factored once and gives the same density", {

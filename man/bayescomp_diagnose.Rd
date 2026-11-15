@@ -19,6 +19,11 @@ chain), \code{ebfmi_all}, \code{low_ess} and \code{high_rhat} (parameter names),
 non finite density, by chain and reason; for fits from
 \code{\link[=bayescomp_sample]{bayescomp_sample()}}) and \code{problems} (\code{TRUE} when any check failed),
 invisibly. Rejections are reported but are not problems by themselves.
+Checks a sampler gives no information for (tree depth for samplers
+other than NUTS, divergences and E-BFMI for samplers without them)
+are skipped and their counts are \code{NA}. For approximate methods
+(Pathfinder, ADVI, Laplace) only their Pareto k is checked, returned as
+\code{pareto_k}.
 }
 \description{
 Checks what CmdStan's \code{diagnose} utility checks: transitions that

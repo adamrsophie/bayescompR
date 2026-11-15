@@ -232,6 +232,11 @@ print.bayescomp_fit <- function(x, variables = NULL, max_rows = 10L, ...) {
 #'   non finite density, by chain and reason; for fits from
 #'   [bayescomp_sample()]) and `problems` (`TRUE` when any check failed),
 #'   invisibly. Rejections are reported but are not problems by themselves.
+#'   Checks a sampler gives no information for (tree depth for samplers
+#'   other than NUTS, divergences and E-BFMI for samplers without them)
+#'   are skipped and their counts are `NA`. For approximate methods
+#'   (Pathfinder, ADVI, Laplace) only their Pareto k is checked, returned as
+#'   `pareto_k`.
 #' @examples
 #' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
 #' fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100,
@@ -240,16 +245,25 @@ print.bayescomp_fit <- function(x, variables = NULL, max_rows = 10L, ...) {
 #' @export
 bayescomp_diagnose <- function(fit, quiet = FALSE) {
   if (is.character(fit)) fit <- bayescomp_read_csv(fit)
-  sd <- fit$sampler_diagnostics[kept(fit), , , drop = FALSE]
-  nt <- dim(sd)[1L] * dim(sd)[2L]
-  div <- sum(sd[, , "divergent__"], na.rm = TRUE)
+  if (!(fit$method %in% mcmc_methods)) return(diagnose_approximate(fit, quiet))
+  sd <- fit$sampler_diagnostics
+  if (!is.null(sd)) sd <- sd[kept(fit), , , drop = FALSE]
+  # a check applies when the sampler recorded its column
+  col <- function(v) if (!is.null(sd) && v %in% dimnames(sd)[[3L]] && !all(is.na(sd[, , v]))) sd[, , v, drop = FALSE]
+  nt <- if (is.null(sd)) 0L else dim(sd)[1L] * dim(sd)[2L]
+  algo <- fit$config$algorithm
+  ham <- is.null(algo) || algo %in% c("nuts", "hmc")
+  dv <- if (ham) col("divergent__")
+  td <- if (is.null(algo) || identical(algo, "nuts")) col("treedepth__")
+  en <- if (ham) col("energy__")
+  div <- if (is.null(dv)) NA_integer_ else sum(dv, na.rm = TRUE)
   mtd <- fit$config$max_treedepth %||% 10L
-  hit <- if (identical(fit$config$algorithm, "nuts")) sum(sd[, , "treedepth__"] >= mtd, na.rm = TRUE) else 0L
-  ebfmi <- apply(matrix(sd[, , "energy__"], dim(sd)[1L]), 2L, function(e) {
+  hit <- if (is.null(td)) NA_integer_ else sum(td >= mtd, na.rm = TRUE)
+  ebfmi <- if (is.null(en)) NA_real_ else apply(matrix(en, dim(en)[1L]), 2L, function(e) {
     if (length(e) < 2L || anyNA(e)) return(NA_real_)
     sum(diff(e)^2) / length(e) / stats::var(e)
   })
-  e_all <- as.vector(sd[, , "energy__"])
+  e_all <- as.vector(en)
   ebfmi_all <- if (length(e_all) > 1L && !anyNA(e_all)) mean(diff(e_all)^2) / stats::var(e_all) else NA_real_
   a <- bayescomp_draws(fit)
   vars <- setdiff(dimnames(a)[[3L]], "lp__")
@@ -268,17 +282,21 @@ bayescomp_diagnose <- function(fit, quiet = FALSE) {
   bad_chain <- which(ebfmi < 0.3)
   r <- list(num_divergent = as.integer(div), num_max_treedepth = as.integer(hit), ebfmi = ebfmi, ebfmi_all = ebfmi_all,
             low_ess = low, high_rhat = high, rejections = if (inherits(fit, "bayescomp_fit")) fit$rejections,
-            problems = div > 0 || hit > 0 || bad_e || length(bad_chain) > 0 || length(low) > 0 || length(high) > 0)
+            problems = isTRUE(div > 0) || isTRUE(hit > 0) || bad_e || length(bad_chain) > 0 || length(low) > 0 || length(high) > 0)
   if (!quiet) {
     pct <- function(k) sprintf("%d of %d (%s%%)", as.integer(k), as.integer(nt), format(100 * k / nt, digits = 6))
-    cat("Checking sampler transitions treedepth.\n")
-    if (hit > 0) cat(sprintf("%s transitions hit the maximum treedepth limit of %d, or 2^%d leapfrog steps.\nTrajectories that are prematurely terminated due to this limit will result in slow exploration.\nFor optimal performance, increase this limit.\n\n", pct(hit), mtd, mtd))
+    if (is.null(td) || is.null(dv) || is.null(en))
+      cat(sprintf("Checks of %s do not apply to the %s sampler.\n\n",
+                  paste(c(if (is.null(td)) "tree depth", if (is.null(dv)) "divergences", if (is.null(en)) "E-BFMI"), collapse = " and "),
+                  algo %||% fit$method))
+    if (!is.null(td)) cat("Checking sampler transitions treedepth.\n")
+    if (is.null(td)) NULL else if (hit > 0) cat(sprintf("%s transitions hit the maximum treedepth limit of %d, or 2^%d leapfrog steps.\nTrajectories that are prematurely terminated due to this limit will result in slow exploration.\nFor optimal performance, increase this limit.\n\n", pct(hit), mtd, mtd))
     else cat("Treedepth satisfactory for all transitions.\n\n")
-    cat("Checking sampler transitions for divergences.\n")
-    if (div > 0) cat(sprintf("%s transitions ended with a divergence.\nThese divergent transitions indicate that HMC is not fully able to explore the posterior distribution.\nTry increasing adapt delta closer to 1.\nIf this doesn't remove all divergences, try to reparameterize the model.\n\n", pct(div)))
+    if (!is.null(dv)) cat("Checking sampler transitions for divergences.\n")
+    if (is.null(dv)) NULL else if (div > 0) cat(sprintf("%s transitions ended with a divergence.\nThese divergent transitions indicate that HMC is not fully able to explore the posterior distribution.\nTry increasing adapt delta closer to 1.\nIf this doesn't remove all divergences, try to reparameterize the model.\n\n", pct(div)))
     else cat("No divergent transitions found.\n\n")
-    cat("Checking E-BFMI - sampler transitions HMC potential energy.\n")
-    if (bad_e) {
+    if (!is.null(en)) cat("Checking E-BFMI - sampler transitions HMC potential energy.\n")
+    if (is.null(en)) NULL else if (bad_e) {
       cat(sprintf("The E-BFMI, %s, is below the nominal threshold of 0.3 which suggests that HMC may have trouble exploring the target distribution.\nIf possible, try to reparameterize the model.\n\n", format(ebfmi_all, digits = 6)))
     } else if (length(bad_chain)) {
       cat(sprintf("The E-BFMI of chain %s is below the nominal threshold of 0.3 which suggests that HMC may have trouble exploring the target distribution.\nIf possible, try to reparameterize the model.\n\n",
@@ -295,6 +313,26 @@ bayescomp_diagnose <- function(fit, quiet = FALSE) {
       cat("\n")
     }
     cat(if (r$problems) "Processing complete.\n" else "Processing complete, no problems detected.\n")
+  }
+  invisible(r)
+}
+
+# fits of approximate methods (Pathfinder, ADVI, Laplace, optimization...):
+# the draws are not Markov chains, so only the method's own check applies
+diagnose_approximate <- function(fit, quiet) {
+  k <- fit$pareto_k
+  bad <- isTRUE(any(k > 0.7)) || (length(k) && !all(is.finite(k)))
+  r <- list(num_divergent = NA_integer_, num_max_treedepth = NA_integer_, ebfmi = NA_real_, ebfmi_all = NA_real_,
+            low_ess = character(0), high_rhat = character(0), rejections = fit$rejections, pareto_k = k, problems = bad)
+  if (!quiet) {
+    cat(sprintf("The %s method does not draw Markov chains: divergences, tree depth, E-BFMI, R-hat and ESS do not apply.\n\n", fit$method))
+    if (!is.null(k)) {
+      cat(sprintf("Pareto k of the importance weights: %s\n", paste(format(k, digits = 3), collapse = ", ")))
+      cat(if (!all(is.finite(k))) "Pareto k could not be estimated, so the quality of the approximation is unknown.\n\n"
+          else if (bad) "Values above 0.7 mean the approximation is not reliable for estimates of the posterior.\n\n"
+          else "The approximation is adequate for importance sampling.\n\n")
+    }
+    cat(if (bad) "Processing complete.\n" else "Processing complete, no problems detected.\n")
   }
   invisible(r)
 }

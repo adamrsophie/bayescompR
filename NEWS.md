@@ -10,6 +10,9 @@ First release.
 * Math, container, linear algebra and distribution library.
 * The `wiener` distribution with four, five and seven parameters and its
   defective distribution functions.
+* `bayescomp_diagnose()` runs only the checks that apply: tree depth for
+  NUTS, divergences and E-BFMI for NUTS and static HMC, and Pareto k for
+  approximate methods (it failed on Pathfinder and Laplace fits).
 * `bayescomp_sbc()` runs simulation based calibration, with rank
   uniformity tests and rank histograms (`plot()`).
 * `bayescomp_reloo()` refits the model without each observation whose
