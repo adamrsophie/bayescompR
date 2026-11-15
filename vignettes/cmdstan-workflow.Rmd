@@ -85,13 +85,21 @@ str(bayescomp_info(code), max.level = 1)
 bayescomp_info(code)$parameters$alpha
 ```
 
-`bayescomp_format()` prints a program in stanc's canonical layout, and
-with `canonicalize` it also rewrites deprecated syntax and removes
-redundant parentheses or braces:
+`bayescomp_format()` prints a program in stanc's canonical layout,
+breaking lines longer than `max_line_length`. `canonicalize`, as stanc's
+`--canonicalize`, also drops redundant parentheses (`"parentheses"`), puts
+braces around the bodies of `if`, `for` and `while` (`"braces"`) and
+inlines `#include` files (`"includes"`); `TRUE` does all of them.
 
 ```{r}
 cat(bayescomp_format("parameters{real mu;}model{mu~normal(0,1);}"))
+cat(bayescomp_format("parameters{real mu;}model{if ((mu) > 0) mu~normal((0),1);}", canonicalize = TRUE))
 ```
+
+`bayescomp_check()` type checks a program as stanc does, signals an
+error for an invalid one and invisibly returns the typed program;
+`pedantic = TRUE` and `warn_uninitialized = TRUE` also print the warnings
+described next.
 
 The pedantic mode warns about programs that are legal but probably not
 what was meant: parameters without priors, priors with very wide scales,
@@ -109,7 +117,8 @@ bayescomp_uninitialized("parameters { real mu; } model { real a; mu ~ normal(a, 
 CmdStan reads data and initial values from JSON or R dump files.
 `bayescomp_write_data()` writes JSON with the conventions CmdStan expects
 (integers stay integers, arrays and matrices are nested row major, and
-infinite and missing values are written as `"Inf"` and `"NaN"`), and
+infinite values are written as `"Infinity"` and `"-Infinity"`, `NaN` as
+`"NaN"` and `NA` as `null`), and
 `bayescomp_read_data()` reads either format back. `bayescomp_model()` and
 the `init` argument of the samplers accept a file name directly.
 
@@ -175,6 +184,28 @@ adapted inverse metric as `metric_file` JSON, and `save_config` the run
 configuration. `bayescomp_sample(save_diagnostics = TRUE)` keeps the
 unconstrained values, momenta and gradients for CmdStan's
 `diagnostic_file`.
+
+### Diagnostic and profile files
+
+A run with `save_diagnostics = TRUE` also writes CmdStan's
+`diagnostic_file`, and a program with `profile` blocks writes its
+`profile_file`: for each block, the time spent in the block and in the
+gradient passing back through it, and the number of gradient evaluations.
+
+```{r}
+prof <- bayescomp_model("
+data { int N; vector[N] y; vector[N] x; }
+parameters { real alpha; real beta; real<lower=0> sigma; }
+model {
+  profile(\"priors\") { alpha ~ normal(0, 2); beta ~ normal(0, 2); sigma ~ exponential(1); }
+  profile(\"likelihood\") { y ~ normal(alpha + beta * x, sigma); }
+}", data = list(N = 100, y = 0.5 * x + rnorm(100), x = x))
+fit_prof <- bayescomp_sample(prof, chains = 2, iter_warmup = 300, iter_sampling = 300, seed = 1,
+                             refresh = 0, save_diagnostics = TRUE)
+prof_files <- bayescomp_write_csv(fit_prof, out_dir, basename = "profiled")
+list.files(out_dir, "^profiled")
+read.csv(file.path(out_dir, "profiled_1_profile.csv"))
+```
 
 `bayescomp_read_csv()` reads files written by bayescompR or by CmdStan
 itself into a `bayescomp_fit`; with `model`, the unconstrained values are

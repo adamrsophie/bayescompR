@@ -32,9 +32,10 @@ full set runs in the package tests on every push, and the slow ones
 2. **Library.** The densities in the test suite are compared with an
    independent R implementation (`stats::dnorm` and friends, or direct
    formulas), and their gradients with central finite differences. This
-   covers the common distributions and the elementwise math functions, not
-   every signature; `bayescomp_compatibility()` lists each feature's status
-   and tests, and TODO.md the known gaps.
+   covers the common distributions and the elementwise math functions;
+   every library signature of Stan 2.40 is also compared with the table
+   printed by stanc. `bayescomp_compatibility()` lists each feature's
+   status and the tests that cover it (shown below).
 3. **Transforms.** Constraining and unconstraining round trip, and the log
    Jacobians match the log absolute determinants of numerical Jacobians.
 4. **Automatic differentiation.** Gradients of whole models match finite
@@ -49,6 +50,12 @@ full set runs in the package tests on every push, and the slow ones
    on the same draws.
 8. **Backends.** `bayescomp_validate_backend()` compares a native backend's
    log density and gradient with the R implementation at random points.
+
+```{r}
+compat <- bayescomp_compatibility()
+table(compat$status)
+compat[compat$status != "implemented", c("area", "feature", "status", "notes")]
+```
 
 ## Gradients against finite differences
 

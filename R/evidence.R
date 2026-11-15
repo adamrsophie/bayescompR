@@ -140,7 +140,7 @@ log_sum_exp_v <- function(x) { m <- max(x); if (!is.finite(m)) m else m + log(su
 #' mk <- function(s) bayescomp_model(sprintf("data { int N; vector[N] y; } parameters { real mu; }
 #'   model { mu ~ normal(0, %g); y ~ normal(mu, 1); }", s), data = list(N = length(y), y = y))
 #' r <- bayescomp_rjmcmc(list(narrow = mk(1), wide = mk(10)), iter_sampling = 1000, seed = 1)
-#' r$model_prob
+#' r$probabilities
 #' }
 #' @export
 bayescomp_rjmcmc <- function(models, prior_prob = NULL, iter_warmup = 500L, iter_sampling = 5000L,

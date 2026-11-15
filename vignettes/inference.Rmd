@@ -31,7 +31,9 @@ assumptions and its tuning parameters, and compares them on one model.
 | `bayescomp_sample(algorithm = "mala")` | Metropolis adjusted Langevin | yes | exact |
 | `bayescomp_sample(algorithm = "metropolis")` | adaptive random walk Metropolis | no | exact |
 | `bayescomp_sample(algorithm = "slice")` | slice sampling | no | exact |
-| `bayescomp_smc()` | tempered sequential Monte Carlo | no | consistent |
+| `bayescomp_sample(algorithm = "elliptical_slice")` | generalized elliptical slice sampling | no | exact |
+| `bayescomp_sample(algorithm = "fixed_param")` | no sampling: generated quantities at fixed values | no | not applicable |
+| `bayescomp_smc()` | tempered sequential Monte Carlo | only with `kernel = "mala"` or `"hmc"` | consistent |
 | `bayescomp_optimize()` | L-BFGS, BFGS, Newton | yes | mode |
 | `bayescomp_laplace()` | normal approximation at the mode | yes | approximate |
 | `bayescomp_variational()` | ADVI, mean field or full rank | yes | approximate |
@@ -94,10 +96,11 @@ names:
 | `chains`, `iter_warmup`, `iter_sampling`, `thin` | number of chains, warmup and kept iterations, thinning |
 | `seed` | one seed for the run; each chain gets its own stream, so results do not depend on `cores` |
 | `cores` | chains in parallel; defaults to `getOption("mc.cores", 1)` |
-| `init` | a radius (uniform on `(-init, init)` on the unconstrained scale, default 2), `0`, a named list, a list of lists (one per chain), a function, JSON file names, or a fit whose draws start the chains |
+| `init` | a radius (uniform on `(-init, init)` on the unconstrained scale, default 2), `0`, a named list, a list of lists (one per chain), a function, JSON or R dump file names (one per chain, recycled), or a fit whose draws start the chains |
 | `algorithm` | `"nuts"`, `"hmc"`, `"mala"`, `"metropolis"`, `"slice"`, `"elliptical_slice"` or `"fixed_param"` |
-| `metric`, `inv_metric` | `"diag_e"`, `"dense_e"` or `"unit_e"`; an initial inverse metric, or a `metric_file` |
-| `step_size`, `step_size_jitter`, `max_treedepth`, `int_time` | integrator settings |
+| `metric`, `inv_metric` | `"diag_e"` (default), `"dense_e"` or `"unit_e"` (no metric adaptation); an initial inverse metric as a vector or matrix, or a `metric_file` JSON written by `bayescomp_write_csv(save_metric = TRUE)` |
+| `step_size`, `step_size_jitter`, `max_treedepth`, `int_time` | initial step size; random jitter of it (0 to 1); NUTS tree depth limit (default 10); static HMC integration time (default 2 pi) |
+| `block` | Metropolis: propose all coordinates jointly (`TRUE`, default) or one at a time |
 | `adapt_engaged`, `adapt_metric`, `adapt_delta`, `adapt_gamma`, `adapt_kappa`, `adapt_t0` | step size and metric adaptation |
 | `adapt_init_buffer`, `adapt_term_buffer`, `adapt_window` | warmup windows |
 | `save_warmup`, `save_diagnostics` | keep warmup draws; keep momenta and gradients (CmdStan's `diagnostic_file`) |
@@ -113,6 +116,34 @@ fit_ctrl$step_size
 fit_ctrl$inv_metric[[1]]
 ```
 
+Initial values can come from a function, called once per chain, or from
+data files; an adapted metric can be saved and reused:
+
+```{r}
+fit_init <- bayescomp_sample(model, chains = 2, iter_warmup = 200, iter_sampling = 200, seed = 4, refresh = 0,
+                             init = function() list(beta = rnorm(3, 0, 0.5)))
+init_file <- tempfile(fileext = ".json")
+bayescomp_write_data(list(beta = c(-0.5, 1, -1.5)), init_file)
+metric_dir <- tempfile(); dir.create(metric_dir)
+files <- bayescomp_write_csv(fit_ctrl, metric_dir, basename = "ctrl", save_metric = TRUE)
+fit_file <- bayescomp_sample(model, chains = 1, iter_warmup = 100, iter_sampling = 200, seed = 5, refresh = 0,
+                             init = init_file, metric = "dense_e",
+                             inv_metric = file.path(metric_dir, "ctrl_1_metric.json"))
+fit_file$inv_metric[[1]]
+```
+
+`algorithm = "fixed_param"` runs only the generated quantities, for
+example to simulate data from fixed parameter values:
+
+```{r}
+sim <- bayescomp_model("
+data { int N; real mu; real<lower=0> sigma; }
+generated quantities { array[N] real y = normal_rng(rep_vector(mu, N), sigma); real m = mean(y); }",
+  data = list(N = 20, mu = 3, sigma = 1))
+fp <- bayescomp_sample(sim, algorithm = "fixed_param", chains = 1, iter_sampling = 500, seed = 1, refresh = 0)
+mean(bayescomp_extract(fp, "m"))
+```
+
 ### Interrupting and resuming
 
 Pressing Ctrl-C (Esc in RStudio) stops sampling and returns what is done,
@@ -124,7 +155,7 @@ The fit has
 draw with its adapted step size and metric, without warmup, so a short run
 can be extended:
 
-```{r}
+```{r, eval = identical(Sys.getenv("NOT_CRAN"), "true") && requireNamespace("posterior", quietly = TRUE)}
 more <- bayescomp_sample(model, resume = nuts, iter_sampling = 300, seed = 3, refresh = 0)
 dim(more$draws)
 both <- posterior::bind_draws(posterior::as_draws_array(nuts), posterior::as_draws_array(more),
@@ -203,6 +234,18 @@ smc$log_evidence
 length(smc$betas) - 1   # number of temperatures
 ```
 
+The default reference is a Gaussian fitted by Pathfinder (when the model
+has gradients) and the default kernel random walk Metropolis. With
+`kernel = "mala"` or `"hmc"` the particles move with gradient steps, which
+mix better in higher dimensions; `num_mcmc_steps` sets the moves per
+temperature and `resampling` the scheme (`"systematic"`, `"stratified"`,
+`"residual"`, `"multinomial"`).
+
+```{r}
+smc_hmc <- bayescomp_smc(model, num_particles = 300, kernel = "hmc", hmc_steps = 5, seed = 1)
+c(metropolis = smc$log_evidence, hmc = smc_hmc$log_evidence)
+```
+
 On a mixture of two well separated normals, NUTS chains stay in the mode
 where they start, while SMC finds both:
 
@@ -228,6 +271,19 @@ opt$par
 lap <- bayescomp_laplace(model, draws = 1000, seed = 1)
 ```
 
+`algorithm` chooses L-BFGS (default), BFGS or Newton's method, with
+CmdStan's convergence tolerances (`tol_obj`, `tol_rel_obj`, `tol_grad`,
+`tol_rel_grad`, `tol_param`). `save_iterations = TRUE` keeps every iterate,
+and `bayescomp_laplace(mode = )` reuses a mode found before (it must be the
+mode with `jacobian = TRUE`):
+
+```{r}
+opt_n <- bayescomp_optimize(model, algorithm = "newton", jacobian = TRUE, save_iterations = TRUE, seed = 1)
+nrow(opt_n$draws)          # iterates, the optimum last
+lap2 <- bayescomp_laplace(model, mode = opt_n, draws = 1000, seed = 1)
+colMeans(bayescomp_draws(lap2, "beta", format = "matrix"))
+```
+
 The extra columns `log_p__` and `log_g__` hold the log density of the
 model and of the approximation at each draw, for importance sampling
 corrections.
@@ -242,6 +298,16 @@ field uses a diagonal covariance; full rank a dense one.
 
 ```{r}
 vi <- bayescomp_variational(model, algorithm = "fullrank", seed = 1)
+vi_mf <- bayescomp_variational(model, algorithm = "meanfield", seed = 1)
+rbind(fullrank = apply(bayescomp_draws(vi, "beta", format = "matrix"), 2, sd),
+      meanfield = apply(bayescomp_draws(vi_mf, "beta", format = "matrix"), 2, sd))
+```
+
+A variational or Pathfinder fit can also start NUTS chains near the bulk
+of the posterior:
+
+```{r}
+nuts_vi <- bayescomp_sample(model, chains = 2, iter_warmup = 200, iter_sampling = 200, init = vi, seed = 6, refresh = 0)
 ```
 
 ADVI's convergence criterion says the optimizer stopped, not that the
@@ -273,6 +339,16 @@ tab <- t(vapply(fits, function(f) {
 }, numeric(7)))
 colnames(tab) <- c(paste0("mean[", 1:3, "]"), paste0("sd[", 1:3, "]"), "seconds")
 round(tab, 3)
+```
+
+For the Markov chain methods, R-hat and the effective sample size of
+`beta[3]` show how much each draw is worth:
+
+```{r}
+t(vapply(fits[c("NUTS", "HMC", "MALA", "Metropolis", "Slice")], function(f) {
+  s <- summary(f, "beta[3]")
+  c(rhat = s$rhat, ess_bulk = s$ess_bulk, ess_per_second = s$ess_bulk / f$time$total)
+}, numeric(3)))
 ```
 
 The exact methods and SMC agree to within Monte Carlo error. Laplace is

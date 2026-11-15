@@ -97,11 +97,10 @@ use memory linear in the length of the vector.
 
 Guidelines:
 
-* Write vectorized sampling statements and functions where you can; the
-  compiler handles simple loops, but not loops with local variables,
-  conditions or dependence between iterations.
-* Use vectorized sampling statements and functions (`y ~ normal(mu, s)`
-  with vector `mu`), not loops over observations.
+* Write vectorized sampling statements and functions (`y ~ normal(mu, s)`
+  with vector `mu`) where you can. The compiler vectorizes simple loops
+  over observations, but not loops with local variables, conditions or
+  dependence between iterations.
 * Use the GLM densities (`normal_id_glm`, `bernoulli_logit_glm`,
   `poisson_log_glm`, `neg_binomial_2_log_glm`, `categorical_logit_glm`,
   `ordered_logistic_glm`) for regressions.
@@ -127,7 +126,9 @@ parallel, or set the `mc.cores` option once per session, which every
 function that takes `cores` uses as its default. Chains run in forked
 processes; on Windows, where forking is not available, they run in a socket
 cluster whose workers load the installed package and print their progress
-when they finish. Each
+when they finish. `options(bayescompR.parallel = "psock")` uses a socket
+cluster on any system, and `"fork"` (the default elsewhere) forked
+processes. Each
 chain has its own random number stream derived from `seed`, so the draws are
 identical whether the chains run in parallel or not.
 
@@ -143,19 +144,48 @@ The other samplers that take `cores` (for example `bayescomp_gibbs()`,
 `bayescomp_smc()` and `bayescomp_ep()` use it for the particle moves and the
 site updates.
 
+## Finding the slow part
+
+`profile` blocks time parts of a program, as in CmdStan. `fit$profile`
+gives, for each block and chain, the time spent in it during the forward
+pass (`forward_time`), the time of the gradient passing back through it
+(`reverse_time`) and the number of gradient evaluations
+(`autodiff_calls`).
+
+```{r}
+pm <- bayescomp_model("
+data { int N; vector[N] x; vector[N] y; }
+parameters { real a; real b; real<lower=0> s; }
+model {
+  profile(\"priors\") { a ~ normal(0, 1); b ~ normal(0, 1); s ~ exponential(1); }
+  profile(\"likelihood\") { y ~ normal(a + b * x, s); }
+}", data = list(N = N, x = x, y = y))
+fit_p <- bayescomp_sample(pm, chains = 1, iter_warmup = 200, iter_sampling = 200, seed = 1, refresh = 0)
+fit_p$profile
+```
+
+## Package options
+
+| Option | Default | Effect |
+|---|---|---|
+| `mc.cores` | 1 | chains run in parallel on this many cores |
+| `bayescompR.parallel` | `"fork"` (`"psock"` on Windows) | how parallel chains run |
+| `bayescompR.vectorize` | `TRUE` | the loop vectorization pass |
+| `bayescompR.check_adjoints` | `FALSE` | check the shape of every adjoint (for developers; slow) |
+
 ## Native backends
 
 For models whose likelihood is written as loops the interpreter overhead
 dominates, and the native backends help most. Measured on an Apple silicon
 laptop for a normal linear regression with N = 5000, one gradient takes
-939 ms in R and 2.7 ms with Cranelift when the likelihood is a loop over
-observations, and 0.56 ms in R and 0.23 ms with Cranelift when it is
-vectorized. NUTS on the vectorized model runs about 1.7 times faster end to
+939 ms in R (with `options(bayescompR.vectorize = FALSE)`) and 2.7 ms with
+Cranelift when the likelihood is a loop over observations, and 0.56 ms in
+R and 0.23 ms with Cranelift when it is vectorized. NUTS on the vectorized model runs about 1.7 times faster end to
 end, since the sampler itself stays in R. Vectorize first; then try a
 native backend:
 
 ```{r, eval = FALSE}
-library(bayescompRCranelift)
+bayescomp_install_backend("cranelift")   # once
 m <- bayescomp_model(code, data, backend = "cranelift", allow_fallback = TRUE)
 bayescomp_validate_backend(m)
 ```

@@ -87,8 +87,23 @@ rbind(ad = as.vector(g), finite_difference = fd)
 max(abs(g - fd))
 ```
 
-The test suite runs this comparison for every elementwise function, every
-distribution and the linear algebra functions.
+The test suite runs this comparison for the elementwise functions, the
+distributions and the linear algebra functions (see `vignette("validation")`
+for what is covered). `bayescomp_check_gradients()` runs the same test on
+any model, as CmdStan's `diagnose` method does, and
+`options(bayescompR.check_adjoints = TRUE)` makes every backward rule check
+the shape of the adjoints it returns, which the package tests use to catch
+bugs in new rules.
+
+### Differentiable R code
+
+Values on the tape are objects of class `bcad` holding a value and a node.
+Arithmetic (`+ - * / ^`, `%*%`), the Math group (`exp`, `log`, `sqrt`,
+`lgamma` and the rest), `sum`, `prod`, indexing, `c()`, `t()` and `ifelse()`
+work on them, so R functions supplied through `bayescomp_model(functions =
+...)` that use these operations are differentiated without change. Code
+that leaves this set (calls to C code such as `stats::dnorm`, or
+`as.numeric()`) drops the derivative.
 
 ## Transforms
 

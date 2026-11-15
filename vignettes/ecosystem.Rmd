@@ -10,7 +10,7 @@ vignette: >
 ```{r, include = FALSE}
 # the full examples run when the package is built; CRAN checks skip them for time
 has <- function(p) requireNamespace(p, quietly = TRUE)
-knitr::opts_chunk$set(eval = identical(Sys.getenv("NOT_CRAN"), "true") && has("posterior") && has("bayesplot") && has("loo"),
+knitr::opts_chunk$set(eval = identical(Sys.getenv("NOT_CRAN"), "true") && has("posterior") && has("bayesplot") && has("loo") && has("rstantools"),
                       collapse = TRUE, comment = "#>", fig.width = 7, fig.height = 4)
 ```
 
@@ -90,7 +90,15 @@ A generated quantities block is not needed for either, and
 `rstantools::posterior_predict()` and `rstantools::log_lik()` fall back
 to them when the fit has no `y_rep` or `log_lik` variable.
 
+Each sampling statement or `target +=` of a density on data in the model
+block contributes one column per element of its left side; a
+multivariate statement contributes one column for the whole statement.
+Truncated statements are not supported, and posterior predictive draws are
+`NA` for a density without an `_rng` function.
+
 ```{r}
+ll <- bayescomp_log_lik(fit)
+dim(ll)   # draws by observations
 yrep <- bayescomp_posterior_predict(fit, seed = 2)
 dim(yrep)
 bayesplot::ppc_dens_overlay(y, yrep[1:50, ])
@@ -111,7 +119,10 @@ lo
 The outlier has a large Pareto k, so its PSIS estimate is unreliable.
 `bayescomp_reloo()` refits the model without each such observation and
 replaces its estimate with the exact leave one out predictive density.
-It needs a function that removes observation `i` from the data:
+It needs a function that returns the data with observation `i` removed.
+The held out density is evaluated with the full data model at the draws of
+the refit, so the parameters must not depend on the number of
+observations:
 
 ```{r}
 drop_obs <- function(i) list(N = N - 1L, x = x[-i], y = y[-i])

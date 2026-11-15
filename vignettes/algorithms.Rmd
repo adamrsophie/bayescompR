@@ -33,6 +33,23 @@ Each section names what the method needs from the model and whether its
 draws are exact (the Markov chain leaves the posterior invariant) or
 approximate.
 
+| Situation | Function | Needs | Draws |
+|---|---|---|---|
+| several separated modes | `bayescomp_parallel_tempering()` | log density | exact |
+| several modes, independent draws | `bayescomp_diffusion()` | log density | approximate |
+| no gradients, correlated parameters | `bayescomp_sample(algorithm = "elliptical_slice")`, `bayescomp_ensemble()` | log density | exact |
+| conjugate or simple full conditionals | `bayescomp_gibbs()` | log density | exact |
+| small, strongly curved posteriors | `bayescomp_riemannian()` (`"smmala"`, `"rmhmc"`) | gradient | exact |
+| cheap approximate sampling | `bayescomp_mclmc()` | gradient | approximate |
+| non reversible continuous time dynamics | `bayescomp_pdmp()` (`"zigzag"`, `"bps"`) | gradient | approximate |
+| latent Markov process | `bayescomp_pmcmc()` (`"pmmh"`, `"pgibbs"`) | R functions for the process | exact |
+| many observations | `bayescomp_sgmcmc()` (`"sgld"`, `"sghmc"`), `bayescomp_ep()` | gradient; observation count in the data | approximate |
+| latent Gaussian field, at most 4 hyperparameters | `bayescomp_inla()` | gradient | approximate |
+| evidence of one model | `bayescomp_nested()`, `bayescomp_smc()` | proper prior | consistent |
+| choosing among models | `bayescomp_rjmcmc()` | proper priors | exact |
+| flexible variational fit | `bayescomp_flow_vi()` | gradient | approximate |
+| simulator without likelihood | `bayescomp_npe()` | prior model and simulator | approximate |
+
 ## A multimodal target
 
 Two well separated modes trap NUTS in whichever mode it starts in.
@@ -67,7 +84,11 @@ pt$log_evidence
 The share of draws in the left mode is near its weight 0.3. The stepping
 stone evidence estimate is near 0, the log normalizing constant of this
 density. `barrier` is the estimated global communication barrier
-$\Lambda$; the schedule needs about $2 \Lambda$ temperatures.
+$\Lambda$; the schedule needs about $2 \Lambda$ temperatures:
+
+```{r}
+pt$barrier
+```
 
 ### Reverse diffusion Monte Carlo
 
@@ -114,7 +135,9 @@ summary(es)
 others to propose: the affine invariant stretch move (Goodman and Weare
 2010) or differential evolution (ter Braak 2006). Both are invariant to
 linear transformations of the parameters. Walkers are reported as chains;
-they are not independent, so R-hat across walkers is optimistic. Needs: log
+they are not independent, so R-hat across walkers is optimistic; run
+independent ensembles with `chains` and compare them instead. The default
+`method = "stretch"` has one tuning constant `a` (default 2). Needs: log
 density. Exact.
 
 ```{r}
@@ -263,6 +286,10 @@ step and its draws are approximate; it pays off when the data are large.
 
 `bayescomp_inla()` integrates out a latent block by Laplace approximation
 and explores the remaining hyperparameters on a grid (Rue et al. 2009).
+The parameters not listed in `latent` are the hyperparameters; there can
+be at most 4, since the grid grows exponentially with their number. The
+approximation is accurate when the latent block is close to Gaussian given
+the hyperparameters. Needs: gradient. Approximate.
 
 ```{r}
 schools <- bayescomp_model("
@@ -278,7 +305,12 @@ s_il[s_il$variable %in% c("mu", "tau", "theta[1]"), c("variable", "mean", "sd")]
 ## Model comparison
 
 Nested sampling estimates the evidence of one model; reversible jump MCMC
-samples across several and returns posterior model probabilities.
+samples across several and returns posterior model probabilities. Both
+need proper priors, since the evidence is the likelihood averaged over the
+prior. Nested sampling draws from the prior as the model evaluated on an
+empty data set, so the data must contain the observation count `N` (or
+pass `subset`). Evidence depends strongly on the prior scales, so compare
+models only with priors chosen with care.
 
 ```{r}
 yy <- c(0.5, 1.2, 2, 0.8, 1.6)

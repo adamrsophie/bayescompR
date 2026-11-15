@@ -107,6 +107,22 @@ and tail effective sample sizes.
 
 ```{r}
 summary(fit, c("mu", "tau", "theta"))
+summary(fit, "tau", probs = c(0.025, 0.5, 0.975))
+```
+
+## Anatomy of a fit
+
+A `bayescomp_fit` is a list. The draws are an iterations by chains by
+variables array on the constrained scale, with `lp__` first; the sampler
+diagnostics, the adapted step sizes and metrics, the configuration and the
+timing are kept next to them:
+
+```{r}
+names(fit)
+dim(fit$draws)
+dimnames(fit$draws)$variable[1:5]
+fit$step_size
+fit$time$total
 ```
 
 ## Diagnostics
@@ -129,6 +145,8 @@ plot(fit, c("mu", "tau"))
 ```{r}
 draws <- bayescomp_draws(fit, c("mu", "tau"), format = "matrix")
 dim(draws)
+head(bayescomp_draws(fit, "tau", format = "df"))   # with .chain, .iteration and .draw
+dim(as.matrix(fit))
 theta <- bayescomp_extract(fit, "theta")  # draws by schools
 dim(theta)
 colMeans(theta)
@@ -141,8 +159,10 @@ y_rep <- bayescomp_extract(fit, "y_rep")
 mean(apply(y_rep, 1, max) >= max(schools$y))
 ```
 
-With the posterior package installed, `bayescomp_as_draws()` converts a fit
-to a `draws_array` for use with posterior, bayesplot and loo.
+Warmup draws are kept with `save_warmup = TRUE` and returned with
+`bayescomp_draws(inc_warmup = TRUE)`. With the posterior package installed,
+`bayescomp_as_draws()` converts a fit to a `draws_array` for use with
+posterior, bayesplot and loo.
 
 ## Faster approximations
 
@@ -173,3 +193,17 @@ bayescomp_log_prob(model, u)
 head(bayescomp_grad_log_prob(model, u))
 str(bayescomp_constrain(model, u)[c("mu", "tau")])
 ```
+
+## Where next
+
+* `vignette("stan-language")`: the Stan language as bayescompR implements it.
+* `vignette("inference")`: every argument of `bayescomp_sample()`, and the
+  other CmdStan methods compared on one model.
+* `vignette("algorithms")`: the samplers and approximations beyond CmdStan.
+* `vignette("diagnostics")`: convergence checks and what to do when they fail.
+* `vignette("ecosystem")`: posterior, bayesplot, loo, brms, rstanarm and multinma.
+* `vignette("cmdstan-workflow")`: CmdStan files and the stanc tools.
+* `vignette("performance")`: making models fast, parallel chains and options.
+* `vignette("autodiff-and-transforms")` and `vignette("validation")`: how the
+  results are computed and checked.
+* `vignette("backends")`: the intermediate representation and native backends.

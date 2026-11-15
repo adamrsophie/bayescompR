@@ -168,6 +168,52 @@ model { x ~ my_normal(0, 1); }")
 bayescomp_log_prob(m, 0.2)
 ```
 
+Functions declared without a body are external functions, as Stan's C++
+extensions. `bayescomp_model(functions = )` supplies them as R functions;
+arguments that depend on parameters arrive as automatic differentiation
+values, so the R function must use operations that support them (plain
+arithmetic and the math functions do):
+
+```{r}
+ext <- bayescomp_model("
+functions { real scaled_sq(real x, real a); }
+parameters { real x; }
+model { target += -scaled_sq(x, 0.5); }",
+  functions = list(scaled_sq = function(x, a) a * x^2))
+bayescomp_log_prob(ext, 2)
+```
+
+## Includes, profiles and CHAIN_ID
+
+`#include` reads files from `include_paths` (and from the directory of
+`file` when the program is read from a file), as stanc does:
+
+```{r}
+inc_dir <- tempfile(); dir.create(inc_dir)
+writeLines("real half_square(real x) { return 0.5 * x^2; }", file.path(inc_dir, "helpers.stan"))
+stan_file <- tempfile(fileext = ".stan")
+writeLines(c("functions {", "#include helpers.stan", "}",
+             "parameters { real x; } model { target += -half_square(x); }"), stan_file)
+inc <- bayescomp_model(file = stan_file, include_paths = inc_dir)
+bayescomp_log_prob(inc, 1)
+```
+
+`profile(\"name\") { ... }` blocks time parts of a program (see
+`vignette("performance")`). As in rstan, a data variable `int CHAIN_ID`
+that is declared but not supplied is set to the chain number in every
+sampler, so a program can, for example, give each chain its own start.
+
+## Differences from Stan
+
+| Topic | bayescompR |
+|---|---|
+| Programs | parsed and run by R; no C++ compilation |
+| Integers | R integers (32 bits); overflow is an error |
+| Eigenvectors, singular vectors | may differ from CmdStan by sign or phase per column |
+| Random numbers | R's generator, so draws differ from CmdStan's for the same seed |
+| External C++ functions | supplied as R functions through `functions =` |
+| Parallel chains | forked processes, or a socket cluster on Windows |
+
 ## The standard library
 
 All of Stan's elementwise math functions, container operations
@@ -203,8 +249,8 @@ Errors have classes, so programs can catch them selectively:
 | `bayescomp_data_error` | data do not match the declarations |
 | `bayescomp_shape_error` | container sizes do not agree at run time |
 | `bayescomp_domain_error` | a function argument is out of its domain |
-| `bayescomp_reject_error` | the program calls `reject()` (or `fatal_error()`) |
-| `bayescomp_fatal_error` | the program calls `fatal_error()` |
+| `bayescomp_reject_error` | the program calls `reject()` |
+| `bayescomp_fatal_error` | the program calls `fatal_error()`; also a `bayescomp_reject_error` |
 
 Every one of them also has the class `bayescomp_error`, so
 `tryCatch(..., bayescomp_error = ...)` catches all errors of the package.

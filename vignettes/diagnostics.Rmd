@@ -46,10 +46,14 @@ ar <- apply(good, 2, function(z) stats::filter(z, 0.95, method = "recursive"))
 c(rhat_good = bayescomp_rhat(good), rhat_stuck = bayescomp_rhat(stuck))
 c(ess_good = bayescomp_ess_bulk(good), ess_autocorrelated = bayescomp_ess_bulk(ar))
 c(mcse_mean = bayescomp_mcse_mean(good), mcse_sd = bayescomp_mcse_sd(good))
+bayescomp_ess_quantile(good, c(0.05, 0.5, 0.95))
+bayescomp_mcse_quantile(good, c(0.05, 0.5, 0.95))
 ```
 
 Inputs are iterations by chains matrices. `summary()` applies these to
-every variable of a fit.
+every variable of a fit, including the Monte Carlo standard errors of the
+mean and the standard deviation (`mcse_mean`, `mcse_sd`): report a
+posterior mean only to the digits its MCSE supports.
 
 ## Sampler diagnostics
 
@@ -66,7 +70,30 @@ every variable of a fit.
 
 The per draw values are in `fit$sampler_diagnostics`: `accept_stat__`,
 `stepsize__`, `treedepth__`, `n_leapfrog__`, `divergent__` and
-`energy__`.
+`energy__`. E-BFMI per chain can be computed from `energy__` directly:
+
+```{r}
+fit_ok <- bayescomp_sample(bayescomp_model("parameters { vector[3] z; } model { z ~ std_normal(); }"),
+                           chains = 2, iter_warmup = 300, iter_sampling = 300, seed = 1, refresh = 0)
+e <- fit_ok$sampler_diagnostics[, , "energy__"]
+apply(e, 2, function(x) sum(diff(x)^2) / sum((x - mean(x))^2))   # E-BFMI per chain
+table(fit_ok$sampler_diagnostics[, , "treedepth__"])
+```
+
+## Plots
+
+`plot()` draws trace plots by default; `type = "density"` the marginal
+densities by chain, `"rank"` rank histograms (each chain's histogram
+should be flat when the chains mix), and `"ess_local"` and
+`"ess_quantile"` the effective sample size of small intervals and of
+quantiles, which show where in the distribution the draws are scarce.
+
+```{r, fig.height = 3}
+plot(fit_ok, "z[1]")
+plot(fit_ok, "z[1]", type = "density")
+plot(fit_ok, "z[1]", type = "rank")
+plot(fit_ok, "z[1]", type = "ess_quantile")
+```
 
 ## Divergences in a funnel
 
@@ -144,6 +171,17 @@ fit_rej$rejections
 
 Declaring `real<lower=0> s;` removes them.
 
+## What to change when a check fails
+
+| Problem | First things to try |
+|---|---|
+| R-hat above 1.01 | run longer chains; look for multimodality with a trace or rank plot; reparameterize; try `bayescomp_smc()` or `bayescomp_parallel_tempering()` for several modes |
+| Low bulk or tail ESS | run longer chains; `metric = "dense_e"` for correlated parameters; reparameterize |
+| Divergent transitions | non centered parameterizations of hierarchical models; `adapt_delta = 0.95` or `0.99`; stronger priors on scale parameters |
+| Maximum tree depth | `metric = "dense_e"`; rescale parameters to unit scale; raise `max_treedepth` |
+| Low E-BFMI | reparameterize heavy tailed or funnel shaped parts |
+| Many rejections | declare the constraints the parameters need (`<lower=0>` on scales) |
+
 ## Approximate methods
 
 R-hat and ESS do not apply to Laplace, ADVI or Pathfinder draws, which are
@@ -154,6 +192,15 @@ HMC. Their reliability is assessed
 differently: Pathfinder reports the Pareto $\hat k$ of its importance
 weights (`fit$pareto_k`, above 0.7 is unreliable), and the `log_p__` and
 `log_g__` columns of Laplace and ADVI fits give the importance ratios for a
-Pareto smoothed importance sampling check with the loo package. SMC reports
+Pareto smoothed importance sampling check with the loo package:
+
+```{r, eval = identical(Sys.getenv("NOT_CRAN"), "true") && requireNamespace("loo", quietly = TRUE)}
+lap <- bayescomp_laplace(noncentered, draws = 1000, seed = 1)
+log_ratio <- as.vector(bayescomp_draws(lap, "log_p__")) - as.vector(bayescomp_draws(lap, "log_g__"))
+loo::psis(log_ratio, r_eff = NA)$diagnostics$pareto_k
+```
+
+A $\hat k$ above 0.7 means the approximation should not be used for
+estimates, even by importance sampling. SMC reports
 the temperatures and per stage Metropolis acceptance rates in
 `fit$betas` and `fit$acceptance`.

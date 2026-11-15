@@ -98,7 +98,7 @@ json_string <- function(s) paste0('"', gsub('(["\\\\])', "\\\\\\1", s), '"')
 
 json_num <- function(x) {
   out <- formatC(x, digits = 15, format = "g")
-  redo <- is.finite(x) & as.numeric(out) != x
+  redo <- is.finite(x) & suppressWarnings(as.numeric(out)) != x
   out[redo] <- formatC(x[redo], digits = 17, format = "g")
   out[is.nan(x)] <- '"NaN"'
   out[is.infinite(x)] <- ifelse(x[is.infinite(x)] > 0, '"Infinity"', '"-Infinity"')
