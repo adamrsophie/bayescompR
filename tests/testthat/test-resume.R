@@ -11,11 +11,20 @@ test_that("an interrupt keeps the finished chains or the partial chain", {
   expect_equal(dim(fit$draws)[1:2], c(100L, 1L))
   local_mocked_bindings(chain_message = interrupt_at("Chain 1: Iteration: 150"))
   expect_warning(fit <- bayescomp_sample(m, chains = 2, iter_warmup = 100, iter_sampling = 100, seed = 1, refresh = 50, cores = 1),
-                 "the 50 draws of chain 1")
+                 "the first 50 draws of chain 1,")
   expect_equal(dim(fit$draws)[1:2], c(50L, 1L))
   local_mocked_bindings(chain_message = interrupt_at("Chain 1: Iteration:  50"))
   expect_error(suppressWarnings(bayescomp_sample(m, chains = 1, iter_warmup = 100, iter_sampling = 100, seed = 1, refresh = 50)),
                "before any draw")
+})
+
+test_that("chains stopped together are all kept, cut to the shortest", {
+  r <- function(n) list(q = matrix(seq_len(n), n, 1), diag = matrix(0, n, 7), gq = matrix(0, n, 2), n_warmup_saved = 0L, interrupted = TRUE)
+  res <- structure(list(r(30), r(0), r(20)), seed = 1L)
+  expect_warning(out <- interrupted_chains(res), "the first 20 draws of chains 1, 3,")
+  expect_equal(vapply(out, function(x) nrow(x$q), 1L), c(20L, 20L))
+  expect_equal(nrow(out[[1]]$gq), 20L)
+  expect_true(attr(out, "interrupted"))
 })
 
 test_that("resume continues each chain without warmup", {

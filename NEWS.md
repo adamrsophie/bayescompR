@@ -22,8 +22,8 @@ First release.
 * `bayescomp_reloo()` refits the model without each observation whose
   PSIS-LOO Pareto k is too large and updates the LOO estimates with its
   exact log predictive density.
-* An interrupt (Ctrl-C or Esc) while chains run sequentially returns the
-  finished chains, or the draws of the interrupted chain, instead of
+* An interrupt (Ctrl-C or Esc) returns the finished chains, or the draws
+  kept so far (parallel chains cut to the shortest), instead of
   losing them; `bayescomp_sample(resume = fit)` continues each chain from
   its last draw with its adapted step size and metric.
 * Fits from `bayescomp_sample()` record where divergent trajectories left

@@ -84,8 +84,6 @@ Compiler
   posterior estimation.
 * A code generator that emits the reverse sweep as R code instead of
   interpreting the tape.
-* Keeping partial draws when parallel chains in forked processes are
-  interrupted (sequential chains keep them now).
 
 ## Known gaps found in review
 

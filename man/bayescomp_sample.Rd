@@ -125,10 +125,12 @@ starts at its last draw with its adapted step size and metric, and runs
 two fits with \code{posterior::bind_draws(..., along = "iteration")}.}
 }
 \value{
-A \code{bayescomp_fit} object. An interrupt (Ctrl-C or Esc) while
-chains run one after another stops sampling and returns the finished
-chains, or the draws of the interrupted chain when none finished, with
-a warning and element \code{interrupted = TRUE}; continue with \code{resume}.
+A \code{bayescomp_fit} object. An interrupt (Ctrl-C or Esc) stops
+sampling and returns the chains that finished or, when none did, the
+draws kept so far (parallel chains in forked processes are cut to the
+shortest), with a warning and element \code{interrupted = TRUE}; continue
+with \code{resume}. Chains on a socket cluster (Windows) cannot be
+interrupted this way.
 Element \code{divergences} is a data frame with the chain, the iteration and
 the parameter values at the last point of each divergent NUTS
 trajectory after warmup before its energy error grew too large (\code{NULL}

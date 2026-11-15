@@ -115,9 +115,11 @@ fit_ctrl$inv_metric[[1]]
 
 ### Interrupting and resuming
 
-Pressing Ctrl-C (Esc in RStudio) while chains run one after another stops
-sampling and returns what is done, with a warning: the chains that
-finished, or the draws of the interrupted chain when none did. The fit has
+Pressing Ctrl-C (Esc in RStudio) stops sampling and returns what is done,
+with a warning: the chains that finished or, when none did, the draws kept
+so far. Chains that ran in parallel are cut to the length of the shortest
+one. (Chains on a Windows socket cluster cannot be interrupted this way.)
+The fit has
 `interrupted = TRUE`. `resume` continues every chain of a fit from its last
 draw with its adapted step size and metric, without warmup, so a short run
 can be extended:

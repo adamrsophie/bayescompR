@@ -77,10 +77,12 @@
 #'   starts at its last draw with its adapted step size and metric, and runs
 #'   `iter_sampling` further iterations without warmup. Bind the draws of the
 #'   two fits with `posterior::bind_draws(..., along = "iteration")`.
-#' @return A `bayescomp_fit` object. An interrupt (Ctrl-C or Esc) while
-#'   chains run one after another stops sampling and returns the finished
-#'   chains, or the draws of the interrupted chain when none finished, with
-#'   a warning and element `interrupted = TRUE`; continue with `resume`.
+#' @return A `bayescomp_fit` object. An interrupt (Ctrl-C or Esc) stops
+#'   sampling and returns the chains that finished or, when none did, the
+#'   draws kept so far (parallel chains in forked processes are cut to the
+#'   shortest), with a warning and element `interrupted = TRUE`; continue
+#'   with `resume`. Chains on a socket cluster (Windows) cannot be
+#'   interrupted this way.
 #'   Element `divergences` is a data frame with the chain, the iteration and
 #'   the parameter values at the last point of each divergent NUTS
 #'   trajectory after warmup before its energy error grew too large (`NULL`
@@ -165,7 +167,10 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
       cf$inv_metric <- resume$inv_metric[[id]]
     } else q0 <- find_init(model, init, id, gradient = !(algorithm %in% c("metropolis", "slice", "elliptical_slice", "fixed_param")))
     out <- if (n == 0L || algorithm == "fixed_param") fixed_param_chain(cf, q0) else run_hmc_chain(model, q0, cf, id)
-    out$gq <- chain_write_draws(model, out$q, show_print)
+    # after an interrupt, a second one (a parallel chain is signaled again
+    # by the parent) must not lose the draws kept
+    out$gq <- if (isTRUE(out$interrupted)) suspendInterrupts(chain_write_draws(model, out$q, show_print))
+              else chain_write_draws(model, out$q, show_print)
     out
   })
   res <- interrupted_chains(res)
@@ -180,12 +185,30 @@ interrupted_chains <- function(res) {
   stopped <- vapply(res, function(r) isTRUE(r$interrupted), TRUE)
   if (!any(stopped)) return(res)
   seed <- attr(res, "seed")
-  keep <- if (all(stopped)) which(stopped)[1L] else which(!stopped)
-  out <- res[keep]
-  if (!nrow(out[[1L]]$q)) stop("sampling was interrupted before any draw was kept", call. = FALSE)
-  warning(sprintf("sampling was interrupted; the fit has %s", if (all(stopped))
-    sprintf("the %d draws of chain %d kept before the interrupt", nrow(out[[1L]]$q), keep)
-    else sprintf("the %d chains that finished", length(keep))), call. = FALSE)
+  if (all(stopped)) {
+    # parallel chains stop together: keep every chain that has draws, cut to
+    # the shortest; with saved warmup draws of different lengths, the longest
+    n <- vapply(res, function(r) nrow(r$q), 1L)
+    w <- vapply(res, function(r) r$n_warmup_saved, 1L)
+    keep <- which(n > 0L)
+    if (!length(keep)) stop("sampling was interrupted before any draw was kept", call. = FALSE)
+    if (length(unique(w[keep])) > 1L || any(n[keep] <= w[keep])) keep <- which.max(n)
+    m <- min(n[keep])
+    out <- lapply(res[keep], function(r) {
+      r$q <- r$q[seq_len(m), , drop = FALSE]
+      r$diag <- r$diag[seq_len(m), , drop = FALSE]
+      if (!is.null(r$gq)) r$gq <- r$gq[seq_len(m), , drop = FALSE]
+      if (!is.null(r$diagnostics)) r$diagnostics <- lapply(r$diagnostics, function(x) x[seq_len(m), , drop = FALSE])
+      r
+    })
+    msg <- sprintf("the first %d draws of chain%s %s, kept before the interrupt", m,
+                   if (length(keep) > 1L) "s" else "", paste(keep, collapse = ", "))
+  } else {
+    keep <- which(!stopped)
+    out <- res[keep]
+    msg <- sprintf("the %d chains that finished", length(keep))
+  }
+  warning(sprintf("sampling was interrupted; the fit has %s", msg), call. = FALSE)
   attr(out, "seed") <- seed
   attr(out, "interrupted") <- TRUE
   out
@@ -238,19 +261,32 @@ run_forked <- function(n, cores, f) {
   out <- vector("list", n)
   todo <- seq_len(n)
   running <- list()
-  while (length(todo) || length(running)) {
-    while (length(todo) && length(running) < cores) {
-      i <- todo[1L]
-      todo <- todo[-1L]
-      job <- parallel::mcparallel({ .progress$file <- files[i]; f(i) }, silent = FALSE)
-      running[[as.character(job$pid)]] <- list(job = job, i = i)
+  store <- function(res) for (pid in names(res)) {
+    out[[running[[pid]]$i]] <<- res[[pid]]
+    running[[pid]] <<- NULL
+  }
+  stopped <- tryCatch({
+    while (length(todo) || length(running)) {
+      while (length(todo) && length(running) < cores) {
+        i <- todo[1L]
+        todo <- todo[-1L]
+        job <- parallel::mcparallel({ .progress$file <- files[i]; f(i) }, silent = FALSE)
+        running[[as.character(job$pid)]] <- list(job = job, i = i)
+      }
+      store(parallel::mccollect(lapply(running, `[[`, "job"), wait = FALSE, timeout = 0.25))
+      relay()
     }
-    res <- parallel::mccollect(lapply(running, `[[`, "job"), wait = FALSE, timeout = 0.25)
-    relay()
-    for (pid in names(res)) {
-      out[[running[[pid]]$i]] <- res[[pid]]
-      running[[pid]] <- NULL
-    }
+    FALSE
+  }, interrupt = function(e) TRUE)
+  if (stopped) {
+    # Ctrl-C in a terminal reaches the children too, and they return the
+    # draws kept so far; a GUI such as RStudio interrupts only this process,
+    # so the children still running are interrupted here. Chains not yet
+    # started are not run.
+    store(parallel::mccollect(lapply(running, `[[`, "job"), wait = FALSE, timeout = 1))
+    for (r in running) tools::pskill(r$job$pid, tools::SIGINT)
+    if (length(running)) store(parallel::mccollect(lapply(running, `[[`, "job"), wait = TRUE))
+    out <- Filter(function(r) is.list(r) && !inherits(r, "try-error"), out)
   }
   relay()
   out
@@ -343,6 +379,7 @@ run_chains <- function(model, chains, seed, cores, f) {
     if (parallel_backend() == "psock") force_frame(environment(f))
     out <- if (parallel_backend() == "fork") run_forked(chains, min(cores, chains), one)
            else run_psock(chains, min(cores, chains), one)
+    if (!length(out)) stop("sampling was interrupted before any draw was kept", call. = FALSE)
     bad <- vapply(out, inherits, TRUE, what = "try-error")
     if (any(bad)) stop(sprintf("chain %d failed: %s", which(bad)[1L], attr(out[[which(bad)[1L]]], "condition")$message), call. = FALSE)
   } else {
