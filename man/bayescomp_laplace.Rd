@@ -10,7 +10,8 @@ bayescomp_laplace(
   jacobian = TRUE,
   draws = 1000L,
   seed = NULL,
-  calculate_lp = TRUE
+  calculate_lp = TRUE,
+  refresh = 0L
 )
 }
 \arguments{
@@ -29,6 +30,9 @@ the name of a file with the mode: a Stan CSV file from an optimization
 
 \item{calculate_lp}{Evaluate the log density of the draws (\code{log_p__});
 with \code{FALSE} it is \code{NaN}, as in CmdStan.}
+
+\item{refresh}{Report the stages, the optimizer's iterations and every
+\code{refresh} draws (0, the default, is quiet).}
 }
 \value{
 A \code{bayescomp_fit} with extra columns \code{log_p__} and \code{log_g__}.

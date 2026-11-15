@@ -160,3 +160,13 @@ test_that("no two internal functions share a name", {
   }))
   expect_identical(unique(nm[duplicated(nm)]), character(0))
 })
+
+test_that("refresh reports progress without changing the results", {
+  m <- bayescomp_model("parameters { vector[2] mu; } model { mu ~ normal(1, 1); }")
+  expect_message(o <- bayescomp_optimize(m, seed = 1, refresh = 1))
+  expect_message(p <- bayescomp_pathfinder(m, num_paths = 1, num_draws = 20, num_psis_draws = 20, seed = 1, refresh = 1), "Best ELBO")
+  expect_message(l <- bayescomp_laplace(m, draws = 4, seed = 1, refresh = 2), "iteration: 4 / 4")
+  expect_identical(p$draws, bayescomp_pathfinder(m, num_paths = 1, num_draws = 20, num_psis_draws = 20, seed = 1)$draws)
+  expect_identical(l$draws, bayescomp_laplace(m, draws = 4, seed = 1)$draws)
+  expect_silent(bayescomp_laplace(m, draws = 4, seed = 1))
+})

@@ -23,7 +23,8 @@ bayescomp_pathfinder(
   tol_param = 1e-08,
   init = 2,
   seed = NULL,
-  cores = getOption("mc.cores", 1L)
+  cores = getOption("mc.cores", 1L),
+  refresh = 0L
 )
 }
 \arguments{
@@ -62,6 +63,10 @@ tolerances are multiples of the machine epsilon).}
 \item{init, seed}{As in \code{\link[=bayescomp_sample]{bayescomp_sample()}}.}
 
 \item{cores}{Paths to run in parallel; defaults to \code{getOption("mc.cores", 1L)}.}
+
+\item{refresh}{Report each path's L-BFGS iteration, log density, step
+length, gradient norm and ELBO every \code{refresh} iterations, and its best
+ELBO at the end (0, the default, is quiet).}
 }
 \value{
 A \code{bayescomp_fit} with method \code{"pathfinder"}, extra columns

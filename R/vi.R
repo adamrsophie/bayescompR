@@ -251,6 +251,7 @@ pathfinder_path <- function(lpg, u0, ctl) {
     rel <- df / max(abs(rn$value), abs(f0), 1)
     rel_grad <- abs(sum(rn$grad * lbfgs_two_loop(rn$grad, alpha, S, Y))) / max(abs(rn$value), 1)
     r <- rn
+    ev <- NULL
     if (ncol(S) > 0L) {
       ev <- evaluate(x, r$grad, alpha, S, Y)
       if (!is.null(ev)) {
@@ -258,6 +259,9 @@ pathfinder_path <- function(lpg, u0, ctl) {
         if (ev$elbo > best$elbo) best <- ev
       }
     }
+    if ((ctl$refresh %||% 0L) > 0L && it %% ctl$refresh == 0L)
+      message(sprintf("Path [%d] :Iter %6d  log prob %14.6g  ||dx|| %10.4g  ||grad|| %10.4g  ELBO %12.6g",
+                      ctl$path_id %||% 1L, it, r$value, sqrt(sum(s^2)), sqrt(sum(r$grad^2)), ev$elbo %||% NA_real_))
     if (df < ctl$tol_obj || rel < ctl$tol_rel_obj * eps || sqrt(sum(r$grad^2)) < ctl$tol_grad ||
         rel_grad < ctl$tol_rel_grad * eps || sqrt(sum(s^2)) < ctl$tol_param) break
   }
@@ -348,6 +352,9 @@ gpd_quantile <- function(p, k, sigma) sigma * expm1(-k * log1p(-p)) / k
 #'   tolerances are multiples of the machine epsilon).
 #' @param init,seed As in [bayescomp_sample()].
 #' @param cores Paths to run in parallel; defaults to `getOption("mc.cores", 1L)`.
+#' @param refresh Report each path's L-BFGS iteration, log density, step
+#'   length, gradient norm and ELBO every `refresh` iterations, and its best
+#'   ELBO at the end (0, the default, is quiet).
 #' @return A `bayescomp_fit` with method `"pathfinder"`, extra columns
 #'   `log_p__` and `log_q__`, and elements `pareto_k`, `elbo` (the best ELBO
 #'   of each path) and `path` (the path of each draw).
@@ -360,21 +367,24 @@ bayescomp_pathfinder <- function(model, num_paths = 4L, num_draws = 1000L, num_p
                                  max_lbfgs_iters = 1000L, num_elbo_draws = 25L, psis_resample = TRUE, calculate_lp = TRUE,
                                  save_single_paths = FALSE, init_alpha = 1e-3, tol_obj = 1e-12, tol_rel_obj = 1e4,
                                  tol_grad = 1e-8, tol_rel_grad = 1e7, tol_param = 1e-8,
-                                 init = 2, seed = NULL, cores = getOption("mc.cores", 1L)) {
+                                 init = 2, seed = NULL, cores = getOption("mc.cores", 1L), refresh = 0L) {
   check_model(model)
   if (model$dim == 0L) stop("the model has no parameters", call. = FALSE)
+  refresh <- as.integer(refresh)
   num_paths <- as_count(num_paths, "num_paths", 1L)
   ctl <- pathfinder_control(history_size = as_count(history_size, "history_size", 1L),
                             max_iter = as_count(max_lbfgs_iters, "max_lbfgs_iters", 1L),
                             num_elbo_draws = as_count(num_elbo_draws, "num_elbo_draws", 1L),
                             num_draws = as_count(num_draws, "num_draws", 1L), calculate_lp = isTRUE(calculate_lp),
                             init_alpha = init_alpha, tol_obj = tol_obj, tol_rel_obj = tol_rel_obj, tol_grad = tol_grad,
-                            tol_rel_grad = tol_rel_grad, tol_param = tol_param)
+                            tol_rel_grad = tol_rel_grad, tol_param = tol_param, refresh = refresh)
   num_psis_draws <- as_count(num_psis_draws, "num_psis_draws", 1L)
   t0 <- proc.time()[["elapsed"]]
   paths <- run_chains(model, num_paths, seed, cores, function(id) {
     lpg <- safe_lp(model, jacobian = TRUE)
-    pathfinder_path(lpg, find_init(model, init, id), ctl)
+    p <- pathfinder_path(lpg, find_init(model, init, id), utils::modifyList(ctl, list(path_id = id)))
+    if (refresh > 0L) message(sprintf("Path [%d] :Best ELBO %.6g", id, p$elbo))
+    p
   })
   q <- do.call(rbind, lapply(paths, `[[`, "q"))
   lp <- unlist(lapply(paths, `[[`, "log_p"))

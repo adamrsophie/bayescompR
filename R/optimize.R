@@ -269,14 +269,19 @@ newton_opt <- function(lpg, u, iter, save_iterations = FALSE) {
 #' @param seed Random seed.
 #' @param calculate_lp Evaluate the log density of the draws (`log_p__`);
 #'   with `FALSE` it is `NaN`, as in CmdStan.
+#' @param refresh Report the stages, the optimizer's iterations and every
+#'   `refresh` draws (0, the default, is quiet).
 #' @return A `bayescomp_fit` with extra columns `log_p__` and `log_g__`.
 #' @examples
 #' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
 #' fit <- bayescomp_laplace(m, draws = 200, seed = 1)
 #' sd(bayescomp_extract(fit, "mu"))
 #' @export
-bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L, seed = NULL, calculate_lp = TRUE) {
+bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L, seed = NULL, calculate_lp = TRUE,
+                              refresh = 0L) {
   check_model(model)
+  refresh <- as.integer(refresh)
+  say <- function(...) if (refresh > 0L) message(sprintf(...))
   draws <- as_count(draws, "draws", 1L)
   if (is.character(mode))
     mode <- if (grepl("\\.csv$", mode, ignore.case = TRUE)) bayescomp_read_csv(mode, model = model) else bayescomp_read_data(mode)
@@ -284,7 +289,8 @@ bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L
   res <- run_chains(model, 1L, seed, 1L, function(id) {
     lpg <- safe_lp(model, jacobian)
     u <- if (is.null(mode)) {
-      op <- optimize_u(lpg, find_init(model, 2, 1L), "lbfgs")
+      say("Finding the mode with L-BFGS")
+      op <- optimize_u(lpg, find_init(model, 2, 1L), "lbfgs", list(refresh = refresh))
       if (op$code != 0L) warning(sprintf("the optimizer did not converge (code %d); the Laplace approximation may be centered away from the mode", op$code), call. = FALSE)
       op$u
     } else if (inherits(mode, "bayescomp_fit")) {
@@ -293,6 +299,7 @@ bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L
     } else {
       bayescomp_unconstrain(model, mode)
     }
+    say("Calculating the Hessian")
     H <- num_hessian(lpg, u)
     S <- tryCatch(solve(-H), error = function(e) stop("the Hessian at the mode is singular", call. = FALSE))
     S <- 0.5 * (S + t(S))
@@ -302,7 +309,11 @@ bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L
     qs <- sweep(z %*% t(L), 2L, u, "+")
     # CmdStan's log_q__: the unnormalized Gaussian density, 0 at the mode
     log_g <- -0.5 * rowSums(z^2)
-    log_p <- if (isTRUE(calculate_lp)) apply(qs, 1L, function(q) lpg(q)$value) else rep(NaN, draws)
+    say("Generating draws")
+    log_p <- if (isTRUE(calculate_lp)) vapply(seq_len(draws), function(i) {
+      if (refresh > 0L && i %% refresh == 0L) say("iteration: %d / %d", i, draws)
+      lpg(qs[i, ])$value
+    }, 0) else rep(NaN, draws)
     gq <- chain_write_draws(model, qs, FALSE)
     dg <- matrix(0, draws, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
     dg[, "lp__"] <- 0

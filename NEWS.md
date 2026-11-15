@@ -158,7 +158,8 @@ First release.
   R-hat as `bin/stansummary` and `bin/diagnose` do. The density columns of
   ADVI, Pathfinder and Laplace output (`log_p__`, `log_g__`, `log_q__`)
   follow CmdStan's conventions, and the CSV header uses CmdStan's layout.
-* `bayescomp_optimize()` gains `refresh`; `bayescomp_format()` keeps the
+* `bayescomp_optimize()`, `bayescomp_pathfinder()` and `bayescomp_laplace()` gain
+  `refresh` for progress output; `bayescomp_format()` keeps the
   comma of a one element tuple and prints empty blocks as stanc does;
   `bayescomp_info()` lists `print`, `reject` and operators called by name.
 * `bayescomp_write_csv()` needs an explicit `dir`.
