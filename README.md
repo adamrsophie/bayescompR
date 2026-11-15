@@ -7,7 +7,6 @@
 [![R-hub](https://github.com/adamrsophie/bayescompR/actions/workflows/rhub.yaml/badge.svg)](https://github.com/adamrsophie/bayescompR/actions/workflows/rhub.yaml)
 [![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Stan language 2.40](https://img.shields.io/badge/Stan%20language-2.40-b2001d.svg)](https://mc-stan.org/docs/reference-manual/)
 [![R >= 4.3.0](https://img.shields.io/badge/R-%E2%89%A5%204.3.0-276DC3.svg)](https://www.r-project.org)
 <!-- CRAN badge: uncomment once the package is on CRAN. -->
 <!-- [![CRAN status](https://www.r-pkg.org/badges/version/bayescompR)](https://CRAN.R-project.org/package=bayescompR) -->
