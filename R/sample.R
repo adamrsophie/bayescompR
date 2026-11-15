@@ -247,7 +247,7 @@ chain_message <- function(text) {
 # run f(1), ..., f(n) in at most `cores` forked processes, relaying progress
 run_forked <- function(n, cores, f) {
   files <- vapply(seq_len(n), function(i) tempfile(sprintf("chain%d_", i)), "")
-  on.exit(unlink(files), add = TRUE)
+  on.exit(unlink(c(files, paste0(files, ".stopped"))), add = TRUE)
   seen <- integer(n)
   relay <- function() for (i in seq_len(n)) if (file.exists(files[i])) {
     lines <- readLines(files[i], warn = FALSE)
@@ -284,7 +284,7 @@ run_forked <- function(n, cores, f) {
     # so the children still running are interrupted here. Chains not yet
     # started are not run.
     store(parallel::mccollect(lapply(running, `[[`, "job"), wait = FALSE, timeout = 1))
-    for (r in running) tools::pskill(r$job$pid, tools::SIGINT)
+    for (r in running) if (!file.exists(paste0(files[r$i], ".stopped"))) tools::pskill(r$job$pid, tools::SIGINT)
     if (length(running)) store(parallel::mccollect(lapply(running, `[[`, "job"), wait = TRUE))
     out <- Filter(function(r) is.list(r) && !inherits(r, "try-error"), out)
   }

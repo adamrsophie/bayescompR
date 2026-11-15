@@ -382,6 +382,9 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
     }
   }; FALSE }, interrupt = function(e) TRUE)
   if (stopped) {
+    # a forked chain tells the parent it already stopped, so that it is not
+    # interrupted a second time while its draws are processed
+    if (!is.null(.progress$file)) file.create(paste0(.progress$file, ".stopped"))
     keep <- seq_len(row)
     qs <- qs[keep, , drop = FALSE]
     diag_out <- diag_out[keep, , drop = FALSE]
