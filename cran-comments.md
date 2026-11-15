@@ -23,10 +23,13 @@ This is the first submission of bayescompR.
 0 errors | 0 warnings | 1 note
 
 * New submission.
-* Possibly misspelled words in DESCRIPTION: Betancourt, Gelman, Vehtari and
-  Zhang are author names of the cited references; Langevin and Riemannian are
-  the names of the sampling methods (Langevin dynamics, Riemannian manifold
-  Hamiltonian Monte Carlo).
+* Possibly misspelled words in DESCRIPTION: all are correct. Betancourt,
+  Gelman, Vehtari and Zhang are author names of the cited references, and
+  "et al" belongs to those citations; Langevin, Riemannian, microcanonical,
+  variational, zig and zag name sampling and inference methods (Langevin
+  dynamics, Riemannian manifold Hamiltonian Monte Carlo, microcanonical
+  Langevin Monte Carlo, variational inference, the zig-zag sampler); backends
+  and prebuilt are standard software terms.
 
 ## Notes for the reviewers
 
