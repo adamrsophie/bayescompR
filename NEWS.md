@@ -10,6 +10,15 @@ First release.
 * Math, container, linear algebra and distribution library.
 * The `wiener` distribution with four, five and seven parameters and its
   defective distribution functions.
+* Loops whose iterations only read and write their own element (sampling
+  statements, `target +=` of a density and assignments to `v[n]`) run as
+  one statement on slices: 13 to 34 times faster gradients on brms models
+  and up to 300 times on scalar regression loops, with the same density
+  and gradient. Loops that do not qualify, or whose rewrite does not check,
+  stay loops; `options(bayescompR.vectorize = FALSE)` turns the pass off.
+* Scalar arithmetic, `row_vector * vector` and matrix product adjoints
+  skip generic dispatch and transposes (1.4 to 1.8 times faster gradients
+  on small models).
 * Faster gradients: scalar arithmetic and single indexes skip the generic
   machinery, selections accumulate adjoints in place, sum to zero and
   simplex transforms run in linear time, multivariate densities and ordered

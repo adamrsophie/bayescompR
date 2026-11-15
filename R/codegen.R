@@ -115,6 +115,10 @@ cg_binop <- function(e) {
   scb <- is_scalar_ty(tb)
   # two containers: sizes must agree even when one has a single element
   ew <- function(f, what) if (sca || scb) cl(f, a, b) else cl(rt_elementwise, f, a, b, what)
+  # two real or int scalars, not both int
+  rs <- !both_int && sca && scb
+  if (rs && e$op %in% c("+", "-", "*", "/", ".*", "./"))
+    return(cl(switch(e$op, "+" = op_sadd, "-" = op_ssub, "*" = , ".*" = op_smul, "/" = , "./" = op_sdiv), a, b))
   switch(e$op,
     "+" = if (both_int) cl(op_int_add, a, b) else ew(op_add, "addition"),
     "-" = if (both_int) cl(op_int_sub, a, b) else ew(op_sub, "subtraction"),

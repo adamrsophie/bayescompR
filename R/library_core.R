@@ -250,7 +250,42 @@ op_rvec_mat <- function(a, b) {
 }
 op_dot <- function(a, b) {
   mm_check(nelem(a), nelem(b), "row_vector times vector")
-  ad_sum(as_dbl(a) * as_dbl(b))
+  ia <- inherits(a, "bcad"); ib <- inherits(b, "bcad")
+  va <- if (ia) a$v else a; vb <- if (ib) b$v else b
+  y <- sum(va * vb)
+  if (!ia && !ib) return(y)
+  # one node with both partials, in the shapes of the operands
+  ad_node(y, list(a, b), function(g) list(
+    if (ia) { r <- g * as.vector(vb); dim(r) <- dim(va); r },
+    if (ib) { r <- g * as.vector(va); dim(r) <- dim(vb); r }))
+}
+
+# arithmetic on two scalars of static type int or real (not both int):
+# no shape checks or S3 dispatch
+op_sadd <- function(a, b) {
+  ia <- inherits(a, "bcad"); ib <- inherits(b, "bcad")
+  if (!ia && !ib) return(as.double(a) + b)
+  va <- if (ia) a$v else a; vb <- if (ib) b$v else b
+  ad_node(va + vb, list(a, b), function(g) list(if (ia) g, if (ib) g))
+}
+op_ssub <- function(a, b) {
+  ia <- inherits(a, "bcad"); ib <- inherits(b, "bcad")
+  if (!ia && !ib) return(as.double(a) - b)
+  va <- if (ia) a$v else a; vb <- if (ib) b$v else b
+  ad_node(va - vb, list(a, b), function(g) list(if (ia) g, if (ib) -g))
+}
+op_smul <- function(a, b) {
+  ia <- inherits(a, "bcad"); ib <- inherits(b, "bcad")
+  if (!ia && !ib) return(as.double(a) * b)
+  va <- if (ia) a$v else a; vb <- if (ib) b$v else b
+  ad_node(va * vb, list(a, b), function(g) list(if (ia) g * vb, if (ib) g * va))
+}
+op_sdiv <- function(a, b) {
+  ia <- inherits(a, "bcad"); ib <- inherits(b, "bcad")
+  if (!ia && !ib) return(as.double(a) / b)
+  va <- if (ia) a$v else a; vb <- if (ib) b$v else b
+  y <- va / vb
+  ad_node(y, list(a, b), function(g) list(if (ia) g / vb, if (ib) -g * y / vb))
 }
 op_outer <- function(a, b) ad_matmul(as_col(as_dbl(a)), as_row(as_dbl(b)))
 op_transpose_mat <- function(a) ad_transpose(as_dbl(a))

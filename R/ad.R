@@ -518,8 +518,8 @@ ad_matmul <- function(a, b) {
   if (!inherits(a, "bcad") && !inherits(b, "bcad")) return(y)
   ad_node(y, list(a, b), function(g) {
     list(
-      if (inherits(a, "bcad")) g %*% t(vb),
-      if (inherits(b, "bcad")) t(va) %*% g
+      if (inherits(a, "bcad")) tcrossprod(g, vb),
+      if (inherits(b, "bcad")) crossprod(va, g)
     )
   })
 }
