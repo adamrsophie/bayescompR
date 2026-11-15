@@ -44,8 +44,8 @@ reference interpreter of the native runtime instead of the JIT compiler.
 An evaluation in native code cannot be interrupted, so a Stan \code{while}
 loop that never ends blocks the session.
 
-The checksum is SHA-256 on R 4.5 and newer and MD5 on older versions of
-R; MD5 detects a damaged download but is not a security check. The
+Downloading needs R 4.5 or newer, which computes the SHA-256 checksum;
+on older versions of R, install a library from a file with \code{path}. The
 Cranelift libraries need glibc 2.28 or newer on Linux and macOS 11 or
 newer. The LLVM libraries link LLVM statically; on Linux they need glibc
 2.35 or newer, libstdc++, zlib, zstd and libxml2 (\code{libxml2.so.2}), and on

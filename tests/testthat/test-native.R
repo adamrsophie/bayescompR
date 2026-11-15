@@ -3,10 +3,9 @@ test_that("native backend assets are named by platform and checked by checksum",
   expect_match(native_asset("cranelift"), paste0("^bcn-cranelift-", native_platform(), "\\", .Platform$dynlib.ext, "$"))
   f <- tempfile()
   writeLines("abc", f)
-  sums <- list(sha256 = "edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb",
-               md5 = "0bee89b07a248e27c83fc3d5951213c1")
-  expect_true(native_hash_ok(f, sums))
-  expect_false(native_hash_ok(f, list(sha256 = "0", md5 = "0")))
+  skip_if(is.null(native_sha256()))
+  expect_true(native_hash_ok(f, "edeaaff3f1774ad2888673770c6d64097e391bc362d7d6fb34982ddf0efd18cb"))
+  expect_false(native_hash_ok(f, "0"))
 })
 
 test_that("a missing native backend gives an informative error", {
@@ -16,7 +15,8 @@ test_that("a missing native backend gives an informative error", {
   expect_error(native_load("llvm"), "bayescomp_install_backend")
   expect_error(bayescomp_install_backend("cranelift", path = tempfile()), "does not exist")
   local_mocked_bindings(native_platform = function() "plan9-mips", native_release_sums = function(asset) NULL)
-  expect_error(bayescomp_install_backend("cranelift"), "no prebuilt cranelift backend for plan9-mips")
+  if (is.null(native_sha256())) expect_error(bayescomp_install_backend("cranelift"), "R 4.5")
+  else expect_error(bayescomp_install_backend("cranelift"), "no prebuilt cranelift backend for plan9-mips")
 })
 
 test_that("the checksums published with a release are read", {
@@ -25,7 +25,7 @@ test_that("the checksums published with a release are read", {
     TRUE
   })
   s <- native_release_sums("bcn-llvm-linux-x86_64.so")
-  expect_equal(unname(unlist(s)), "def456")
+  expect_equal(s, "def456")
   expect_null(native_release_sums("bcn-llvm-windows-x86_64.dll"))
   local_mocked_bindings(native_download = function(url, dest, quiet = TRUE) "cannot open URL")
   expect_error(native_release_sums("bcn-llvm-linux-x86_64.so"), "could not download .*cannot open URL")

@@ -52,8 +52,9 @@ bayescomp_backends()
 The Cranelift libraries need glibc 2.28 or newer on Linux and macOS 11 or
 newer. The LLVM libraries need glibc 2.35 or newer, libstdc++, zlib, zstd
 and libxml2 (`libxml2.so.2`) on Linux; on macOS they are built and tested
-on macOS 15. Each download is checked against its SHA-256 checksum (MD5 on
-R older than 4.5, which detects a damaged file but is not a security check).
+on macOS 15. Each download is checked against its SHA-256 checksum, which
+needs R 4.5 or newer; on older versions of R, install from a file with
+`path =`.
 
 When no prebuilt library is published for a platform, the function says
 so. Build the library with Rust instead and install it from a file with

@@ -34,8 +34,9 @@ This is the first submission of bayescompR.
   here: the libraries are compiled Rust (Cranelift or LLVM code generators)
   that would otherwise require a Rust toolchain and, for LLVM, an LLVM
   installation on the user's machine. The package works fully without them.
-  The file is checked against its SHA-256 checksum (MD5 on R older than 4.5)
-  before it is loaded, written only to
+  The file is checked against its SHA-256 checksum before it is loaded (on R
+  older than 4.5, which has no `tools::sha256sum()`, the function refuses to
+  download), written only to
   `tools::R_user_dir("bayescompR", "data")`, which the package manages
   (installing removes the files of other releases), and loaded with
   `dyn.load()`. Nothing is downloaded at installation, loading, or in

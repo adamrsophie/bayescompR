@@ -4,17 +4,16 @@
 # its release workflow, one per backend, operating system and architecture.
 # They do not link R: their entry points follow the calling convention of
 # .C(), so this package calls them without compiled code of its own. Each
-# download is checked against its checksum before it is loaded: the one
-# recorded below for the assets of the release this version was tested with,
-# otherwise the one in the release's SHA256SUMS or MD5SUMS file.
+# download is checked against its SHA-256 checksum before it is loaded: the
+# one recorded below for the assets of the release this version was tested
+# with, otherwise the one in the release's SHA256SUMS file.
 
 native_release <- "v0.1.0"
 native_abi <- 2L
 native_engines <- c(interpreter = 0L, cranelift = 1L, llvm = 2L)
 native_state <- new.env(parent = emptyenv())
 
-# sha256 and md5 checksums of the release assets (md5 for R < 4.5, which has
-# no sha256sum)
+# SHA-256 checksums of the release assets
 native_assets <- list()
 
 native_root <- function() file.path(tools::R_user_dir("bayescompR", "data"), "backends")
@@ -37,13 +36,9 @@ native_asset <- function(backend) sprintf("bcn-%s-%s%s", backend, native_platfor
 
 native_file <- function(backend) file.path(native_dir(), paste0("bcn-", backend, .Platform$dynlib.ext))
 
-native_hash_ok <- function(file, sums) {
+native_hash_ok <- function(file, sha256) {
   sha <- native_sha256()
-  if (!is.null(sha)) {
-    identical(unname(sha(file)), sums[["sha256"]])
-  } else {
-    identical(unname(tools::md5sum(file)), sums[["md5"]])
-  }
+  !is.null(sha) && identical(unname(sha(file)), sha256)
 }
 
 #' Install a native backend
@@ -66,8 +61,8 @@ native_hash_ok <- function(file, sums) {
 #' An evaluation in native code cannot be interrupted, so a Stan `while`
 #' loop that never ends blocks the session.
 #'
-#' The checksum is SHA-256 on R 4.5 and newer and MD5 on older versions of
-#' R; MD5 detects a damaged download but is not a security check. The
+#' Downloading needs R 4.5 or newer, which computes the SHA-256 checksum;
+#' on older versions of R, install a library from a file with `path`. The
 #' Cranelift libraries need glibc 2.28 or newer on Linux and macOS 11 or
 #' newer. The LLVM libraries link LLVM statically; on Linux they need glibc
 #' 2.35 or newer, libstdc++, zlib, zstd and libxml2 (`libxml2.so.2`), and on
@@ -104,6 +99,8 @@ bayescomp_install_backend <- function(backend = c("cranelift", "llvm"), path = N
     if (!file.exists(path)) stop(sprintf("file '%s' does not exist", path), call. = FALSE)
     file.copy(path, tmp, overwrite = TRUE)
   } else {
+    if (is.null(native_sha256()))
+      stop("downloading a native backend needs R 4.5 or newer (for tools::sha256sum()); build bcn-ffi and pass 'path'", call. = FALSE)
     asset <- native_asset(backend)
     sums <- native_assets[[asset]] %||% native_release_sums(asset)
     if (is.null(sums))
@@ -154,16 +151,15 @@ native_download <- function(url, dest, quiet = TRUE) {
 # the checksums published with the release; NULL when the release has no such
 # asset, an error when the checksums cannot be downloaded
 native_release_sums <- function(asset) {
-  kind <- if (is.null(native_sha256())) "md5" else "sha256"
   f <- tempfile()
   on.exit(unlink(f))
-  url <- native_url(if (kind == "sha256") "SHA256SUMS" else "MD5SUMS")
+  url <- native_url("SHA256SUMS")
   ok <- native_download(url, f)
   if (!isTRUE(ok)) stop(sprintf("could not download %s: %s", url, ok), call. = FALSE)
   x <- strsplit(trimws(readLines(f, warn = FALSE)), "[[:space:]]+")
   hit <- Filter(function(l) length(l) == 2L && sub("^\\*", "", l[2L]) == asset, x)
   if (!length(hit)) return(NULL)
-  stats::setNames(list(hit[[1L]][1L]), kind)
+  hit[[1L]][1L]
 }
 
 #' Remove an installed native backend
