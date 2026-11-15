@@ -8,13 +8,18 @@ This is the first submission of bayescompR.
   Windows (R release)
 * GitHub Actions, Ubuntu R devel with `NOT_CRAN` unset, as CRAN runs the checks
 * R-hub: Linux, macOS, Windows
-* win-builder: R devel
+* win-builder: R devel (Windows, 1 note: new submission and the words below)
+* local: macOS (R release), `R CMD check --as-cran --run-donttest`
 
 ## R CMD check results
 
 0 errors | 0 warnings | 1 note
 
 * New submission.
+* Possibly misspelled words in DESCRIPTION: Betancourt, Gelman, Vehtari and
+  Zhang are author names of the cited references; Langevin and Riemannian are
+  the names of the sampling methods (Langevin dynamics, Riemannian manifold
+  Hamiltonian Monte Carlo).
 
 ## Notes for the reviewers
 
