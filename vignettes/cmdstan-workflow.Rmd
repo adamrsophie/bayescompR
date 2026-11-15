@@ -1,0 +1,253 @@
+---
+title: "Working like CmdStan"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Working like CmdStan}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+# the full examples run when the package is built; CRAN checks skip them for time
+knitr::opts_chunk$set(eval = identical(Sys.getenv("NOT_CRAN"), "true"), collapse = TRUE, comment = "#>")
+```
+
+```{r setup}
+library(bayescompR)
+# chains run in parallel on this many cores; on your own machine use
+# options(mc.cores = parallel::detectCores())
+options(mc.cores = 2)
+```
+
+CmdStan is a set of command line programs: `stanc` compiles and checks a
+program, the compiled model samples, optimizes or approximates, and
+`stansummary` and `diagnose` read the CSV files it writes. bayescompR
+offers every step as an R function that reads and writes the same files,
+so a project can move between CmdStan, CmdStanR and bayescompR, or mix
+them. This vignette follows one model through that workflow.
+
+| CmdStan or stanc | bayescompR |
+|---|---|
+| `stanc --version` | `bayescomp_stan_version()` |
+| `stanc` (type check) | `bayescomp_check()` |
+| `stanc --info` | `bayescomp_info()` |
+| `stanc --auto-format`, `--canonicalize` | `bayescomp_format()` |
+| `stanc --warn-pedantic`, `--warn-uninitialized` | `bayescomp_pedantic()`, `bayescomp_uninitialized()` |
+| `stanc --standalone-functions` | `bayescomp_expose_functions()` |
+| `stanc --debug-generate-data`, `--debug-generate-inits` | `bayescomp_generate_data()`, `bayescomp_generate_inits()` |
+| JSON and R dump data files | `bayescomp_read_data()`, `bayescomp_write_data()` |
+| `model sample` | `bayescomp_sample()` |
+| `model optimize`, `laplace`, `pathfinder`, `variational` | `bayescomp_optimize()`, `bayescomp_laplace()`, `bayescomp_pathfinder()`, `bayescomp_variational()` |
+| `model generate_quantities` | `bayescomp_generate_quantities()` |
+| `model log_prob` | `bayescomp_log_prob()`, `bayescomp_grad_log_prob()` |
+| `model diagnose` (gradient test) | `bayescomp_check_gradients()` |
+| `output.csv`, `metric_file`, `diagnostic_file`, `profile_file` | `bayescomp_write_csv()`, `bayescomp_read_csv()` |
+| `bin/stansummary` | `bayescomp_stansummary()` |
+| `bin/diagnose` | `bayescomp_diagnose()` |
+
+## Checking a program
+
+```{r}
+code <- "
+functions {
+  real scaled_logit(real p, real s) {
+    return s * logit(p);
+  }
+}
+data {
+  int<lower=1> N;
+  array[N] int<lower=0, upper=1> y;
+  vector[N] x;
+}
+parameters {
+  real alpha;
+  real beta;
+}
+model {
+  alpha ~ normal(0, 2.5);
+  beta ~ normal(0, 2.5);
+  y ~ bernoulli_logit(alpha + beta * x);
+}
+generated quantities {
+  real p_mean = inv_logit(alpha);
+}
+"
+bayescomp_stan_version()
+bayescomp_check(code)
+```
+
+`bayescomp_info()` lists what stanc's `--info` reports: the data,
+parameters and generated quantities with their types and sizes, the
+library functions and the distributions the program uses.
+
+```{r}
+str(bayescomp_info(code), max.level = 1)
+bayescomp_info(code)$parameters$alpha
+```
+
+`bayescomp_format()` prints a program in stanc's canonical layout, and
+with `canonicalize` it also rewrites deprecated syntax and removes
+redundant parentheses or braces:
+
+```{r}
+cat(bayescomp_format("parameters{real mu;}model{mu~normal(0,1);}"))
+```
+
+The pedantic mode warns about programs that are legal but probably not
+what was meant: parameters without priors, priors with very wide scales,
+integer division, control flow that depends on parameters and variables
+that may be used before they are assigned.
+
+```{r}
+bayescomp_pedantic("data { int N; } parameters { real mu; real<lower=0> s; }
+                    model { mu ~ normal(0, 1000); }")
+bayescomp_uninitialized("parameters { real mu; } model { real a; mu ~ normal(a, 1); }")
+```
+
+## Data files
+
+CmdStan reads data and initial values from JSON or R dump files.
+`bayescomp_write_data()` writes JSON with the conventions CmdStan expects
+(integers stay integers, arrays and matrices are nested row major, and
+infinite and missing values are written as `"Inf"` and `"NaN"`), and
+`bayescomp_read_data()` reads either format back. `bayescomp_model()` and
+the `init` argument of the samplers accept a file name directly.
+
+```{r}
+set.seed(1)
+N <- 100
+x <- rnorm(N)
+dat <- list(N = N, y = rbinom(N, 1, plogis(-0.5 + 1.2 * x)), x = x)
+data_file <- tempfile(fileext = ".json")
+bayescomp_write_data(dat, data_file)
+str(bayescomp_read_data(data_file))
+model <- bayescomp_model(code, data = data_file)
+model
+```
+
+For testing a program before real data exist, stanc can generate random
+data and initial values that satisfy the declared constraints:
+
+```{r}
+str(bayescomp_generate_data(code, seed = 1))
+str(bayescomp_generate_inits(model, seed = 1))
+```
+
+## Functions from the program
+
+`bayescomp_expose_functions()` returns the functions block as R functions,
+which helps to test them on their own:
+
+```{r}
+f <- bayescomp_expose_functions(model)
+f$scaled_logit(0.75, 2)
+```
+
+## The gradient test
+
+CmdStan's `diagnose` method compares the gradient of the log density with
+finite differences at an initial point. A large error points to a bug in
+the program or in the library.
+
+```{r}
+bayescomp_check_gradients(model, seed = 1)
+```
+
+## Running and writing CSV files
+
+```{r}
+fit <- bayescomp_sample(model, chains = 2, iter_warmup = 500, iter_sampling = 500,
+                        seed = 123, refresh = 0)
+out_dir <- tempfile()
+dir.create(out_dir)
+files <- bayescomp_write_csv(fit, out_dir, basename = "logistic",
+                             save_metric = TRUE, save_config = TRUE)
+basename(files)
+list.files(out_dir)
+```
+
+The CSV files have CmdStan's comment header (configuration, adaptation
+results, step size and metric, timing), one column per flattened variable
+in CmdStan's naming (`theta.1`, `Sigma.2.1`) and the sampler diagnostic
+columns `lp__`, `accept_stat__`, `stepsize__`, `treedepth__`,
+`n_leapfrog__`, `divergent__` and `energy__`. `save_metric` writes the
+adapted inverse metric as `metric_file` JSON, and `save_config` the run
+configuration. `bayescomp_sample(save_diagnostics = TRUE)` keeps the
+unconstrained values, momenta and gradients for CmdStan's
+`diagnostic_file`.
+
+`bayescomp_read_csv()` reads files written by bayescompR or by CmdStan
+itself into a `bayescomp_fit`; with `model`, the unconstrained values are
+recovered, so the fit can initialize chains or feed
+`bayescomp_generate_quantities()`.
+
+```{r}
+fit_csv <- bayescomp_read_csv(files, model = model)
+fit_csv
+```
+
+## stansummary and diagnose
+
+`bayescomp_stansummary()` prints CmdStan's `stansummary` table, including
+the sampler diagnostic rows, ESS per second and timing, from a fit or from
+CSV files. `sig_figs`, `percentiles`, `include_param` and `autocorr`
+match its options, and `csv_file` writes the table as CSV.
+
+```{r}
+bayescomp_stansummary(files, percentiles = c(2.5, 50, 97.5), sig_figs = 3)
+```
+
+`bayescomp_diagnose()` runs the checks of CmdStan's `diagnose` program:
+tree depth saturation, divergences, E-BFMI (pooled and per chain), low
+effective sample size and high R-hat. It also lists proposals that the
+sampler rejected because of domain errors or `reject()` calls.
+
+```{r}
+d <- bayescomp_diagnose(files)
+d$problems
+```
+
+## Generated quantities for existing draws
+
+CmdStan's `generate_quantities` method runs the generated quantities
+block on draws from an earlier fit, for example after the block was
+changed. The new model must have the same parameters.
+
+```{r}
+code2 <- sub("real p_mean = inv_logit(alpha);",
+             "real p_mean = inv_logit(alpha);\n  array[N] int y_rep = bernoulli_logit_rng(alpha + beta * x);",
+             code, fixed = TRUE)
+model2 <- bayescomp_model(code2, data = dat)
+gq <- bayescomp_generate_quantities(model2, fit_csv, seed = 1)
+dim(bayescomp_extract(gq, "y_rep"))
+```
+
+The `fit` argument also takes CSV file names, a matrix of parameter draws
+with named columns, or a `posterior` draws object.
+
+## The log density and its gradient
+
+`bayescomp_log_prob()` and `bayescomp_grad_log_prob()` evaluate the model
+at unconstrained points, as CmdStan's `log_prob` method does, with or
+without the Jacobian adjustment and with or without constant terms
+(`propto`). `bayescomp_unconstrain()` and `bayescomp_constrain()` convert
+between the scales.
+
+```{r}
+u <- bayescomp_unconstrain(model, list(alpha = -0.5, beta = 1))
+bayescomp_log_prob(model, u)
+bayescomp_grad_log_prob(model, u, jacobian = FALSE, propto = TRUE)
+```
+
+## Convergence diagnostics for any draws
+
+The diagnostics of the posterior package are also available without it.
+Each takes an iterations by chains matrix:
+
+```{r}
+mu_draws <- matrix(fit$draws[, , "alpha"], ncol = 2)
+c(rhat = bayescomp_rhat(mu_draws), ess_bulk = bayescomp_ess_bulk(mu_draws),
+  ess_tail = bayescomp_ess_tail(mu_draws), ess_basic = bayescomp_ess_basic(mu_draws),
+  mcse_mean = bayescomp_mcse_mean(mu_draws), mcse_sd = bayescomp_mcse_sd(mu_draws))
+bayescomp_ess_quantile(mu_draws, probs = c(0.05, 0.5, 0.95))
+```

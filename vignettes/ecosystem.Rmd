@@ -1,0 +1,206 @@
+---
+title: "Using bayescompR with the Stan ecosystem"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Using bayescompR with the Stan ecosystem}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+# the full examples run when the package is built; CRAN checks skip them for time
+has <- function(p) requireNamespace(p, quietly = TRUE)
+knitr::opts_chunk$set(eval = identical(Sys.getenv("NOT_CRAN"), "true") && has("posterior") && has("bayesplot") && has("loo"),
+                      collapse = TRUE, comment = "#>", fig.width = 7, fig.height = 4)
+```
+
+```{r setup}
+library(bayescompR)
+# chains run in parallel on this many cores; on your own machine use
+# options(mc.cores = parallel::detectCores())
+options(mc.cores = 2)
+```
+
+A `bayescomp_fit` works with the packages built around rstan and CmdStanR:
+posterior for draws and summaries, bayesplot for plots, loo for model
+comparison and rstantools for the generics of model packages. Packages
+that write Stan programs (brms, rstanarm, multinma) can hand them to
+bayescompR, which then fits them without a C++ toolchain.
+
+## A model to work with
+
+```{r}
+code <- "
+data {
+  int<lower=0> N;
+  vector[N] x;
+  array[N] int<lower=0> y;
+}
+parameters {
+  real alpha;
+  real beta;
+}
+model {
+  alpha ~ normal(0, 2);
+  beta ~ normal(0, 1);
+  y ~ poisson_log(alpha + beta * x);
+}
+"
+set.seed(10)
+N <- 60
+x <- rnorm(N)
+y <- rpois(N, exp(0.5 + 0.4 * x))
+y[N] <- 25 # one outlier
+model <- bayescomp_model(code, data = list(N = N, x = x, y = y))
+fit <- bayescomp_sample(model, chains = 4, iter_warmup = 500, iter_sampling = 500,
+                        seed = 1, refresh = 0)
+```
+
+## posterior
+
+`posterior::as_draws()` and its `_array`, `_df` and `_matrix` variants
+return the post warmup draws; `bayescomp_as_draws()` does the same.
+Everything in posterior then applies.
+
+```{r}
+d <- posterior::as_draws_df(fit)
+posterior::summarise_draws(d, "mean", "sd", ~quantile(.x, c(0.05, 0.95)), "rhat", "ess_bulk")
+posterior::summarise_draws(posterior::as_draws_df(fit, "beta"), posterior::default_convergence_measures())
+```
+
+## bayesplot
+
+`bayesplot::nuts_params()` returns the sampler diagnostics in the long
+format the NUTS plots expect, and `bayesplot::log_posterior()` the `lp__`
+draws.
+
+```{r}
+a <- posterior::as_draws_array(fit)
+bayesplot::mcmc_trace(a, pars = c("alpha", "beta"))
+bayesplot::mcmc_pairs(a, pars = c("alpha", "beta"), np = bayesplot::nuts_params(fit))
+bayesplot::mcmc_nuts_energy(bayesplot::nuts_params(fit))
+```
+
+## Posterior predictive checks without generated quantities
+
+`bayescomp_posterior_predict()` draws replicated data from every sampling
+statement on data in the model block, using the matching `_rng`
+function, and `bayescomp_log_lik()` returns the pointwise log likelihood.
+A generated quantities block is not needed for either, and
+`rstantools::posterior_predict()` and `rstantools::log_lik()` fall back
+to them when the fit has no `y_rep` or `log_lik` variable.
+
+```{r}
+yrep <- bayescomp_posterior_predict(fit, seed = 2)
+dim(yrep)
+bayesplot::ppc_dens_overlay(y, yrep[1:50, ])
+bayesplot::ppc_stat(y, yrep, stat = "max")
+```
+
+## loo
+
+`loo::loo()` uses the generated quantity `log_lik` when the program has
+one, and otherwise the pointwise terms of the model block, with relative
+efficiencies computed from the chains.
+
+```{r}
+lo <- loo::loo(fit)
+lo
+```
+
+The outlier has a large Pareto k, so its PSIS estimate is unreliable.
+`bayescomp_reloo()` refits the model without each such observation and
+replaces its estimate with the exact leave one out predictive density.
+It needs a function that removes observation `i` from the data:
+
+```{r}
+drop_obs <- function(i) list(N = N - 1L, x = x[-i], y = y[-i])
+lo_exact <- bayescomp_reloo(fit, drop_obs, lo, k_threshold = 0.7, refresh = 0)
+lo_exact$refits
+lo_exact
+```
+
+Models are compared with `loo::loo_compare()` as usual:
+
+```{r}
+code_nb <- sub("real beta;", "real beta;\n  real<lower=0> phi;", code, fixed = TRUE)
+code_nb <- sub("y ~ poisson_log(alpha + beta * x);",
+               "phi ~ exponential(1);\n  y ~ neg_binomial_2_log(alpha + beta * x, phi);", code_nb, fixed = TRUE)
+fit_nb <- bayescomp_sample(bayescomp_model(code_nb, data = list(N = N, x = x, y = y)),
+                           chains = 4, iter_warmup = 500, iter_sampling = 500, seed = 1, refresh = 0)
+loo::loo_compare(list(poisson = lo_exact, negbin = loo::loo(fit_nb)))
+```
+
+## brms
+
+brms writes a Stan program and its data with `make_stancode()` and
+`make_standata()`. Both go straight into `bayescomp_model()`:
+
+```{r, eval = FALSE}
+library(brms)
+f <- bf(count ~ zAge + zBase * Trt + (1 | patient))
+scode <- make_stancode(f, data = epilepsy, family = poisson())
+sdata <- make_standata(f, data = epilepsy, family = poisson())
+m <- bayescomp_model(scode, data = unclass(sdata))
+fit_brms <- bayescomp_sample(m, chains = 4, seed = 1)
+summary(fit_brms, c("b_Intercept", "b", "sd_1"))
+```
+
+The loops brms writes for linear predictors (`mu[n] += r_1_1[J_1[n]] *
+Z_1_1[n]`) are vectorized by the compiler, so these models run 10 to 30
+times faster than the loops would. The draws use brms's internal
+parameter names; `brms` itself is not needed to fit or summarize them.
+
+## rstanarm and multinma
+
+rstanarm and multinma ship compiled models and pass their Stan program
+and data to `rstan::sampling()`. A small function, run in your own
+session, captures both instead of sampling:
+
+```{r, eval = FALSE}
+capture_stan <- function(expr) {
+  # the tracer runs at the start of rstan's sampling method, where 'object'
+  # is the compiled model and 'data' the data list, and stops it there
+  options(captured_stan = NULL)
+  trace(rstan::sampling, signature = "stanmodel", where = asNamespace("rstan"), print = FALSE,
+        tracer = quote({
+          options(captured_stan = list(code = object@model_code, data = data))
+          stop("captured")
+        }))
+  on.exit(untrace(rstan::sampling, signature = "stanmodel", where = asNamespace("rstan")))
+  try(expr, silent = TRUE)
+  getOption("captured_stan")
+}
+
+library(multinma)
+net <- set_agd_arm(smoking, study = studyn, trt = trtc, r = r, n = n, trt_ref = "No intervention")
+s <- capture_stan(nma(net, trt_effects = "random", prior_intercept = normal(scale = 100),
+                      prior_trt = normal(scale = 100), prior_het = normal(scale = 5)))
+m <- bayescomp_model(s$code, data = s$data)
+fit_nma <- bayescomp_sample(m, chains = 4, seed = 1)
+```
+
+rstanarm's Gaussian models call `CODOLS()`, a function rstanarm
+implements in C++. Supply it in R with the `functions` argument:
+
+```{r, eval = FALSE}
+library(rstanarm)
+s <- capture_stan(stan_glm(mpg ~ wt + hp, data = mtcars))
+codols <- function(X, y) qr.coef(qr(X), y)
+m <- bayescomp_model(s$code, data = s$data, functions = list(CODOLS = codols))
+```
+
+## rstantools
+
+`rstantools::log_lik()` and `rstantools::posterior_predict()` return
+draws by observations matrices with the chains stacked, the format model
+packages use:
+
+```{r}
+dim(rstantools::log_lik(fit))
+dim(rstantools::posterior_predict(fit))
+```
+
+Package authors who build on bayescompR rather than rstan can call
+`bayescomp_model()` on a program stored in `inst/stan` at run time; no
+compilation step is needed when the package is installed.
