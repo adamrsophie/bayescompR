@@ -28,8 +28,12 @@ statement (\code{y ~ dist(...)}) and every \verb{target += dist_lpdf(y | ...)} w
 left side is data, the normalized log density of each element of \code{y} and,
 for \code{bayescomp_posterior_predict()}, a draw from the matching \verb{_rng}
 function. Univariate statements contribute one column per element
-(\code{y[1]}, \code{y[2]}, ...); multivariate ones one column per statement.
-Truncated statements are not supported.
+(\code{y[1]}, \code{y[2]}, ...), with arguments such as cutpoints or a vector of
+log odds shared by all elements, and GLMs one column per row of \code{x}, as
+the equivalent unfused statement does. A multivariate statement is one
+joint observation, so it gives one log likelihood column, while its
+predictive draws have one column per element of \code{y}. Truncated
+statements and user defined densities are not supported.
 }
 \examples{
 m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }

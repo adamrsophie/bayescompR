@@ -23,12 +23,7 @@ promote_to <- function(code, from, to) {
   code
 }
 
-lib_impl <- function(name, types) {
-  for (sg in .lib[[name]]) {
-    if (length(sg$args) == length(types) && all(mapply(pat_ok, sg$args, types))) return(sg$impl)
-  }
-  stop("internal error: no library implementation for ", name)
-}
+lib_impl <- function(name, types) lib_sig(name, types)$impl
 
 # ---- expressions -------------------------------------------------------------------
 
@@ -282,6 +277,14 @@ cg_print_items <- function(items) {
 # terms when the context asks for them (bayescomp_log_lik() and
 # bayescomp_posterior_predict()): the normalized density of each element
 # and, when the distribution has one, a draw from its _rng.
+#
+# The observation unit comes from the signature: arguments declared `reals`
+# or `ints` are elementwise and every element of the left side is one
+# observation; other arguments (simplexes, cutpoints, covariance matrices)
+# are shared by all of them. A left side that is not elementwise (a vector
+# of a multivariate density, a matrix) is one joint observation. GLMs are
+# rewritten to their univariate family with the linear predictor, so each
+# row of x is one observation as in the equivalent unfused model.
 cg_pointwise <- function(fname, lhs_e, arg_es, lhs, args, sg, truncated) {
   if (!identical(.cg$block, "model") || !isTRUE(lhs_e$data_only) || isTRUE(sg$user)) return(NULL)
   root <- lhs_e
@@ -289,14 +292,41 @@ cg_pointwise <- function(fname, lhs_e, arg_es, lhs, args, sg, truncated) {
   label <- if (identical(root$kind, "var")) root$name else "y"
   types <- c(list(lhs_e$type), lapply(arg_es, `[[`, "type"))
   base <- sub("_(lpdf|lpmf|lupdf|lupmf)$", "", fname)
-  full <- tryCatch(lib_impl(sub("_lup", "_lp", fname), types), error = function(e) NULL)
-  if (is.null(full)) return(NULL)
-  rng <- tryCatch(lib_impl(paste0(base, "_rng"), types[-1L]), error = function(e) NULL)
-  # elementwise only for scalar and one dimensional arguments
-  split <- all(vapply(types, function(t) (t$nd == 0L && t$base %in% c("int", "real", "vector", "row_vector")) ||
-                                           (t$nd == 1L && t$base %in% c("int", "real")), TRUE))
+  suffix <- if (grepl("pmf$", fname)) "_lpmf" else "_lpdf"
+  glm <- pw_glm[[base]]
+  fam <- glm$family %||% base
+  sig <- if (is.null(glm)) tryCatch(lib_sig(paste0(base, suffix), types), error = function(e) NULL) else .lib[[paste0(fam, suffix)]][[1L]]
+  if (is.null(sig)) return(NULL)
+  rng <- if (is.null(glm)) tryCatch(lib_impl(paste0(base, "_rng"), types[-1L]), error = function(e) NULL) else glm$rng %||% .lib[[paste0(fam, "_rng")]][[1L]]$impl
+  vec <- glm$el %||% (sig$args %in% c("reals", "ints", "real", "int"))
+  # elementwise when the signature vectorizes the left side and every
+  # vectorized argument is a scalar or a one dimensional container (a GLM's
+  # linear predictor always is). Other arguments are shared, or with one
+  # vector per observation (cutpoints as array[N] vector) give row i to
+  # observation i.
+  if (is.null(glm)) {
+    shape_ok <- vapply(types, function(t) (t$nd == 0L && t$base %in% c("int", "real", "vector", "row_vector")) ||
+                                            (t$nd == 1L && t$base %in% c("int", "real")), TRUE)
+    rows <- !vec & vapply(types, function(t) t$nd == 1L && t$base %in% c("vector", "row_vector"), TRUE)
+    shared_ok <- vapply(types, function(t) t$nd == 0L, TRUE) | rows
+    split <- vec[1L] && all(shape_ok[vec]) && all(shared_ok[!vec])
+  } else {
+    rows <- logical(length(vec))
+    split <- TRUE
+  }
+  allvec <- all(sig$args %in% c("reals", "ints", "real", "int"))
+  spec <- list(full = sig$impl, rng = rng, glm = glm$convert, el = if (split) vec, rows = rows,
+               kern = if (split && allvec) pw_kernels[[fam]], vrng = split && allvec,
+               truncated = truncated)
   cl(as.name("if"), cl(as.name("!"), cl(as.name("is.null"), cl(as.name("$"), CTX, as.name("pw")))),
-     cl_list(rt_pointwise, c(list(CTX, label, full, rng, split, truncated, lhs), unname(args))))
+     cl_list(rt_pointwise, c(list(CTX, label, spec, lhs), unname(args))))
+}
+
+lib_sig <- function(name, types) {
+  for (sg in .lib[[name]]) {
+    if (length(sg$args) == length(types) && all(mapply(pat_ok, sg$args, types))) return(sg)
+  }
+  stop("internal error: no library implementation for ", name)
 }
 
 # block being generated, read by cg_call() for _lupdf calls
@@ -406,7 +436,8 @@ cg_stmt <- function(st, ctx) {
       }
       out <- list(cl(rt_target_add, CTX, call))
       pw <- cg_pointwise(st$fname, st$lhs, st$args, lhs, args, sg, truncated = !is.null(st$trunc))
-      if (!is.null(pw)) out <- c(list(pw), out)
+      # after the statement, which checks the arguments first
+      if (!is.null(pw)) out <- c(out, list(pw))
       if (!is.null(st$trunc)) {
         tr <- st$trunc
         mkfun <- function(sig) {
@@ -434,7 +465,7 @@ cg_stmt <- function(st, ctx) {
       v <- st$value
       pw <- if (identical(v$kind, "call") && length(v$args) && grepl("_(lpdf|lpmf|lupdf|lupmf)$", v$name))
         cg_pointwise(v$name, v$args[[1L]], v$args[-1L], cg_expr(v$args[[1L]]), lapply(v$args[-1L], cg_expr), v$sig, FALSE)
-      c(if (!is.null(pw)) list(pw), list(cl(rt_target_add, CTX, cg_expr(st$value))))
+      c(list(cl(rt_target_add, CTX, cg_expr(st$value))), if (!is.null(pw)) list(pw))
     },
     jacobian_add = list(cl(as.name("if"), cl(as.name("isTRUE"), cl(as.name("$"), CTX, as.name("jacobian"))),
                            cl(rt_target_add, CTX, cg_expr(st$value)))),

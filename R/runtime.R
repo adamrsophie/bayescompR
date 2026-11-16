@@ -423,27 +423,3 @@ rt_keep <- function(x) {
   ad_leaf(x)
 }
 
-# pointwise log likelihood and predictive draws of one density statement on
-# data (see cg_pointwise())
-rt_pointwise <- function(ctx, label, full, rng, split, truncated, y, ...) {
-  if (truncated) stop_unsupported(sprintf("pointwise terms of the truncated statement on '%s' are not available", label))
-  args <- c(list(y), list(...))
-  vals <- lapply(args, function(a) val(a))
-  pw <- ctx$pw
-  if (!split) {
-    pw$ll[[length(pw$ll) + 1L]] <- as.numeric(do.call(full, vals))
-    pw$names[[length(pw$names) + 1L]] <- label
-    if (isTRUE(pw$rng)) pw$yrep[[length(pw$yrep) + 1L]] <- if (is.null(rng)) rep(NA_real_, length(vals[[1L]])) else as.numeric(do.call(rng, vals[-1L]))
-    return(invisible())
-  }
-  n <- max(lengths(vals))
-  el <- function(v, i) if (length(v) == 1L) v else v[[i]]
-  ll <- vapply(seq_len(n), function(i) as.numeric(do.call(full, lapply(vals, el, i = i))), 0)
-  k0 <- pw$count[[label]] %||% 0L
-  pw$count[[label]] <- k0 + n
-  pw$ll[[length(pw$ll) + 1L]] <- ll
-  pw$names[[length(pw$names) + 1L]] <- sprintf("%s[%d]", label, k0 + seq_len(n))
-  if (isTRUE(pw$rng)) pw$yrep[[length(pw$yrep) + 1L]] <-
-    if (is.null(rng)) rep(NA_real_, n) else vapply(seq_len(n), function(i) as.numeric(do.call(rng, lapply(vals[-1L], el, i = i))), 0)
-  invisible()
-}
