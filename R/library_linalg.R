@@ -475,9 +475,14 @@ gp_sqdist <- function(x1, x2) {
   if (a$d != b$d) stop_shape("gp covariance: points have different dimensions")
   va <- val(x1); vb <- val(x2)
   if (!any_ad(x1, x2)) {
+    # differences per dimension, not |a|^2 + |b|^2 - 2ab, which loses the
+    # separation of points far from the origin; the same arithmetic as the
+    # fixed input ARD node, so values with and without gradients agree
     A <- if (is.null(dim(va))) matrix(va, ncol = 1L) else va
     B <- if (is.null(dim(vb))) matrix(vb, ncol = 1L) else vb
-    return(pmax(outer(rowSums(A^2), rowSums(B^2), `+`) - 2 * A %*% t(B), 0))
+    d2 <- 0
+    for (k in seq_len(ncol(A))) d2 <- d2 + outer(A[, k], B[, k], `-`)^2
+    return(if (is.matrix(d2)) d2 else matrix(d2, nrow(A), nrow(B)))
   }
   A <- if (is.null(dim(va))) ad_reshape(as_dbl(x1), c(length(va), 1L)) else as_dbl(x1)
   B <- if (is.null(dim(vb))) ad_reshape(as_dbl(x2), c(length(vb), 1L)) else as_dbl(x2)
@@ -562,11 +567,15 @@ gp_sqexp_ard_fixed <- function(name, x1, x2, s, l) {
   d2 <- 0
   for (k in seq_along(vl)) d2 <- d2 + dd(k)^2
   vs <- val(s)
-  C <- vs * vs * exp(-0.5 * d2)
+  E <- exp(-0.5 * d2)
+  C <- vs * vs * E
   ad_node(C, list(s, l), function(g) {
     W <- g * C
-    list(if (is_ad(s)) 2 * sum(W) / vs,
-         if (is_ad(l)) vapply(seq_along(vl), function(k) sum(W * dd(k)^2) / vl[k], 0))
+    # dC/dl_k = C * dd_k^2 / l_k, whose limit is zero where the covariance
+    # has decayed to zero, also when dd_k^2 overflows
+    tl <- function(k) { t <- W * dd(k)^2; t[W == 0] <- 0; sum(t) / vl[k] }
+    list(if (is_ad(s)) 2 * vs * sum(g * E),
+         if (is_ad(l)) vapply(seq_along(vl), tl, 0))
   })
 }
 gp_kernel_ard("gp_exp_quad_cov", k_sqexp)

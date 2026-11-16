@@ -220,13 +220,28 @@ lp_normal_id_glm <- function(y, x, alpha, beta, sigma, propto) {
 # The factorizations are owned by the model instance (see model_fun()), so
 # models made for many data subsets (SG-MCMC minibatches, EP sites) each
 # keep their own; calls outside a model use a shared store.
-# ponytail: identity keyed list of glm_cache_size pairs per instance
+# The store keeps the pairs in the order they were first seen, within a
+# memory budget of glm_cache_doubles numbers (the data and the factor
+# counted), evicting the oldest. A lookup starts after the last hit, so a
+# model that evaluates its statements in the same order each time finds
+# each pair at the first comparison, however many statements it has.
 .glm_cache <- new.env(parent = emptyenv())
-glm_cache_size <- 64L
+glm_cache_doubles <- 2^24
 normal_glm_prep <- function(y, x) {
   store <- .glm_cache$cur %||% .glm_cache
-  old <- store$entries
-  for (e in old) if (identical(e$x, x) && identical(e$y, y)) return(e$prep)
+  ent <- store$entries
+  n <- length(ent)
+  if (n) {
+    p0 <- store$pos %||% 0L
+    for (k in seq_len(n)) {
+      i <- (p0 + k - 1L) %% n + 1L
+      e <- ent[[i]]
+      if (identical(e$x, x) && identical(e$y, y)) {
+        store$pos <- i
+        return(e$prep)
+      }
+    }
+  }
   N <- nrow(x); P1 <- ncol(x) + 1L
   prep <- NULL
   if (N > P1 && all(is.finite(x)) && all(is.finite(y))) {
@@ -236,7 +251,17 @@ normal_glm_prep <- function(y, x) {
       prep <- list(R = qr.R(q), piv = q$pivot, c = qty[seq_len(P1)], r2 = sum(qty[-seq_len(P1)]^2), N = N)
     }
   }
-  store$entries <- c(list(list(x = x, y = y, prep = prep)), old[seq_len(min(length(old), glm_cache_size - 1L))])
+  size <- length(x) + length(y) + P1 * P1
+  if (size <= glm_cache_doubles) {
+    used <- (store$used %||% 0) + size
+    while (used > glm_cache_doubles && length(ent)) {
+      used <- used - ent[[1L]]$size
+      ent <- ent[-1L]
+    }
+    store$entries <- c(ent, list(list(x = x, y = y, prep = prep, size = size)))
+    store$used <- used
+    store$pos <- length(store$entries)
+  }
   prep
 }
 normal_glm_prepared <- function(y, x, alpha, beta, sigma, propto) {
@@ -1764,13 +1789,19 @@ chol_jac <- function(L) {
 # Densities of Cholesky factors computed from the factors: log determinants
 # from their diagonals and the trace term as ||L1^-1 L2||_F^2 through one
 # triangular solve, instead of forming W and S and factoring them again.
-# Taken when both factors are finite, lower triangular (zero upper
-# triangle) with a positive diagonal; as in Stan the upper triangle is not
-# read. Anything else goes through the covariance matrices.
+# As in Stan (check_cholesky_factor), both factors must be square, lower
+# triangular and have a positive diagonal; other matrices are domain
+# errors, so the density and its gradient are one function of the lower
+# triangles.
 wishart_chol_direct <- function(f, LW, nu, LS, propto, inverse) {
   vW <- val(LW); vS <- val(LS)
-  tri_ok <- function(v) is.matrix(v) && nrow(v) == ncol(v) && all(is.finite(v)) && all(v[upper.tri(v)] == 0) && all(diag(v) > 0)
-  if (!tri_ok(vW) || !tri_ok(vS) || nrow(vW) != nrow(vS)) return(NULL)
+  chk <- function(v, what) {
+    if (!is.matrix(v) || nrow(v) != ncol(v)) stop_shape(sprintf("%s: %s must be a square matrix", f, what))
+    if (!isTRUE(all(v[upper.tri(v)] == 0))) stop_domain(sprintf("%s: %s is not lower triangular", f, what))
+    if (!isTRUE(all(diag(v) > 0))) stop_domain(sprintf("%s: %s is not a valid Cholesky factor: its diagonal must be positive", f, what))
+  }
+  chk(vW, "Cholesky random variable"); chk(vS, "Cholesky scale matrix")
+  if (nrow(vW) != nrow(vS)) stop_shape(sprintf("%s: size mismatch", f))
   K <- nrow(vW)
   if (val(nu) <= K - 1) stop_domain(sprintf("%s: Degrees of freedom must be greater than %d", f, K - 1L))
   # only the lower triangles carry adjoints
@@ -1790,26 +1821,12 @@ wishart_chol_direct <- function(f, LW, nu, LS, propto, inverse) {
   }
   lp + (if (inc(propto, LW)) chol_jac(LW) else 0)
 }
-lp_wishart_cholesky <- function(LW, nu, LS, propto) {
-  lp <- wishart_chol_direct("wishart_lpdf", LW, nu, LS, propto, FALSE)
-  if (!is.null(lp)) return(lp)
-  LW <- as_dbl(LW); LS <- as_dbl(LS)
-  W <- ad_matmul(LW, ad_transpose(LW))
-  S <- ad_matmul(LS, ad_transpose(LS))
-  lp_wishart(0.5 * (W + ad_transpose(W)), nu, 0.5 * (S + ad_transpose(S)), propto) + (if (inc(propto, LW)) chol_jac(LW) else 0)
-}
+lp_wishart_cholesky <- function(LW, nu, LS, propto) wishart_chol_direct("wishart_cholesky_lpdf", LW, nu, LS, propto, FALSE)
 defdist("wishart_cholesky", c("matrix", "real", "matrix"), lp_wishart_cholesky)
 def("wishart_cholesky_rng", c("real", "matrix"), "matrix", function(nu, LS) {
   t(chol(stats::rWishart(1L, val(nu), val(LS) %*% t(val(LS)))[, , 1L]))
 }, rng = TRUE)
-lp_inv_wishart_cholesky <- function(LW, nu, LS, propto) {
-  lp <- wishart_chol_direct("inv_wishart_lpdf", LW, nu, LS, propto, TRUE)
-  if (!is.null(lp)) return(lp)
-  LW <- as_dbl(LW); LS <- as_dbl(LS)
-  W <- ad_matmul(LW, ad_transpose(LW))
-  S <- ad_matmul(LS, ad_transpose(LS))
-  lp_inv_wishart(0.5 * (W + ad_transpose(W)), nu, 0.5 * (S + ad_transpose(S)), propto) + (if (inc(propto, LW)) chol_jac(LW) else 0)
-}
+lp_inv_wishart_cholesky <- function(LW, nu, LS, propto) wishart_chol_direct("inv_wishart_cholesky_lpdf", LW, nu, LS, propto, TRUE)
 defdist("inv_wishart_cholesky", c("matrix", "real", "matrix"), lp_inv_wishart_cholesky)
 def("inv_wishart_cholesky_rng", c("real", "matrix"), "matrix", function(nu, LS) {
   S <- val(LS) %*% t(val(LS))
