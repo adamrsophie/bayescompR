@@ -1,3 +1,29 @@
+# bayescompR (development version)
+
+## Bug fixes
+
+* Loops whose loop invariant expressions read `target()` or call `_lp`,
+  `_rng` or `_jacobian` functions are no longer vectorized; the rewrite
+  evaluated them once instead of once per iteration and changed the density.
+* `cov_matrix` and `cholesky_factor_cov` parameters no longer give a NaN
+  gradient for large off diagonal values.
+* Metropolis and slice sampling work with the native Cranelift and LLVM
+  backends; they evaluated every point as -Inf.
+
+## Performance
+
+* MALA and static HMC reuse the density and gradient of the retained state
+  (one evaluation per MALA transition instead of two), and NUTS computes the
+  inverse metric product once per leaf.
+* ADVI, flow VI and Laplace evaluate value only log densities without a
+  reverse sweep.
+* Fused densities compute partials only for differentiable arguments.
+* `mdivide_right_tri_low()` uses triangular solves.
+* The negative binomial precision partial no longer sums over large counts
+  whose result is discarded.
+* Cholesky factors are kept for up to four fixed covariance matrices.
+* Covariance transforms build their index layout once per shape.
+
 # bayescompR 0.1.0
 
 First release.
