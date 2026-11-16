@@ -110,6 +110,19 @@ vec_mentions <- function(e, v) {
   FALSE
 }
 
+# does an AST call target(), a random number generator, an _lp function
+# (which can change the target) or a _jacobian function?
+vec_effectful <- function(e) {
+  if (!is.list(e)) return(FALSE)
+  if (identical(e$kind, "call") && is.character(e$name) &&
+      (identical(e$name, "target") || grepl("_rng$|_lp$|_jacobian$", e$name))) return(TRUE)
+  for (k in names(e) %||% seq_along(e)) {
+    if (k %in% c("loc", "type", "sig")) next
+    if (is.list(e[[k]]) && vec_effectful(e[[k]])) return(TRUE)
+  }
+  FALSE
+}
+
 vec_is_n <- function(e, n) identical(e$kind, "var") && identical(e$name, n)
 
 vec_scalar <- function(t) is.list(t) && identical(t$nd %||% 0L, 0L) && isTRUE(t$base %in% c("int", "real"))
@@ -212,7 +225,13 @@ vec_out <- function(r, ctx, arith) {
 # (rows of a matrix, only valid on the left of a matrix product)
 vec_expr <- function(a, t, ctx) {
   n <- ctx$n
-  if (!vec_mentions(a, n)) return(list(ast = a, dep = FALSE, kind = "scalar"))
+  if (!vec_mentions(a, n)) {
+    # an expression that does not use the loop variable is evaluated once
+    # instead of once per iteration, which is only the same when it has no
+    # effects and does not read state the loop changes
+    if (vec_effectful(a)) return(NULL)
+    return(list(ast = a, dep = FALSE, kind = "scalar"))
+  }
   # the typed program has no parentheses
   if (identical(a$kind, "paren") && !identical(t$kind, "paren")) {
     r <- vec_expr(a$a, t, ctx)

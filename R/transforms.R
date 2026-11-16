@@ -515,25 +515,10 @@ tf_cov_matrix <- list(
   constrain = function(u, shape, a) {
     K <- shape[1L]
     if (K == 0L) return(list(x = matrix(0, 0, 0), lj = 0))
-    rows <- integer(0)
-    cols <- integer(0)
-    diag_pos <- integer(0)
-    pos <- 0L
-    for (m in 1:K) {
-      if (m > 1L) for (j in 1:(m - 1L)) {
-        pos <- pos + 1L
-        rows <- c(rows, m)
-        cols <- c(cols, j)
-      }
-      pos <- pos + 1L
-      rows <- c(rows, m)
-      cols <- c(cols, m)
-      diag_pos <- c(diag_pos, pos)
-    }
-    is_diag <- seq_len(pos) %in% diag_pos
-    vals <- ad_ifelse(is_diag, exp(u), u)
-    L <- ad_scatter(matrix(0, K, K), (cols - 1L) * K + rows, vals)
-    lj <- K * log(2) + ad_sum((K - seq_len(K) + 2) * ad_gather(u, diag_pos))
+    lay <- tri_layout(K, K)
+    vals <- tri_exp_diag(u, lay$diag_pos)
+    L <- ad_scatter(matrix(0, K, K), lay$flat, vals)
+    lj <- K * log(2) + ad_sum((K - seq_len(K) + 2) * ad_gather(u, lay$diag_pos))
     list(x = ad_matmul(L, ad_transpose(L)), lj = lj)
   },
   unconstrain = function(x, shape, a) {
@@ -565,31 +550,11 @@ tf_cholesky_cov <- list(
   constrain = function(u, shape, a) {
     M <- shape[1L]
     N <- shape[2L]
-    rows <- integer(0)
-    cols <- integer(0)
-    diag_pos <- integer(0)
-    pos <- 0L
-    for (m in seq_len(N)) {
-      if (m > 1L) for (j in 1:(m - 1L)) {
-        pos <- pos + 1L
-        rows <- c(rows, m)
-        cols <- c(cols, j)
-      }
-      pos <- pos + 1L
-      rows <- c(rows, m)
-      cols <- c(cols, m)
-      diag_pos <- c(diag_pos, pos)
-    }
-    if (M > N) for (m in (N + 1L):M) for (j in seq_len(N)) {
-      pos <- pos + 1L
-      rows <- c(rows, m)
-      cols <- c(cols, j)
-    }
-    if (pos == 0L) return(list(x = matrix(0, M, N), lj = 0))
-    is_diag <- seq_len(pos) %in% diag_pos
-    vals <- ad_ifelse(is_diag, exp(u), u)
-    L <- ad_scatter(matrix(0, M, N), (cols - 1L) * M + rows, vals)
-    list(x = L, lj = ad_sum(ad_gather(u, diag_pos)))
+    lay <- tri_layout(M, N)
+    if (!length(lay$flat)) return(list(x = matrix(0, M, N), lj = 0))
+    vals <- tri_exp_diag(u, lay$diag_pos)
+    L <- ad_scatter(matrix(0, M, N), lay$flat, vals)
+    list(x = L, lj = ad_sum(ad_gather(u, lay$diag_pos)))
   },
   unconstrain = function(x, shape, a) {
     L <- as.matrix(x)
@@ -850,3 +815,24 @@ free_size_variable <- function(decl) {
   n_elem <- if (length(decl$adims)) prod(decl$adims) else 1L
   as.integer(n_elem * tf$free_size(decl$eshape))
 }
+
+# Layout of the free vector of a lower triangular M x N factor (row by row,
+# the diagonal last in each of the first N rows, then the full rows below):
+# the flat matrix index of each free element and the free positions of the
+# diagonal. It depends only on the dimensions, so it is built once per shape.
+tri_layout_cache <- new.env(parent = emptyenv())
+tri_layout <- function(M, N) {
+  key <- paste(M, N)
+  hit <- tri_layout_cache[[key]]
+  if (!is.null(hit)) return(hit)
+  rows <- c(rep(seq_len(N), seq_len(N)), rep(seq_len(M - N) + N, each = N))
+  cols <- c(unlist(lapply(seq_len(N), seq_len)), rep(seq_len(N), times = M - N))
+  lay <- list(flat = as.integer((cols - 1L) * M + rows), diag_pos = cumsum(seq_len(N)))
+  tri_layout_cache[[key]] <- lay
+  lay
+}
+
+# the free vector with exp applied to its diagonal positions only: an
+# exponential of an off diagonal entry would overflow for large values and
+# give a NaN adjoint (0 * Inf) although the entry is used as it is
+tri_exp_diag <- function(u, diag_pos) ad_scatter(u, diag_pos, exp(ad_gather(u, diag_pos)))

@@ -110,3 +110,14 @@ test_that("loops with lagged indices and parentheses are vectorized exactly", {
   expect_equal(attr(rec$ir, "vectorized_loops") %||% 0L, 0L)
   expect_equal(bayescomp_constrain(rec, 1)$v, 0.5^(0:4))
 })
+
+test_that("loops whose invariant expressions read the target or have effects stay loops", {
+  d <- list(N = 2, y = c(1, 2))
+  dd <- "data { int N; vector[N] y; } parameters { real mu; }"
+  m <- same_as_loop(paste(dd, "model { mu ~ normal(0, 1); for (n in 1:N) y[n] ~ normal(target(), 1); }"), d, 0.2, loops = 0L)
+  expect_equal(as.vector(bayescomp_grad_log_prob(m, 0.2, propto = TRUE)), -1.430241, tolerance = 1e-6)
+  same_as_loop(paste("functions { real shift_lp(real a) { target += -a; return a; } }", dd,
+                     "model { mu ~ normal(0, 1); for (n in 1:N) y[n] ~ normal(shift_lp(mu), 1); }"), d, 0.2, loops = 0L)
+  # an invariant expression without effects is still lifted out of the loop
+  same_as_loop(paste(dd, "model { mu ~ normal(0, 1); for (n in 1:N) y[n] ~ normal(exp(mu), 1); }"), d, 0.2, loops = 1L)
+})
