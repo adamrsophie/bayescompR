@@ -136,25 +136,47 @@ ad_tri_solve <- function(L, B, f) {
   if (!any_ad(L, B)) return(out)
   ad_node(out, list(L, B), function(g) {
     G <- if (vec) matrix(g, ncol = 1L) else g
-    Bbar <- backsolve(t(vL), G)
-    gL <- -Bbar %*% t(X)
-    gL[upper.tri(gL)] <- 0
-    list(if (is_ad(L)) gL, if (is_ad(B)) (if (vec) as.vector(Bbar) else Bbar))
+    Bbar <- backsolve(vL, G, upper.tri = FALSE, transpose = TRUE)
+    gL <- if (is_ad(L)) {
+      r <- -Bbar %*% t(X)
+      r[upper.tri(r)] <- 0
+      r
+    }
+    list(gL, if (is_ad(B)) (if (vec) as.vector(Bbar) else Bbar))
   })
 }
 def("mdivide_left_tri_low", c("matrix", "vector"), "vector", function(L, b) ad_tri_solve(L, b, "mdivide_left_tri_low"))
 def("mdivide_left_tri_low", c("matrix", "matrix"), "matrix", function(L, B) ad_tri_solve(L, B, "mdivide_left_tri_low"))
-# B * inverse(tri(L)): X = t(solve(t(L), t(B))) with t(L) upper triangular
+# B * inverse(tri(L)) by triangular solves, O(K^2) per row of B:
+# t(X) = solve(t(L), t(B)); reverse Bbar = G * inverse(t(L)), Lbar = -t(X) Bbar
 ad_tri_solve_right <- function(B, L, rowvec) {
+  f <- "mdivide_right_tri_low"
   L <- as_dbl(L)
   B <- as_dbl(B)
-  Bm <- if (rowvec) as_row(B) else B
   vL <- val(L)
-  mask <- matrix(1, nrow(vL), ncol(vL))
-  mask[upper.tri(mask)] <- 0
-  Lt <- ad_transpose(L * mask)
-  X <- ad_transpose(ad_solve(Lt, ad_transpose(Bm), "mdivide_right_tri_low"))
-  if (rowvec) ad_reshape(X, NULL) else X
+  vL[upper.tri(vL)] <- 0
+  vB <- val(B)
+  Bm <- if (rowvec) matrix(vB, nrow = 1L) else vB
+  square_check(f, L)
+  if (ncol(Bm) != nrow(vL)) stop_shape(sprintf("%s: columns of the right side (%d) must match rows of the matrix (%d)", f, ncol(Bm), nrow(vL)))
+  if (any(diag(vL) == 0)) stop_domain(paste0(f, ": matrix is singular"))
+  Xt <- backsolve(vL, t(Bm), upper.tri = FALSE, transpose = TRUE)
+  out <- if (rowvec) as.vector(Xt) else t(Xt)
+  if (!any_ad(L, B)) return(out)
+  ad_node(out, list(L, B), function(g) {
+    Gt <- if (rowvec) matrix(g, ncol = 1L) else t(g)
+    Bbar_t <- forwardsolve(vL, Gt)
+    gL <- if (is_ad(L)) {
+      r <- -Xt %*% t(Bbar_t)
+      r[upper.tri(r)] <- 0
+      r
+    }
+    gB <- if (is_ad(B)) {
+      r <- t(Bbar_t)
+      if (rowvec) { if (is.null(dim(vB))) as.vector(r) else array(r, dim(vB)) } else r
+    }
+    list(gL, gB)
+  })
 }
 def("mdivide_right_tri_low", c("row_vector", "matrix"), "row_vector", function(b, L) ad_tri_solve_right(b, L, TRUE))
 def("mdivide_right_tri_low", c("matrix", "matrix"), "matrix", function(B, L) ad_tri_solve_right(B, L, FALSE))

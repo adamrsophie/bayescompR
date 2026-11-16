@@ -23,13 +23,15 @@ bsum <- function(term, N) {
 # One tape node for a whole density with analytic partials (the analogue of
 # Stan's operands_and_partials). `parts()` returns one partial derivative
 # array per operand, of length 1 or N; contributions are summed down to the
-# operand's shape. Only differentiable operands receive adjoints.
+# operand's shape. Only differentiable operands receive adjoints. A
+# `parts(need)` with an argument gets a logical vector marking the operands
+# that are differentiable and may skip the partials of the others (NULL).
 fused <- function(value, ops, parts, N) {
-  keep <- integer(0)
-  for (k in seq_along(ops)) if (inherits(ops[[k]], "bcad")) keep <- c(keep, k)
+  need <- vapply(ops, inherits, TRUE, what = "bcad")
+  keep <- which(need)
   if (!length(keep)) return(value)
   ad_node(value, ops[keep], function(g) {
-    pp <- parts()
+    pp <- if (length(formals(parts))) parts(need) else parts()
     out <- vector("list", length(keep))
     for (j in seq_along(keep)) {
       k <- keep[j]
@@ -165,8 +167,10 @@ lp_normal <- function(y, mu, sigma, propto) {
   if (inc(propto, sigma)) lp <- lp - (if (length(vs) == 1L) N * log(vs) else sum(log(vs)))
   if (inc(propto, y, mu, sigma)) lp <- lp - 0.5 * sum(z * z) * (if (length(z) == 1L) N else 1)
   if (!any_ad(y, mu, sigma)) return(lp)
-  dy <- -z * inv_s
-  fused(lp, list(y, mu, sigma), function() list(dy, -dy, z * z * inv_s - inv_s), N)
+  fused(lp, list(y, mu, sigma), function(need) {
+    dy <- if (need[1L] || need[2L]) -z * inv_s
+    list(dy, if (need[2L]) -dy, if (need[3L]) z * z * inv_s - inv_s)
+  }, N)
 }
 defdist("normal", c("reals", "reals", "reals"), lp_normal,
   lcdf = function(y, mu, s) ad_sum_v(ad_log_Phi((as_dbl(y) - as_dbl(mu)) / as_dbl(s)), y, mu, s),
@@ -237,12 +241,13 @@ lp_student_t <- function(y, nu, mu, sigma, propto) {
   if (inc(propto, sigma)) lp <- lp - rep1(log(vs))
   if (inc(propto, y, nu, mu, sigma)) lp <- lp - rep1((vn + 1) / 2 * log1p(r))
   if (!any_ad(y, nu, mu, sigma)) return(lp)
-  fused(lp, list(y, nu, mu, sigma), function() {
-    dy <- -(vn + 1) * z / (vs * vn * (1 + r))
+  fused(lp, list(y, nu, mu, sigma), function(need) {
+    q <- 1 / (1 + r)
+    dy <- if (need[1L] || need[3L]) -(vn + 1) * z * q / (vs * vn)
     list(dy,
-         0.5 * digamma((vn + 1) / 2) - 0.5 * digamma(vn / 2) - 0.5 / vn - 0.5 * log1p(r) + (vn + 1) / 2 * r / (vn * (1 + r)),
-         -dy,
-         -1 / vs + (vn + 1) * r / (vs * (1 + r)))
+         if (need[2L]) 0.5 * digamma((vn + 1) / 2) - 0.5 * digamma(vn / 2) - 0.5 / vn - 0.5 * log1p(r) + (vn + 1) / 2 * r * q / vn,
+         if (need[3L]) -dy,
+         if (need[4L]) -1 / vs + (vn + 1) * r * q / vs)
   }, N)
 }
 pt_ls <- function(y, nu, mu, s, lower, logp) {
@@ -303,9 +308,9 @@ lp_cauchy <- function(y, mu, sigma, propto) {
   if (inc(propto, sigma)) lp <- lp - rep1(log(vs))
   if (inc(propto, y, mu, sigma)) lp <- lp - rep1(log1p(z * z))
   if (!any_ad(y, mu, sigma)) return(lp)
-  fused(lp, list(y, mu, sigma), function() {
-    dy <- -2 * z / (vs * (1 + z * z))
-    list(dy, -dy, -1 / vs + 2 * z * z / (vs * (1 + z * z)))
+  fused(lp, list(y, mu, sigma), function(need) {
+    dy <- if (need[1L] || need[2L]) -2 * z / (vs * (1 + z * z))
+    list(dy, if (need[2L]) -dy, if (need[3L]) -1 / vs + 2 * z * z / (vs * (1 + z * z)))
   }, N)
 }
 # log of the Cauchy cdf (lower) or ccdf at z; in the far tail 0.5 - atan(z) / pi
@@ -425,7 +430,7 @@ lp_lognormal <- function(y, mu, sigma, propto) {
   if (inc(propto, y)) lp <- lp - rep1(ly)
   if (inc(propto, y, mu, sigma)) lp <- lp - 0.5 * rep1(z * z)
   if (!any_ad(y, mu, sigma)) return(lp)
-  fused(lp, list(y, mu, sigma), function() list(-1 / vy - z / (vs * vy), z / vs, -1 / vs + z * z / vs), N)
+  fused(lp, list(y, mu, sigma), function(need) list(if (need[1L]) -1 / vy - z / (vs * vy), if (need[2L]) z / vs, if (need[3L]) -1 / vs + z * z / vs), N)
 }
 ln_z <- function(y, mu, s) (log(as_dbl(y)) - as_dbl(mu)) / as_dbl(s)
 defdist("lognormal", c("reals", "reals", "reals"), lp_lognormal,
@@ -532,7 +537,7 @@ lp_gamma <- function(y, alpha, beta, propto) {
   if (inc(propto, y, alpha)) lp <- lp + rep1(zmul(va - 1, ly))
   if (inc(propto, y, beta)) lp <- lp - rep1(vb * vy)
   if (!any_ad(y, alpha, beta)) return(lp)
-  fused(lp, list(y, alpha, beta), function() list(zmul(va - 1, 1 / vy) - vb, -digamma(va) + log(vb) + ly, va / vb - vy), N)
+  fused(lp, list(y, alpha, beta), function(need) list(if (need[1L]) zmul(va - 1, 1 / vy) - vb, if (need[2L]) -digamma(va) + log(vb) + ly, if (need[3L]) va / vb - vy), N)
 }
 defdist("gamma", c("reals", "reals", "reals"), lp_gamma,
   lcdf = function(y, a, b) gamma_cdf_ad(y, a, b, TRUE),
@@ -657,10 +662,10 @@ lp_beta <- function(theta, a, b, propto) {
   if (inc(propto, theta, a)) lp <- lp + rep1(zmul(va - 1, lt))
   if (inc(propto, theta, b)) lp <- lp + rep1(zmul(vb - 1, l1t))
   if (!any_ad(theta, a, b)) return(lp)
-  fused(lp, list(theta, a, b), function() {
-    dab <- digamma(va + vb)
-    list(zmul(va - 1, 1 / vt) - zmul(vb - 1, 1 / (1 - vt)),
-         -digamma(va) + dab + lt, -digamma(vb) + dab + l1t)
+  fused(lp, list(theta, a, b), function(need) {
+    dab <- if (need[2L] || need[3L]) digamma(va + vb)
+    list(if (need[1L]) zmul(va - 1, 1 / vt) - zmul(vb - 1, 1 / (1 - vt)),
+         if (need[2L]) -digamma(va) + dab + lt, if (need[3L]) -digamma(vb) + dab + l1t)
   }, N)
 }
 # x * log(y) with 0 * log(0) = 0
@@ -1122,8 +1127,13 @@ ad_lgamma_ratio <- function(nn, phi) {
   vp <- rep_len(val(phi), length(nn))
   v <- ifelse(nn == 0, 0, lgamma(pmax(nn, 1)) - lbeta(pmax(nn, 1), vp))
   if (!is_ad(phi)) return(v)
-  d <- ifelse(nn <= 100, vapply(seq_along(nn), function(i) sum(1 / (vp[i] + seq_len(nn[i]) - 1)), 0),
-              digamma(nn + vp) - digamma(vp))
+  # each formula only for its own counts: ifelse() would evaluate the sum
+  # for every count, a million terms for a count of a million
+  d <- numeric(length(nn))
+  small <- which(nn <= 100)
+  large <- which(nn > 100)
+  d[small] <- vapply(small, function(i) sum(1 / (vp[i] + seq_len(nn[i]) - 1)), 0)
+  d[large] <- digamma(nn[large] + vp[large]) - digamma(vp[large])
   ad_node(v, list(phi), function(g) list(unbroadcast(g * d, val(phi))))
 }
 
@@ -1457,11 +1467,21 @@ stack_cols <- function(xs, N, K) {
 # matrix that is data: the last one is kept, so a fixed matrix is factored
 # once rather than at every evaluation
 .mvn_cache <- new.env(parent = emptyenv())
+# Cholesky factors of fixed (data) covariance matrices are kept for the
+# last few distinct matrices, so a model with several fixed covariances
+# factors each once.
+# ponytail: linear scan of mvn_cache_size entries; bind factors to call
+# sites in the compiler if models need many distinct fixed covariances
+mvn_cache_size <- 4L
 mvn_factor <- function(S) {
-  if (!inherits(S, "bcad") && identical(.mvn_cache$S, S)) return(.mvn_cache$r)
+  fixed <- !inherits(S, "bcad")
+  if (fixed) for (e in .mvn_cache$entries) if (identical(e$S, S)) return(e$r)
   L <- ad_cholesky(S)
   r <- list(L = L, ldh = ad_sum(log(.lib$diagonal[[1L]]$impl(L))))
-  if (!inherits(S, "bcad")) { .mvn_cache$S <- S; .mvn_cache$r <- r }
+  if (fixed) {
+    old <- .mvn_cache$entries
+    .mvn_cache$entries <- c(list(list(S = S, r = r)), old[seq_len(min(length(old), mvn_cache_size - 1L))])
+  }
   r
 }
 lp_multi_normal <- function(y, mu, Sigma, propto) {

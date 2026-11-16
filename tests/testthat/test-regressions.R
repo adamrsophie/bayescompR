@@ -467,3 +467,43 @@ test_that("runtime errors report the Stan statement they arose in", {
   e <- tryCatch(bayescomp_log_prob(k, -1), error = identity)
   expect_null(e$loc)
 })
+
+test_that("the negative binomial precision partial handles mixed small and huge counts", {
+  m <- bayescomp_model("data { int N; array[N] int y; } parameters { real<lower=0> mu; real<lower=0> phi; } model { y ~ neg_binomial_2(mu, phi); }",
+                       data = list(N = 3, y = c(0L, 2L, 1000000L)))
+  u <- c(log(5), log(2))
+  f <- function(v) bayescomp_log_prob(m, v)
+  fd <- vapply(1:2, function(i) { e <- replace(numeric(2), i, 1e-6); (f(u + e) - f(u - e)) / 2e-6 }, 0)
+  expect_equal(as.vector(bayescomp_grad_log_prob(m, u)), fd, tolerance = 1e-6)
+  expect_lt(system.time(bayescomp_grad_log_prob(m, u))[["elapsed"]], 1)
+})
+
+test_that("the right triangular solve matches the dense solve and its gradient", {
+  L <- matrix(c(2, 0.3, -0.4, 0, 1.5, 0.2, 0, 0, 1.1), 3)
+  B <- matrix(c(0.2, -1, 0.5, 0.3, 1.2, -0.7), 2)
+  expect_equal(ad_tri_solve_right(B, L, FALSE), B %*% solve(L))
+  expect_equal(ad_tri_solve_right(B[1, ], L, TRUE), as.vector(B[1, ] %*% solve(L)))
+  m <- bayescomp_model("parameters { matrix[2, 3] B; cholesky_factor_cov[3] L; } model { target += -0.5 * sum(square(mdivide_right_tri_low(B, L))); to_vector(B) ~ normal(0, 1); }")
+  u <- seq(-0.5, 0.5, length.out = bayescomp_dim(m))
+  f <- function(v) bayescomp_log_prob(m, v)
+  fd <- vapply(seq_along(u), function(i) { e <- replace(numeric(length(u)), i, 1e-6); (f(u + e) - f(u - e)) / 2e-6 }, 0)
+  expect_equal(as.vector(bayescomp_grad_log_prob(m, u)), fd, tolerance = 1e-6)
+})
+
+test_that("several fixed covariance matrices are each factored once", {
+  .mvn_cache$entries <- NULL
+  A <- diag(3) + 0.5; B <- diag(3) * 2
+  for (i in 1:5) { a <- mvn_factor(A); b <- mvn_factor(B) }
+  expect_length(.mvn_cache$entries, 2L)
+  expect_equal(a$L, t(chol(A)))
+  expect_equal(b$L, t(chol(B)))
+})
+
+test_that("MALA and static HMC reuse the density of the retained state", {
+  m <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 1); }")
+  f <- bayescomp_sample(m, algorithm = "mala", chains = 1, iter_warmup = 20, iter_sampling = 20, seed = 1, refresh = 0)
+  d <- as.data.frame(f$sampler_diagnostics)
+  nl <- d[[grep("n_leapfrog__", names(d))]]
+  # each transition after the first starts from the retained state
+  expect_equal(nl[-1L], rep(1, 19L))
+})
