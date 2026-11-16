@@ -76,14 +76,21 @@
 #' @param resume A fit from `bayescomp_sample()` to continue: each chain
 #'   starts at its state after the last transition with its adapted step
 #'   size and metric, and runs `iter_sampling` further iterations without
-#'   warmup. A chain that ran to the end also continues its random number
-#'   stream, so the parameter draws equal those of one longer run with the
-#'   same seed (with `thin`, when the first run's `iter_sampling` is a
-#'   multiple of `thin`); draws of generated quantities that call
-#'   `_rng` functions differ. A chain stopped by an interrupt continues from
-#'   its last complete transition with a new stream, and warmup is not
-#'   continued. Bind the draws of the two fits with
-#'   `posterior::bind_draws(..., along = "iteration")`.
+#'   warmup. Transition controls that are not given again (`block`,
+#'   `max_treedepth`, `int_time`, `step_size_jitter`, `thin`, `show_print`,
+#'   `save_diagnostics`) keep the values of the first run, and `step_size`
+#'   and `inv_metric` given again replace the adapted ones. A chain that ran
+#'   to the end (also a warmup only run) continues its random number stream
+#'   and thinning phase, so with the same model, data and controls the
+#'   parameter draws equal those of one longer run with the same seed;
+#'   draws of generated quantities that call `_rng` functions differ.
+#'   Element `config$resume` of the result records whether the continuation
+#'   was exact and which controls were changed. With another model or data
+#'   (with the same number of parameters) the chains start from their last
+#'   state without their streams, with a warning. A chain stopped by an
+#'   interrupt continues from its last complete transition with a new
+#'   stream, and an interrupted warmup is not continued. Bind the draws of
+#'   the two fits with `posterior::bind_draws(..., along = "iteration")`.
 #' @return A `bayescomp_fit` object. An interrupt (Ctrl-C or Esc) stops
 #'   sampling and returns the chains that finished or, when none did, the
 #'   draws kept so far (parallel chains in forked processes are cut to the
@@ -117,10 +124,32 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
     if (ncol(resume$unconstrained[[1L]]) != model$dim)
       stop("the model and the fit in 'resume' have different numbers of parameters", call. = FALSE)
     chains <- length(resume$unconstrained)
-    algorithm <- resume$config$algorithm
-    metric <- resume$config$metric
+    old <- resume$config
+    algorithm <- old$algorithm
+    metric <- old$metric
     iter_warmup <- 0L
     adapt_engaged <- FALSE
+    # transition controls not given again continue as they were; the ones
+    # given with other values are recorded as a modified continuation
+    inherit <- c(block = "block", max_treedepth = "max_treedepth", int_time = "int_time",
+                 step_size_jitter = "step_size_jitter", thin = "thin", show_print = "print",
+                 save_diagnostics = "diagnostic")
+    changed <- character(0)
+    for (a in names(inherit)) {
+      prev <- old[[inherit[[a]]]]
+      if (is.null(prev)) next
+      if (eval(call("missing", as.name(a)))) assign(a, prev)
+      else if (!isTRUE(all.equal(get(a), prev, check.attributes = FALSE))) changed <- c(changed, a)
+    }
+    given_step <- !missing(step_size)
+    given_metric <- !missing(inv_metric)
+    changed <- c(changed, if (given_step) "step_size", if (given_metric) "inv_metric")
+    # an exact continuation needs the same model and data; anything else is
+    # a warm start from the last state
+    same_model <- identical(model$code, resume$model$code) && identical(model$data, resume$model$data)
+    if (!same_model)
+      warning("the model or data differ from those of the fit in 'resume': its chains start from their last state, ",
+              "but without their random number streams, so this is not an exact continuation", call. = FALSE)
   }
   algorithm <- match.arg(algorithm)
   metric <- match.arg(metric)
@@ -173,9 +202,13 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
       # finished also continues its random number stream
       fin <- resume$final[[id]]
       q0 <- fin$q %||% resume$unconstrained[[id]][nrow(resume$unconstrained[[id]]), ]
-      if (isTRUE(fin$exact) && !is.null(fin$rng)) assign(".Random.seed", fin$rng, envir = globalenv())
-      cf$step_size <- resume$step_size[[id]]
-      cf$inv_metric <- resume$inv_metric[[id]]
+      if (same_model && isTRUE(fin$exact) && !is.null(fin$rng)) assign(".Random.seed", fin$rng, envir = globalenv())
+      if (!given_step) cf$step_size <- resume$step_size[[id]]
+      if (!given_metric) cf$inv_metric <- resume$inv_metric[[id]]
+      # transition specific state (the center of elliptical slice sampling)
+      # and the count of sampling iterations, which keeps the thinning phase
+      cf$center <- fin$center
+      cf$sampling_offset <- fin$n_sampling %||% 0L
     } else q0 <- find_init(model, init, id, gradient = !(algorithm %in% c("metropolis", "slice", "elliptical_slice", "fixed_param")))
     out <- if (n == 0L || algorithm == "fixed_param") fixed_param_chain(cf, q0) else run_hmc_chain(model, q0, cf, id)
     # after an interrupt, a second one (a parallel chain is signaled again
@@ -185,6 +218,7 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
     out
   })
   res <- interrupted_chains(res)
+  if (!is.null(resume)) cfg$resume <- list(exact = same_model && !length(changed), changed = changed)
   fit <- make_fit(model, res, cfg, method = "sample", seed = seed, elapsed = proc.time()[["elapsed"]] - t0)
   fit$interrupted <- isTRUE(attr(res, "interrupted"))
   fit

@@ -312,7 +312,7 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   trans <- switch(cfg$algorithm, nuts = nuts_transition, hmc = hmc_transition, mala = mala_transition,
                   metropolis = metropolis_transition, slice = slice_transition,
                   elliptical_slice = elliptical_transition)
-  st$center <- q0
+  st$center <- cfg$center %||% q0
   hamiltonian <- cfg$algorithm %in% c("nuts", "hmc")
   nw <- cfg$iter_warmup
   ns <- cfg$iter_sampling
@@ -322,10 +322,11 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   w <- windows_new(nw, cfg$adapt_init_buffer, cfg$adapt_term_buffer, cfg$adapt_window)
   est <- est_new(n, dense)
   if (adapt && hamiltonian) st$eps <- init_stepsize(st, q0)
+  off <- as.integer(cfg$sampling_offset %||% 0L)
   keep_w <- if (cfg$save_warmup) seq_len(nw) else integer(0)
   n_keep <- length(keep_w) + ns
   thin_idx <- c(keep_w[(seq_along(keep_w) - 1L) %% cfg$thin == 0L],
-                nw + seq_len(ns)[(seq_len(ns) - 1L) %% cfg$thin == 0L])
+                nw + seq_len(ns)[(off + seq_len(ns) - 1L) %% cfg$thin == 0L])
   keep_it <- logical(nw + ns); keep_it[thin_idx] <- TRUE
   qs <- matrix(NA_real_, length(thin_idx), n)
   diag_out <- matrix(NA_real_, length(thin_idx), 7L,
@@ -339,6 +340,7 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   t_start <- proc.time()[["elapsed"]]
   t_warm <- NA_real_
   # an interrupt (Ctrl-C) ends the chain with the draws kept so far
+  n_done <- 0L
   stopped <- tryCatch({ for (it in seq_len(total)) {
     if (it == nw + 1L) {
       t_warm <- proc.time()[["elapsed"]] - t_start
@@ -384,7 +386,14 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
       chain_message(sprintf("Chain %d: Iteration: %*d / %d [%3.0f%%]  (%s)", chain_id, nchar(total), it, total,
                       100 * it / total, if (it <= nw) "Warmup" else "Sampling"))
     }
+    n_done <- it
   }; FALSE }, interrupt = function(e) TRUE)
+  if (!stopped && ns == 0L && nw > 0L) {
+    # a completed warmup without sampling ends as it would before the first
+    # sampling iteration, so a run resumed from it continues exactly
+    t_warm <- proc.time()[["elapsed"]] - t_start
+    if (tune_step) st$eps <- exp(da$x_bar)
+  }
   if (stopped) {
     # a forked chain tells the parent it already stopped, so that it is not
     # interrupted a second time while its draws are processed
@@ -405,5 +414,6 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
        diagnostics = if (keep_pg) list(p = dp, g = dg),
        # the state after the last transition, for an exact continuation: an
        # interrupt can stop a transition halfway through its random numbers
-       final = list(q = q, rng = get0(".Random.seed", envir = globalenv(), inherits = FALSE), exact = !stopped))
+       final = list(q = q, rng = get0(".Random.seed", envir = globalenv(), inherits = FALSE), exact = !stopped,
+                    center = st$center, n_sampling = off + max(0L, n_done - nw)))
 }
