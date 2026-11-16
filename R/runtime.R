@@ -337,6 +337,14 @@ trunc_norm <- function(a, lo, hi, lcdf, lccdf, discrete, fam) {
   if (!is.null(lo) && !is.null(hi)) {
     if (val(lo) > val(hi)) stop_domain(sprintf("truncation of %s: lower bound is greater than upper bound", fam))
     l_lo <- do.call(lcdf, c(list(lo_adj), a))
+    if (!is.null(lccdf) && all(val(l_lo) > -log(2))) {
+      # an interval in the upper tail, where both lower tail probabilities
+      # round to one: the difference of the upper tail probabilities
+      u_lo <- do.call(lccdf, c(list(lo_adj), a))
+      u_hi <- do.call(lccdf, c(list(hi), a))
+      if (all(val(u_hi) == -Inf)) return(u_lo)
+      return(ad_log_diff_exp(u_lo, u_hi))
+    }
     l_hi <- do.call(lcdf, c(list(hi), a))
     # a lower bound at the edge of the support: F(lo) = 0, and its
     # gradient (often 0 / 0 there) must not enter

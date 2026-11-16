@@ -14,17 +14,19 @@
 #' the equivalent unfused statement does. A multivariate statement is one
 #' joint observation, so it gives one log likelihood column, while its
 #' predictive draws have one column per element of `y`. Truncated
-#' statements are renormalized for each observation, and their predictive
-#' draws are taken by rejection. A user defined density is one joint
-#' observation per statement (one per iteration inside a loop) and has no
-#' predictive draws. `group` sums the log likelihood of observations that
+#' statements are renormalized for each observation; their predictive draws
+#' are taken by inversion for the normal and by rejection otherwise. A
+#' user defined density is one joint observation per statement (one per
+#' iteration inside a loop) and has no predictive draws. `group` sums the
+#' log likelihood of observations that
 #' belong together, for leave one group out cross validation.
 #'
 #' @param fit A `bayescomp_fit` with unconstrained draws.
 #' @param format `"matrix"` for a draws by observations matrix (chains
 #'   stacked), `"array"` for an iterations by chains by observations array.
-#' @param group Optional vector with one entry per observation column; the
-#'   columns of each group are summed and named by the group.
+#' @param group Optional vector with one entry per observation column and
+#'   no missing values; the columns of each group are summed and named by
+#'   the group, in the order the groups first appear.
 #' @param seed Seed for the predictive draws.
 #' @return A matrix or array with one column (slice) per observation or
 #'   group. `bayescomp_posterior_predict()` gives `NA` for distributions
@@ -41,9 +43,12 @@ bayescomp_log_lik <- function(fit, format = c("matrix", "array"), group = NULL) 
   a <- pointwise_eval(fit, FALSE)
   if (!is.null(group)) {
     if (length(group) != dim(a)[3L]) stop(sprintf("'group' must have one entry per observation (%d)", dim(a)[3L]), call. = FALSE)
-    g <- factor(group, levels = unique(group))
-    m <- t(rowsum(t(matrix(a, ncol = dim(a)[3L])), g, reorder = FALSE))
-    a <- array(m, c(dim(a)[1:2], nlevels(g)), dimnames = list(NULL, NULL, levels(g)))
+    if (anyNA(group)) stop("'group' must not contain missing values", call. = FALSE)
+    # groups in the order of first appearance; unused factor levels dropped
+    key <- as.character(group)
+    lev <- unique(key)
+    m <- t(rowsum(t(matrix(a, ncol = dim(a)[3L])), match(key, lev), reorder = TRUE))
+    a <- array(m, c(dim(a)[1:2], length(lev)), dimnames = list(NULL, NULL, lev))
   }
   pointwise_out(a, match.arg(format))
 }
@@ -162,12 +167,20 @@ pw_index <- function(pw, label, n) {
   sprintf("%s[%d]", label, k0 + seq_len(n))
 }
 
-# predictive draws of a truncated statement by rejection: draws outside
-# [lo, hi] are redrawn up to 1000 times, then NA
+# predictive draws of a truncated statement: a normal by inversion of its
+# tail probabilities on the log scale; other families by rejection, where
+# draws outside [lo, hi] are redrawn up to 1000 times, then NA (with a
+# warning)
 pw_trunc_rng <- function(rng, tr, n, args) {
   lo <- if (is.null(tr$lo)) -Inf else val(tr$lo)
   hi <- if (is.null(tr$hi)) Inf else val(tr$hi)
-  vapply(seq_len(n), function(i) {
+  if (identical(tr$fam, "normal")) {
+    a <- lapply(seq_len(n), args)
+    mu <- vapply(a, function(x) as.numeric(x[[1L]]), 0)
+    sigma <- vapply(a, function(x) as.numeric(x[[2L]]), 0)
+    return(rtrunc_normal(mu, sigma, rep_len(as.numeric(lo), n), rep_len(as.numeric(hi), n)))
+  }
+  r <- vapply(seq_len(n), function(i) {
     a <- args(i)
     for (k in 1:1000) {
       r <- as.numeric(do.call(rng, a))
@@ -175,6 +188,24 @@ pw_trunc_rng <- function(rng, tr, n, args) {
     }
     NA_real_
   }, 0)
+  if (anyNA(r)) warning(sprintf("%d predictive draws of the truncated %s statement fell outside the bounds 1000 times and are NA",
+                                sum(is.na(r)), tr$fam), call. = FALSE)
+  r
+}
+
+# Normal draws truncated to [lo, hi] by inversion: an interval above the
+# mean uses the upper tail probabilities and one below it the lower tail
+# ones, each on the log scale, so that far tails keep their resolution.
+rtrunc_normal <- function(mu, sigma, lo, hi) {
+  zl <- (lo - mu) / sigma
+  zh <- (hi - mu) / sigma
+  upper <- zl > 0
+  # log tail probabilities of the near (a) and far (b) bound
+  a <- ifelse(upper, stats::pnorm(zl, lower.tail = FALSE, log.p = TRUE), stats::pnorm(zh, log.p = TRUE))
+  b <- ifelse(upper, stats::pnorm(zh, lower.tail = FALSE, log.p = TRUE), stats::pnorm(zl, log.p = TRUE))
+  lq <- a + log1p(-stats::runif(length(mu)) * -expm1(b - a))
+  z <- ifelse(upper, stats::qnorm(lq, lower.tail = FALSE, log.p = TRUE), stats::qnorm(lq, log.p = TRUE))
+  mu + sigma * pmin(pmax(z, zl), zh)
 }
 
 # Fused GLMs as their univariate family on the linear predictor: each row of
@@ -209,10 +240,22 @@ pw_kernels <- list(
   weibull = function(y, a, s) stats::dweibull(y, a, s, log = TRUE),
   beta = function(y, a, b) stats::dbeta(y, a, b, log = TRUE),
   poisson = function(y, l) stats::dpois(y, l, log = TRUE),
-  poisson_log = function(y, eta) stats::dpois(y, exp(eta), log = TRUE),
+  # log link families stay on the log scale, as their densities do, so that
+  # a mean that underflows keeps a finite log likelihood
+  poisson_log = function(y, eta) {
+    y <- as.numeric(y)
+    r <- ifelse(y == 0, 0, y * eta) - exp(eta) - lgamma(y + 1)
+    r[eta == Inf | (eta == -Inf & y != 0)] <- -Inf
+    r
+  },
   bernoulli = function(y, p) stats::dbinom(y, 1L, p, log = TRUE),
   bernoulli_logit = function(y, eta) stats::plogis((2 * y - 1) * eta, log.p = TRUE),
   binomial = function(y, N, p) stats::dbinom(y, N, p, log = TRUE),
   binomial_logit = function(y, N, eta) lchoose(N, y) + y * stats::plogis(eta, log.p = TRUE) + (N - y) * stats::plogis(-eta, log.p = TRUE),
   neg_binomial_2 = function(y, mu, phi) stats::dnbinom(y, size = phi, mu = mu, log = TRUE),
-  neg_binomial_2_log = function(y, eta, phi) stats::dnbinom(y, size = phi, mu = exp(eta), log = TRUE))
+  neg_binomial_2_log = function(y, eta, phi) {
+    y <- as.numeric(y)
+    x <- eta - log(phi)
+    sp <- pmax(x, 0) + log1p(exp(-abs(x)))
+    lgamma(y + phi) - lgamma(phi) - lgamma(y + 1) + ifelse(y == 0, 0, y * (x - sp)) - phi * sp
+  })

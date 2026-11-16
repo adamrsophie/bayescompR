@@ -15,8 +15,9 @@ bayescomp_posterior_predict(fit, format = c("matrix", "array"), seed = NULL)
 \item{format}{\code{"matrix"} for a draws by observations matrix (chains
 stacked), \code{"array"} for an iterations by chains by observations array.}
 
-\item{group}{Optional vector with one entry per observation column; the
-columns of each group are summed and named by the group.}
+\item{group}{Optional vector with one entry per observation column and
+no missing values; the columns of each group are summed and named by
+the group, in the order the groups first appear.}
 
 \item{seed}{Seed for the predictive draws.}
 }
@@ -36,10 +37,11 @@ log odds shared by all elements, and GLMs one column per row of \code{x}, as
 the equivalent unfused statement does. A multivariate statement is one
 joint observation, so it gives one log likelihood column, while its
 predictive draws have one column per element of \code{y}. Truncated
-statements are renormalized for each observation, and their predictive
-draws are taken by rejection. A user defined density is one joint
-observation per statement (one per iteration inside a loop) and has no
-predictive draws. \code{group} sums the log likelihood of observations that
+statements are renormalized for each observation; their predictive draws
+are taken by inversion for the normal and by rejection otherwise. A
+user defined density is one joint observation per statement (one per
+iteration inside a loop) and has no predictive draws. \code{group} sums the
+log likelihood of observations that
 belong together, for leave one group out cross validation.
 }
 \examples{

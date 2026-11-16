@@ -327,6 +327,12 @@ sem_stmt <- function(s, st, top = FALSE) {
             stop_semantic(sprintf("truncation requires %s, which is not available for these arguments", fn), st$loc)
           st$trunc[[paste0(nd, "_sig")]] <- rr$sig
         }
+        if (!is.null(st$trunc$lo) && !is.null(st$trunc$hi)) {
+          # optional: two sided truncation in the upper tail uses the
+          # difference of upper tail probabilities
+          rr <- resolve_call(s, paste0(fam, "_lccdf"), c(list(st$trunc$lo$type), lapply(args, `[[`, "type")), quiet = TRUE)
+          if (!is.null(rr)) st$trunc$lccdf_sig <- rr$sig
+        }
         st$trunc$fam <- fam
         st$trunc$discrete <- lhs$type$base == "int"
       }
