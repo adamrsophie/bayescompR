@@ -366,35 +366,12 @@ tf_cholesky_corr <- list(
     K <- shape[1L]
     if (K == 0L) return(list(x = matrix(0, 0, 0), lj = 0))
     if (K == 1L) return(list(x = matrix(1, 1, 1), lj = 0))
-    z <- tanh(u)
-    lj <- ad_sum(ad_log1m(z * z))
-    entries <- list(1)
-    rows <- 1L
-    cols <- 1L
-    k <- 0L
-    for (i in 2:K) {
-      k <- k + 1L
-      zi <- ad_select(z, k)
-      entries[[length(entries) + 1L]] <- zi
-      rows <- c(rows, i)
-      cols <- c(cols, 1L)
-      sum_sqs <- zi * zi
-      if (i > 2L) {
-        for (j in 2:(i - 1L)) {
-          lj <- lj + 0.5 * ad_log1m(sum_sqs)
-          k <- k + 1L
-          lij <- ad_select(z, k) * sqrt(1 - sum_sqs)
-          entries[[length(entries) + 1L]] <- lij
-          rows <- c(rows, i)
-          cols <- c(cols, j)
-          sum_sqs <- sum_sqs + lij * lij
-        }
-      }
-      entries[[length(entries) + 1L]] <- sqrt(1 - sum_sqs)
-      rows <- c(rows, i)
-      cols <- c(cols, i)
-    }
-    list(x = assemble_matrix(entries, rows, cols, K), lj = lj)
+    # the partial correlation of (i, m) enters log(1 - z^2) once for itself
+    # and once per later element j of row i through 0.5 log(1 - sum_sqs)
+    ij <- which(lower.tri(diag(K)), arr.ind = TRUE)
+    ij <- ij[order(ij[, 1L], ij[, 2L]), , drop = FALSE]
+    w <- 1 + (ij[, 1L] - 1 - ij[, 2L]) / 2
+    list(x = corr_L_from_cpcs(tanh(u), K, rowwise = TRUE), lj = ad_wsum_log1m_tanh2(u, w))
   },
   unconstrain = function(x, shape, a) {
     L <- as.matrix(x)
@@ -429,13 +406,19 @@ tf_cholesky_corr <- list(
 
 # Correlation matrix through column wise canonical partial correlations
 # (Stan's read_corr_L with the Lewandowski, Kurowicka and Joe Jacobian).
-corr_L_from_cpcs <- function(z, K) {
+corr_L_from_cpcs <- function(z, K, rowwise = FALSE) {
   # each row i is its own recurrence over the partial correlations c_j of
   # (i, j), j < i: L[i, j] = c_j sqrt(a_j), a_{j+1} = a_j (1 - c_j^2),
   # L[i, i] = sqrt(a_i), a_1 = 1; one node with the reverse recurrence
   zv <- as.numeric(val(z))
+  # z fills the lower triangle by columns, or with `rowwise` by rows
   P <- matrix(0L, K, K)
-  P[lower.tri(P)] <- seq_along(zv)
+  if (rowwise) {
+    P[upper.tri(P)] <- seq_along(zv)
+    P <- t(P)
+  } else {
+    P[lower.tri(P)] <- seq_along(zv)
+  }
   L <- matrix(0, K, K)
   A <- matrix(0, K, K)
   for (i in seq_len(K)) {
@@ -468,22 +451,27 @@ corr_L_from_cpcs <- function(z, K) {
   })
 }
 
+# sum_k w_k log(1 - tanh(u_k)^2), written as 2 (log 2 - |u| - log1p(exp(-2 |u|)))
+# so it stays finite where tanh(u) rounds to +-1; the derivative is
+# -2 w tanh(u)
+ad_wsum_log1m_tanh2 <- function(u, w) {
+  vu <- as.numeric(val(u))
+  au <- abs(vu)
+  y <- sum(w * 2 * (log(2) - au - log1p(exp(-2 * au))))
+  if (!inherits(u, "bcad")) return(y)
+  ad_node(y, list(u), function(g) list(-2 * g * w * tanh(vu)))
+}
+
 tf_corr_matrix <- list(
   free_size = function(shape) shape[1L] * (shape[1L] - 1L) / 2L,
   constrain = function(u, shape, a) {
     K <- shape[1L]
     if (K == 0L) return(list(x = matrix(0, 0, 0), lj = 0))
     if (K == 1L) return(list(x = matrix(1, 1, 1), lj = 0))
-    z <- tanh(u)
-    lj <- ad_sum(ad_log1m(z * z))
-    w <- numeric(length(val(z)))
-    pos <- 0L
-    for (k in 1:(K - 1L)) for (i in (k + 1L):K) {
-      pos <- pos + 1L
-      w[pos] <- K - k - 1L
-    }
-    lj <- lj + 0.5 * ad_sum(w * ad_log1m(z * z))
-    L <- corr_L_from_cpcs(z, K)
+    # column k contributes log(1 - z^2) with weight 1 + (K - k - 1) / 2
+    cols <- which(lower.tri(diag(K)), arr.ind = TRUE)[, 2L]
+    lj <- ad_wsum_log1m_tanh2(u, 1 + (K - cols - 1) / 2)
+    L <- corr_L_from_cpcs(tanh(u), K)
     list(x = ad_matmul(L, ad_transpose(L)), lj = lj)
   },
   unconstrain = function(x, shape, a) {
