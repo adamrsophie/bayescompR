@@ -9,6 +9,16 @@
   gradient for large off diagonal values.
 * Metropolis and slice sampling work with the native Cranelift and LLVM
   backends; they evaluated every point as -Inf.
+* `cholesky_factor_corr` and `corr_matrix` parameters have a finite log
+  Jacobian where `tanh()` of the unconstrained value rounds to 1; it was
+  -Inf with a NaN gradient.
+* GLM densities reject an intercept vector whose length is neither 1 nor the
+  number of rows of `x`; it was recycled.
+
+## New features
+
+* `bayescomp_sgmcmc()` gains `lp_every`, so the exact full data `lp__` can
+  be computed at only some saved draws or not at all.
 
 ## Performance
 
@@ -23,6 +33,20 @@
   whose result is discarded.
 * Cholesky factors are kept for up to four fixed covariance matrices.
 * Covariance transforms build their index layout once per shape.
+* Multivariate normal and Student t densities transpose arrays of vectors
+  whole instead of splitting them into rows; a shared mean vector is
+  broadcast by one operation.
+* `cholesky_factor_corr` uses one node for the factor and one for the log
+  Jacobian instead of a scalar graph.
+* GLM linear predictors are one node, and `normal_id_glm` with fixed data, a
+  scalar intercept and a scalar scale uses a QR factorization prepared once,
+  so each evaluation costs O(P^2) instead of O(N P).
+* SG-MCMC initialization and expectation propagation reuse the joint value
+  and gradient that the optimizer asks for in two calls.
+* RMHMC carries the metric derivatives at the end of one leapfrog step into
+  the next.
+* NaN checks no longer allocate, and pointwise log likelihoods and
+  predictive draws keep only the requested array.
 
 # bayescompR 0.1.0
 

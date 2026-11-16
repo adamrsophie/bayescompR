@@ -500,10 +500,127 @@ test_that("several fixed covariance matrices are each factored once", {
 })
 
 test_that("MALA and static HMC reuse the density of the retained state", {
-  m <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 1); }")
-  f <- bayescomp_sample(m, algorithm = "mala", chains = 1, iter_warmup = 20, iter_sampling = 20, seed = 1, refresh = 0)
-  d <- as.data.frame(f$sampler_diagnostics)
-  nl <- d[[grep("n_leapfrog__", names(d))]]
-  # each transition after the first starts from the retained state
-  expect_equal(nl[-1L], rep(1, 19L))
+  calls <- 0L
+  bayescomp_register_backend("count_ldg", c("log_density", "gradient"), ir_versions = "1.0.0",
+    compile = function(ir, model) list(log_density_gradient = function(u, jacobian, propto) {
+      calls <<- calls + 1L
+      list(value = -0.5 * sum(u^2), grad = -u)
+    }))
+  on.exit(rm("count_ldg", envir = bayescompR:::.backends))
+  m <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 1); }", backend = "count_ldg",
+                       allow_fallback = TRUE)
+  run <- function(alg, n, eps) {
+    calls <<- 0L
+    f <- bayescomp_sample(m, algorithm = alg, chains = 1, iter_warmup = 0, iter_sampling = n, step_size = eps,
+                          seed = 1, refresh = 0)
+    d <- as.data.frame(f$sampler_diagnostics)
+    list(calls = calls, nl = d[[grep("n_leapfrog__", names(d))]], acc = d[[grep("accept_stat__", names(d))]])
+  }
+  for (alg in c("mala", "hmc")) {
+    one <- run(alg, 1, 1.5)
+    many <- run(alg, 40, 1.5)
+    # both accepted and rejected proposals occur
+    expect_true(any(many$acc < 0.5) && any(many$acc > 0.5))
+    # every transition after the first starts from the retained state, so
+    # the density evaluations beyond the reported counts stay those of the
+    # first transition and the initialization
+    expect_equal(many$calls - sum(many$nl), one$calls - sum(one$nl))
+  }
+  # one density evaluation per MALA transition, the proposal's
+  expect_equal(run("mala", 40, 1.5)$nl[-1L], rep(1, 39L))
+})
+
+test_that("multivariate normal and Student t on matrices match the row by row sum", {
+  vg <- bayescompR:::ad_value_grad
+  set.seed(3)
+  K <- 3; N <- 4
+  Y <- matrix(rnorm(N * K), N, K); M <- matrix(rnorm(N * K), N, K); mv <- rnorm(K)
+  L <- t(chol(crossprod(matrix(rnorm(K * K), K)) + diag(K)))
+  mvn <- bayescompR:::lp_multi_normal_cholesky
+  mvt <- bayescompR:::lp_multi_student_t_cholesky
+  as_mat <- function(z, d) { z$v <- array(z$v, d); z }
+  pick <- function(z, i, d) as_mat(bayescompR:::ad_gather(z, i), d)
+  for (shared in c(FALSE, TRUE)) {
+    mu <- if (shared) mv else M
+    x0 <- c(as.vector(Y), as.vector(mu))
+    whole <- function(z, st) {
+      y <- pick(z, seq_len(N * K), c(N, K))
+      m <- if (shared) bayescompR:::ad_gather(z, N * K + seq_len(K)) else pick(z, N * K + seq_len(N * K), c(N, K))
+      if (st) mvt(y, 5, m, L, FALSE) else mvn(y, m, L, FALSE)
+    }
+    rows <- function(z, st) {
+      out <- 0
+      for (i in seq_len(N)) {
+        y <- bayescompR:::ad_gather(z, i + (seq_len(K) - 1L) * N)
+        m <- bayescompR:::ad_gather(z, N * K + if (shared) seq_len(K) else i + (seq_len(K) - 1L) * N)
+        out <- out + if (st) mvt(y, 5, m, L, FALSE) else mvn(y, m, L, FALSE)
+      }
+      out
+    }
+    for (st in c(FALSE, TRUE)) {
+      a <- vg(whole, x0, st = st); b <- vg(rows, x0, st = st)
+      expect_equal(a$value, b$value, tolerance = 1e-12)
+      expect_equal(a$grad, b$grad, tolerance = 1e-12)
+    }
+  }
+  # invalid elements are reported in the order of the rows
+  bm <- M; bm[3, 1] <- Inf; bm[2, 2] <- -Inf
+  expect_error(mvn(Y, bm, L, FALSE), "Location parameter is -Inf", class = "bayescomp_domain_error")
+  expect_error(mvn(Y, M[1:3, ], L, FALSE), class = "bayescomp_shape_error")
+})
+
+test_that("the Cholesky correlation transform has a finite Jacobian far out and a correct gradient", {
+  tf <- bayescompR:::tf_cholesky_corr
+  vg <- bayescompR:::ad_value_grad
+  r <- vg(function(u) tf$constrain(u, 4, NULL)$lj, c(30, -40, 0.5, 25, 1, -1))
+  expect_true(is.finite(r$value) && all(is.finite(r$grad)))
+  set.seed(4)
+  u <- rnorm(10); W <- matrix(rnorm(25), 5)
+  f <- function(u) { c <- tf$constrain(u, 5, NULL); bayescompR:::ad_sum(W * c$x) + c$lj }
+  fv <- function(u) { c <- tf$constrain(u, 5, NULL); sum(W * c$x) + c$lj }
+  fd <- vapply(seq_along(u), function(i) {
+    e <- replace(numeric(10), i, 1e-6); (fv(u + e) - fv(u - e)) / 2e-6
+  }, 0)
+  expect_equal(vg(f, u)$grad, fd, tolerance = 1e-6)
+  expect_equal(tf$unconstrain(tf$constrain(u, 5, NULL)$x, 5, NULL), u, tolerance = 1e-10)
+})
+
+test_that("normal_id_glm with fixed data matches the observation level density", {
+  vg <- bayescompR:::ad_value_grad
+  set.seed(5)
+  X <- matrix(rnorm(60), 20); y <- rnorm(20)
+  glm <- bayescompR:::lp_normal_id_glm
+  for (propto in c(FALSE, TRUE)) {
+    f <- function(z) glm(y, X, bayescompR:::ad_select(z, 1), bayescompR:::ad_gather(z, 2:4), bayescompR:::ad_select(z, 5), propto)
+    g <- function(z) bayescompR:::lp_normal(y, bayescompR:::ad_select(z, 1) + bayescompR:::op_mat_vec(X, bayescompR:::ad_gather(z, 2:4)),
+                                            bayescompR:::ad_select(z, 5), propto)
+    z0 <- c(0.2, 0.5, -1, 0.3, 1.4)
+    vg(f, z0)
+    a <- vg(f, z0)
+    expect_true(!is.null(bayescompR:::normal_glm_prep(y, X)))
+    b <- vg(g, z0)
+    expect_equal(a$value, b$value, tolerance = 1e-12)
+    expect_equal(a$grad, b$grad, tolerance = 1e-10)
+  }
+  expect_error(bayescompR:::glm_linpred("bernoulli_logit_glm_lpmf", X, rnorm(3), rnorm(3)),
+               "size of alpha", class = "bayescomp_shape_error")
+})
+
+test_that("joint objectives evaluate once per point", {
+  n <- 0L
+  ob <- bayescompR:::joint_objective(function(x) { n <<- n + 1L; list(value = -sum(x^2), grad = -2 * x) })
+  ob$fn(c(1, 2)); ob$gr(c(1, 2)); ob$gr(c(1, 3))
+  expect_equal(n, 2L)
+})
+
+test_that("SG-MCMC computes lp__ only where asked and keeps the draws", {
+  d <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; } model { mu ~ normal(0, 10); y ~ normal(mu, 1); }",
+                       data = list(N = 40, y = seq(-1, 3, length.out = 40)))
+  a <- bayescomp_sgmcmc(d, batch_size = 5, chains = 1, iter_warmup = 20, iter_sampling = 10, seed = 1)
+  b <- bayescomp_sgmcmc(d, batch_size = 5, chains = 1, iter_warmup = 20, iter_sampling = 10, seed = 1, lp_every = 3)
+  col <- function(f, nm) { d <- as.data.frame(f$draws); d[[grep(nm, names(d), fixed = TRUE)]] }
+  la <- col(a, "lp__"); lb <- col(b, "lp__")
+  expect_equal(col(a, "mu"), col(b, "mu"))
+  expect_equal(which(!is.na(lb)), c(1L, 4L, 7L, 10L))
+  expect_equal(lb[c(1, 4, 7, 10)], la[c(1, 4, 7, 10)])
 })
