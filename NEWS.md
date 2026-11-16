@@ -14,6 +14,19 @@
   -Inf with a NaN gradient.
 * GLM densities reject an intercept vector whose length is neither 1 nor the
   number of rows of `x`; it was recycled.
+* `bayescomp_log_lik()` gives fused GLMs (`normal_id_glm`,
+  `bernoulli_logit_glm`, `poisson_log_glm`, `neg_binomial_2_log_glm`,
+  `binomial_logit_glm`, `ordered_logistic_glm`, `categorical_logit_glm`) one
+  column per row of `x`, as the equivalent unfused statement; it gave one
+  joint column. `bayescomp_posterior_predict()` draws from them.
+* `bayescomp_posterior_predict()` works for multivariate statements such as
+  `multi_normal`, with one column per element of the left side; it failed
+  with "number of items to replace is not a multiple of replacement length".
+* Pointwise terms of statements with a shared vector argument, such as
+  `categorical_logit` log odds or `ordered_logistic` cutpoints, no longer
+  split that argument across observations; they failed with a domain error.
+  Cutpoints given as one vector per observation now give one term per
+  observation instead of one joint term.
 
 ## New features
 
@@ -46,7 +59,24 @@
 * RMHMC carries the metric derivatives at the end of one leapfrog step into
   the next.
 * NaN checks no longer allocate, and pointwise log likelihoods and
-  predictive draws keep only the requested array.
+  predictive draws compute and keep only the requested array.
+* Pointwise log likelihoods of the common univariate families are computed
+  for all observations at once, and predictive draws call the vectorized
+  `_rng` function once per statement.
+* Dirichlet densities of arrays of simplexes work on whole matrices instead
+  of splitting them into rows.
+* `integrate_1d()` and its variants evaluate the gradient of the integrand
+  once per integration point instead of once per point and parameter.
+* The `normal_id_glm` factorizations belong to the model instance, so
+  SG-MCMC and expectation propagation with many data subsets no longer
+  refactor at every evaluation.
+* `gp_exp_quad_cov()` with one length scale per dimension and fixed inputs
+  is one node with a dedicated reverse pass.
+* `wishart_cholesky` and `inv_wishart_cholesky` densities use the factors
+  directly (one triangular solve) instead of forming and refactoring the
+  covariance matrices.
+* The stiff ODE solver solves the forward sensitivity stages with one
+  factorization of the state block instead of the full augmented system.
 
 # bayescompR 0.1.0
 

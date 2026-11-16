@@ -636,3 +636,107 @@ test_that("SG-MCMC computes lp__ only where asked and keeps the draws", {
   expect_equal(which(!is.na(lb)), c(1L, 4L, 7L, 10L))
   expect_equal(lb[c(1, 4, 7, 10)], la[c(1, 4, 7, 10)])
 })
+
+test_that("matrix Dirichlet densities equal the sum over rows", {
+  vg <- bayescompR:::ad_value_grad
+  set.seed(6); K <- 3; n <- 6
+  TH <- matrix(rgamma(n * K, 2), n); TH <- TH / rowSums(TH); AL <- matrix(rexp(n * K) + 0.5, n)
+  lp <- bayescompR:::lp_dirichlet
+  sel <- function(z, i, d) { r <- bayescompR:::ad_gather(z, i); dim(r$v) <- d; r }
+  for (shared in c(FALSE, TRUE)) for (propto in c(FALSE, TRUE)) {
+    al <- if (shared) AL[1, ] else AL
+    z0 <- c(as.vector(TH), as.vector(al))
+    f <- function(z) lp(sel(z, seq_len(n * K), c(n, K)), sel(z, n * K + seq_along(al), dim(al)), propto)
+    g <- function(z) Reduce(`+`, lapply(seq_len(n), function(i)
+      lp(bayescompR:::ad_gather(z, i + (seq_len(K) - 1L) * n),
+         if (shared) bayescompR:::ad_gather(z, n * K + seq_len(K)) else bayescompR:::ad_gather(z, n * K + i + (seq_len(K) - 1L) * n), propto)))
+    a <- vg(f, z0); b <- vg(g, z0)
+    expect_equal(a$value, b$value, tolerance = 1e-12)
+    expect_equal(a$grad, b$grad, tolerance = 1e-10)
+  }
+  bad <- TH; bad[4, 2] <- -0.1
+  expect_error(lp(bad, AL, FALSE), "elements must be nonnegative", class = "bayescomp_domain_error")
+})
+
+test_that("integrate_1d gradients match finite differences", {
+  m <- bayescomp_model("functions { real f(real x, real xc, array[] real th, array[] real xr, array[] int xi) { return exp(-th[1] * x * x) * (1 + th[2] * x + th[3] * x * x); } }
+    parameters { array[3] real<lower=0.5, upper=2> th; } model { target += log(integrate_1d(f, -1.0, 2.0, th, {0.0}, {0}, 1e-10)); }")
+  u <- c(0.1, -0.3, 0.4)
+  g <- bayescomp_grad_log_prob(m, u)
+  lp <- function(v) attr(bayescomp_grad_log_prob(m, v), "log_prob")
+  fd <- vapply(1:3, function(k) { e <- replace(numeric(3), k, 1e-5); (lp(u + e) - lp(u - e)) / 2e-5 }, 0)
+  expect_equal(as.numeric(g), fd, tolerance = 1e-6)
+})
+
+test_that("each model instance keeps its own Gaussian GLM factorizations", {
+  code <- "data { int N; matrix[N, 2] X; vector[N] y; } parameters { real a; vector[2] b; real<lower=0> s; } model { y ~ normal_id_glm(X, a, b, s); }"
+  set.seed(7)
+  ms <- lapply(1:3, function(i) bayescomp_model(code, data = list(N = 20, X = matrix(rnorm(40), 20), y = rnorm(20))))
+  u <- c(0.1, 0.2, -0.3, 0.4)
+  r <- lapply(ms, bayescomp_grad_log_prob, upars = u)
+  for (m in ms) expect_length(m$env$.glm_store$entries, 1L)
+  expect_equal(lapply(ms, bayescomp_grad_log_prob, upars = u), r)
+})
+
+test_that("squared exponential ARD covariance of fixed inputs matches the general path", {
+  vg <- bayescompR:::ad_value_grad
+  set.seed(8); n <- 7; D <- 2
+  X <- matrix(rnorm(n * D), n); X[3, ] <- X[1, ]; X2 <- matrix(rnorm(4 * D), 4)
+  W <- matrix(rnorm(n * n), n); W2 <- matrix(rnorm(n * 4), n)
+  sel <- function(z, i, d) { r <- bayescompR:::ad_gather(z, i); dim(r$v) <- d; r }
+  L <- bayescompR:::.lib$gp_exp_quad_cov
+  f1 <- L[[which(vapply(L, function(s) identical(s$args, c("vector[]", "real", "real[]")), TRUE))]]$impl
+  f2 <- L[[which(vapply(L, function(s) identical(s$args, c("vector[]", "vector[]", "real", "real[]")), TRUE))]]$impl
+  z0 <- c(1.2, 0.7, 1.9, as.vector(X))
+  # the inputs as a parameter take the general path
+  for (cross in c(FALSE, TRUE)) {
+    k <- function(x, s, l) if (cross) bayescompR:::ad_sum(f2(x, X2, s, l) * W2) else bayescompR:::ad_sum(f1(x, s, l) * W)
+    a <- vg(function(z) k(X, bayescompR:::ad_select(z, 1L), bayescompR:::ad_gather(z, 2:3)), z0[1:3])
+    b <- vg(function(z) k(sel(z, 3 + seq_len(n * D), c(n, D)), bayescompR:::ad_select(z, 1L), bayescompR:::ad_gather(z, 2:3)), z0)
+    expect_equal(a$value, b$value, tolerance = 1e-12)
+    expect_equal(a$grad, b$grad[1:3], tolerance = 1e-10)
+  }
+})
+
+test_that("Cholesky Wishart densities match the covariance densities", {
+  vg <- bayescompR:::ad_value_grad
+  set.seed(9); K <- 3
+  mk <- function() t(chol(crossprod(matrix(rnorm(K * K), K)) + diag(K)))
+  LW <- mk(); LS <- mk(); lo <- which(lower.tri(LW, diag = TRUE))
+  sc <- function(z, off) bayescompR:::ad_scatter(matrix(0, K, K), lo, bayescompR:::ad_gather(z, off + seq_along(lo)))
+  for (inv in c(FALSE, TRUE)) {
+    chol_f <- if (inv) bayescompR:::lp_inv_wishart_cholesky else bayescompR:::lp_wishart_cholesky
+    full_f <- if (inv) bayescompR:::lp_inv_wishart else bayescompR:::lp_wishart
+    z0 <- c(LW[lo], LS[lo], 6.5)
+    nu <- function(z) bayescompR:::ad_select(z, 2L * length(lo) + 1L)
+    a <- vg(function(z) chol_f(sc(z, 0), nu(z), sc(z, length(lo)), FALSE), z0)
+    b <- vg(function(z) {
+      W <- bayescompR:::ad_matmul(sc(z, 0), bayescompR:::ad_transpose(sc(z, 0)))
+      S <- bayescompR:::ad_matmul(sc(z, length(lo)), bayescompR:::ad_transpose(sc(z, length(lo))))
+      full_f(0.5 * (W + bayescompR:::ad_transpose(W)), nu(z), 0.5 * (S + bayescompR:::ad_transpose(S)), FALSE) + bayescompR:::chol_jac(sc(z, 0))
+    }, z0)
+    expect_equal(a$value, b$value, tolerance = 1e-12)
+    expect_equal(a$grad, b$grad, tolerance = 1e-10)
+  }
+})
+
+test_that("the block stage solver of sensitivity systems matches a dense solve", {
+  set.seed(10); N <- 3; P <- 2
+  Jy <- matrix(rnorm(N * N), N); B <- matrix(rnorm(N * P * N), N * P)
+  J <- matrix(0, N * (P + 1), N * (P + 1))
+  for (b in 0:P) J[b * N + seq_len(N), b * N + seq_len(N)] <- Jy
+  J[-seq_len(N), seq_len(N)] <- B
+  r <- rnorm(N * (P + 1))
+  dense <- bayescompR:::ros_stage_solver(list(J = J), 0.1)(r)
+  expect_equal(bayescompR:::ros_stage_solver(list(Jy = Jy, B = B), 0.1)(r), dense, tolerance = 1e-12)
+})
+
+test_that("Cholesky Wishart densities read only the lower triangles", {
+  set.seed(11); K <- 3
+  LW <- t(chol(crossprod(matrix(rnorm(K * K), K)) + diag(K))); LS <- t(chol(diag(K) * 2))
+  up <- which(upper.tri(LW))
+  for (f in list(bayescompR:::lp_wishart_cholesky, bayescompR:::lp_inv_wishart_cholesky)) {
+    r <- bayescompR:::ad_value_grad(function(z) { L <- bayescompR:::ad_gather(z, seq_len(K * K)); dim(L$v) <- c(K, K); f(L, 5, LS, FALSE) }, as.vector(LW))
+    expect_equal(r$grad[up], rep(0, length(up)))
+  }
+})
