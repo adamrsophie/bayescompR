@@ -762,3 +762,70 @@ test_that("the capability report lists every solver interface", {
   expect_true(all(c("functions", "algorithm", "controls", "ignored", "derivatives", "parallel") %in% names(cap)))
   expect_true(any(grepl("ode_bdf", cap$functions)) && any(grepl("reduce_sum", cap$functions)))
 })
+
+test_that("fused density partials match finite differences", {
+  ns <- asNamespace("bayescompR")
+  fd <- function(f, x, h = 1e-6) vapply(seq_along(x), function(k) { e <- replace(numeric(length(x)), k, h); (f(x + e) - f(x - e)) / (2 * h) }, 0)
+  cases <- list(
+    list(ns$lp_student_t, c(0.3, -0.4), c(4, 0.1, 1.3)),
+    list(ns$lp_cauchy, c(0.3, -0.4), c(0.1, 1.3)),
+    list(ns$lp_gamma, c(0.7, 1.9), c(2.2, 1.4)),
+    list(ns$lp_beta, c(0.3, 0.8), c(2.2, 1.4)))
+  for (cs in cases) for (k in seq_along(cs[[3]]) + 1L) {
+    y <- cs[[2]]; p <- cs[[3]]
+    g <- function(z) { a <- as.list(p); a[[k - 1L]] <- ns$ad_select(z, 1L); do.call(cs[[1]], c(list(y), a, list(FALSE))) }
+    r <- ns$ad_value_grad(g, p[k - 1L])
+    expect_equal(r$grad, fd(function(v) ns$val(g(v)), p[k - 1L]), tolerance = 1e-6)
+    r <- ns$ad_value_grad(function(z) do.call(cs[[1]], c(list(z), as.list(p), list(FALSE))), y)
+    expect_equal(r$grad, fd(function(v) ns$val(do.call(cs[[1]], c(list(v), as.list(p), list(FALSE)))), y), tolerance = 1e-6)
+  }
+  expect_error(ns$lp_normal(c(0, NaN), 0, 1, FALSE), "is nan", class = "bayescomp_domain_error")
+})
+
+test_that("matrix multivariate and Dirichlet densities check their shapes", {
+  ns <- asNamespace("bayescompR")
+  th <- matrix(1 / 3, 2, 3)
+  expect_error(ns$lp_dirichlet(th, matrix(1, 3, 3), FALSE), "size mismatch", class = "bayescomp_shape_error")
+  expect_error(ns$lp_dirichlet(th, c(1, 1), FALSE), "size mismatch", class = "bayescomp_shape_error")
+  expect_equal(ns$lp_dirichlet(matrix(0, 0, 3), c(1, 1, 1), FALSE), 0)
+  expect_equal(ns$lp_dirichlet(th[1, , drop = FALSE], c(2, 2, 2), FALSE), ns$lp_dirichlet(th[1, ], c(2, 2, 2), FALSE))
+  mvn <- ns$.lib$multi_normal_lpdf[[1L]]$impl
+  expect_equal(mvn(matrix(0, 0, 2), c(0, 0), diag(2)), 0)
+  expect_error(mvn(matrix(0, 3, 2), c(0, 0, 0), diag(2)), "size mismatch", class = "bayescomp_shape_error")
+})
+
+test_that("Cholesky Wishart densities fall back and check the degrees of freedom", {
+  ns <- asNamespace("bayescompR")
+  L <- t(chol(matrix(c(2, 0.5, 0.5, 1), 2)))
+  full <- L; full[1, 2] <- 0.3
+  # a factor with a nonzero upper triangle goes through the covariance path
+  W <- full %*% t(full)
+  expect_equal(ns$lp_wishart_cholesky(full, 4, L, FALSE),
+               ns$lp_wishart(0.5 * (W + t(W)), 4, L %*% t(L), FALSE) + ns$chol_jac(full), tolerance = 1e-12)
+  expect_error(ns$lp_wishart_cholesky(L, 0.5, L, FALSE), "Degrees of freedom", class = "bayescomp_domain_error")
+})
+
+test_that("triangular right division and fixed ARD covariances check their arguments", {
+  ns <- asNamespace("bayescompR")
+  L <- matrix(c(2, 1, 0, 3), 2)
+  expect_error(ns$ad_tri_solve_right(matrix(1, 2, 3), L, FALSE), "columns of the right side", class = "bayescomp_shape_error")
+  expect_error(ns$ad_tri_solve_right(c(1, 2), matrix(c(0, 1, 0, 3), 2), TRUE), "singular", class = "bayescomp_domain_error")
+  r <- ns$ad_value_grad(function(z) ns$ad_sum(ns$ad_tri_solve_right(ns$ad_reshape(z, c(1L, 2L)), L, TRUE)), c(1, 2))
+  expect_equal(r$grad, solve(L, c(1, 1)))
+  expect_error(ns$gp_sqexp_ard_fixed("gp_exp_quad_cov", matrix(0, 2, 2), matrix(0, 2, 2), 1, c(1, 1, 1)),
+               "number of length scales", class = "bayescomp_shape_error")
+})
+
+test_that("pointwise output reports unsupported statements", {
+  m2 <- bayescomp_model("functions { real my_lpdf(real y, real mu) { return normal_lpdf(y | mu, 1); } real my_lcdf(real y, real mu) { return normal_lcdf(y | mu, 1); }
+    real my_lccdf(real y, real mu) { return normal_lccdf(y | mu, 1); } }
+    data { real y; } parameters { real mu; } model { y ~ my(mu) T[-5, 5]; }", data = list(y = 0.5))
+  fit2 <- bayescomp_sample(m2, chains = 1, iter_warmup = 20, iter_sampling = 2, seed = 1, refresh = 0)
+  # (expect_error() fails to take a backtrace through this generated code)
+  e <- tryCatch(bayescomp_log_lik(fit2), error = function(e) e)
+  expect_s3_class(e, "bayescomp_unsupported_error")
+  expect_match(conditionMessage(e), "truncated user defined")
+  expect_error(bayescompR:::trunc_norm(list(0, 1), 2, 1, NULL, NULL, FALSE, "normal"), "lower bound is greater", class = "bayescomp_domain_error")
+  m3 <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 1); }")
+  expect_equal(as.numeric(bayescomp_hessian_vector(m3, c(0, 0), c(0, 0))), c(0, 0))
+})

@@ -147,11 +147,9 @@ rt_pointwise <- function(ctx, label, spec, uf, tr, y, ...) {
     ll <- if (!is.null(spec$kern)) as.numeric(rep_len(do.call(spec$kern, lapply(vals, as.vector)), n))
           else each(full, vals, el, rows)
     # a truncated density is renormalized over [lo, hi] for each observation
-    if (!is.null(tr)) ll <- ll - vapply(seq_len(n), function(i) {
-      yi <- at(vals[[1L]], i, TRUE, FALSE)
-      if ((!is.null(tr$lo) && yi < val(tr$lo)) || (!is.null(tr$hi) && yi > val(tr$hi))) return(Inf)
-      as.numeric(val(trunc_norm(args_i(vals[-1L], el[-1L], rows[-1L], i), tr$lo, tr$hi, tr$lcdf, tr$lccdf, tr$discrete, tr$fam)))
-    }, 0)
+    # (data outside the bounds make the log density -Inf, so no draw has them)
+    if (!is.null(tr)) ll <- ll - vapply(seq_len(n), function(i)
+      as.numeric(val(trunc_norm(args_i(vals[-1L], el[-1L], rows[-1L], i), tr$lo, tr$hi, tr$lcdf, tr$lccdf, tr$discrete, tr$fam))), 0)
     ll
   }
   invisible()
