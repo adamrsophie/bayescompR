@@ -120,9 +120,16 @@ potential gradients of each saved draw (CmdStan's \code{diagnostic_file}) in
 element \code{diagnostics} of the fit; \code{\link[=bayescomp_write_csv]{bayescomp_write_csv()}} writes them.}
 
 \item{resume}{A fit from \code{bayescomp_sample()} to continue: each chain
-starts at its last draw with its adapted step size and metric, and runs
-\code{iter_sampling} further iterations without warmup. Bind the draws of the
-two fits with \code{posterior::bind_draws(..., along = "iteration")}.}
+starts at its state after the last transition with its adapted step
+size and metric, and runs \code{iter_sampling} further iterations without
+warmup. A chain that ran to the end also continues its random number
+stream, so the parameter draws equal those of one longer run with the
+same seed (with \code{thin}, when the first run's \code{iter_sampling} is a
+multiple of \code{thin}); draws of generated quantities that call
+\verb{_rng} functions differ. A chain stopped by an interrupt continues from
+its last complete transition with a new stream, and warmup is not
+continued. Bind the draws of the two fits with
+\code{posterior::bind_draws(..., along = "iteration")}.}
 }
 \value{
 A \code{bayescomp_fit} object. An interrupt (Ctrl-C or Esc) stops

@@ -27,11 +27,29 @@
   split that argument across observations; they failed with a domain error.
   Cutpoints given as one vector per observation now give one term per
   observation instead of one joint term.
+* `ordered_logistic_rng()` and `ordered_probit_rng()` with a vector of
+  linear predictors draw one category per element; they mixed the
+  cutpoints of all elements into one draw.
 
 ## New features
 
 * `bayescomp_sgmcmc()` gains `lp_every`, so the exact full data `lp__` can
   be computed at only some saved draws or not at all.
+* `bayescomp_log_lik()` and `bayescomp_posterior_predict()` support
+  truncated statements (renormalized per observation, predictive draws by
+  rejection) and user defined densities (one joint term per statement), and
+  `bayescomp_log_lik(group = )` sums observations by group for leave one
+  group out cross validation.
+* `bayescomp_hessian()` and `bayescomp_hessian_vector()` give the Hessian
+  of the log density and its product with a vector, by central differences
+  of the gradient.
+* `bayescomp_capabilities()` lists the algorithm behind each ODE, DAE,
+  algebraic solver, integrator, `map_rect` and `reduce_sum` interface, the
+  controls it honors and ignores, and how it is differentiated.
+* `bayescomp_sample(resume = )` continues a finished fit exactly: from the
+  state after the last transition (not the last kept draw) with the chain's
+  random number stream, so the parameter draws equal those of one longer
+  run.
 
 ## Performance
 

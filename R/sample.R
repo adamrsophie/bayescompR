@@ -74,9 +74,16 @@
 #'   when they finish.
 #' @param show_print Show output of Stan `print()` statements.
 #' @param resume A fit from `bayescomp_sample()` to continue: each chain
-#'   starts at its last draw with its adapted step size and metric, and runs
-#'   `iter_sampling` further iterations without warmup. Bind the draws of the
-#'   two fits with `posterior::bind_draws(..., along = "iteration")`.
+#'   starts at its state after the last transition with its adapted step
+#'   size and metric, and runs `iter_sampling` further iterations without
+#'   warmup. A chain that ran to the end also continues its random number
+#'   stream, so the parameter draws equal those of one longer run with the
+#'   same seed (with `thin`, when the first run's `iter_sampling` is a
+#'   multiple of `thin`); draws of generated quantities that call
+#'   `_rng` functions differ. A chain stopped by an interrupt continues from
+#'   its last complete transition with a new stream, and warmup is not
+#'   continued. Bind the draws of the two fits with
+#'   `posterior::bind_draws(..., along = "iteration")`.
 #' @return A `bayescomp_fit` object. An interrupt (Ctrl-C or Esc) stops
 #'   sampling and returns the chains that finished or, when none did, the
 #'   draws kept so far (parallel chains in forked processes are cut to the
@@ -161,8 +168,12 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   res <- run_chains(model, chains, seed, cores, function(id) {
     cf <- cfg
     if (!is.null(resume)) {
-      # continue the chain: its last draw, step size and metric, no warmup
-      q0 <- resume$unconstrained[[id]][nrow(resume$unconstrained[[id]]), ]
+      # continue the chain: its state after the last transition (the last
+      # draw for older fits), step size and metric, no warmup; a chain that
+      # finished also continues its random number stream
+      fin <- resume$final[[id]]
+      q0 <- fin$q %||% resume$unconstrained[[id]][nrow(resume$unconstrained[[id]]), ]
+      if (isTRUE(fin$exact) && !is.null(fin$rng)) assign(".Random.seed", fin$rng, envir = globalenv())
       cf$step_size <- resume$step_size[[id]]
       cf$inv_metric <- resume$inv_metric[[id]]
     } else q0 <- find_init(model, init, id, gradient = !(algorithm %in% c("metropolis", "slice", "elliptical_slice", "fixed_param")))

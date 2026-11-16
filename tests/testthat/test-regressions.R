@@ -740,3 +740,25 @@ test_that("Cholesky Wishart densities read only the lower triangles", {
     expect_equal(r$grad[up], rep(0, length(up)))
   }
 })
+
+test_that("Hessians and Hessian vector products match the analytic values", {
+  m <- bayescomp_model("parameters { vector[2] x; } model { x ~ multi_normal([0, 0]', [[2, 0.5], [0.5, 1]]); }")
+  H <- bayescomp_hessian(m, c(0.1, 0.2))
+  expect_equal(unclass(H)[1:2, 1:2], -solve(matrix(c(2, 0.5, 0.5, 1), 2)), tolerance = 1e-7, ignore_attr = TRUE)
+  expect_equal(as.numeric(bayescomp_hessian_vector(m, c(0.1, 0.2), c(1, -2))), as.numeric(H %*% c(1, -2)), tolerance = 1e-7)
+  expect_error(bayescomp_hessian_vector(m, c(0.1, 0.2), 1), "length 2")
+})
+
+test_that("ordered logistic draws take one category per linear predictor", {
+  f <- bayescompR:::.lib$ordered_logistic_rng[[1L]]$impl
+  set.seed(1)
+  r <- f(c(-20, 0, 20), c(-1, 1))
+  expect_equal(r[c(1, 3)], c(1L, 3L))
+  expect_equal(f(c(0, 0), rbind(c(-20, -19), c(19, 20))), c(3L, 1L))
+})
+
+test_that("the capability report lists every solver interface", {
+  cap <- bayescomp_capabilities()
+  expect_true(all(c("functions", "algorithm", "controls", "ignored", "derivatives", "parallel") %in% names(cap)))
+  expect_true(any(grepl("ode_bdf", cap$functions)) && any(grepl("reduce_sum", cap$functions)))
+})

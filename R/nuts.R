@@ -402,5 +402,8 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
        rejections = if (is.function(attr(pot, "rejections"))) attr(pot, "rejections")(),
        n_warmup_saved = sum(thin_idx <= nw), time = c(warmup = t_warm, sampling = t_total - t_warm), interrupted = stopped,
        divergent_q = if (length(divs)) do.call(rbind, divs),
-       diagnostics = if (keep_pg) list(p = dp, g = dg))
+       diagnostics = if (keep_pg) list(p = dp, g = dg),
+       # the state after the last transition, for an exact continuation: an
+       # interrupt can stop a transition halfway through its random numbers
+       final = list(q = q, rng = get0(".Random.seed", envir = globalenv(), inherits = FALSE), exact = !stopped))
 }
