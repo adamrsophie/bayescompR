@@ -28,10 +28,10 @@ constraining transforms.}
 \item{propto}{Drop constant terms of sampling statements (\code{~}) and
 \verb{_lupdf}/\verb{_lupmf} calls, as the samplers do.}
 
-\item{h}{Finite difference step; for the product it is scaled by the
-norm of \code{v}.}
+\item{h}{Relative finite difference step, one finite positive number.}
 
-\item{v}{A vector with one entry per unconstrained parameter.}
+\item{v}{A finite numeric vector with one entry per unconstrained
+parameter.}
 }
 \value{
 The symmetrized Hessian matrix, or the product vector, with the
@@ -41,9 +41,20 @@ log density in attribute \code{"log_prob"}.
 \code{bayescomp_hessian()} returns the Hessian of the log density at
 unconstrained values and \code{bayescomp_hessian_vector()} its product with a
 vector, without forming the matrix. Both take central finite differences
-of the reverse mode gradient (2 gradients per column, or 2 in all for a
-product), not nested automatic differentiation, so they work with every
-backend that gives gradients; their error is of order \code{h^2}.
+of the reverse mode gradient, not nested automatic differentiation, so
+they work with every backend that gives gradients. The Hessian takes 2
+gradients per parameter and the product 2 gradients; the log density at
+\code{upars} comes from one more evaluation without gradient.
+}
+\details{
+The step for parameter \code{i} is \code{h * max(1, abs(upars[i]))} (for the
+product, \code{h * max(1, max(abs(upars)))} along the unit direction of \code{v}),
+rounded to a step that is exactly representable at \code{upars}. The error is
+the truncation error, of order \code{h^2} times the third derivatives, plus a
+rounding error of order \code{.Machine$double.eps} times the size of the
+gradient divided by the step; the default balances the two for well
+scaled models. Comparing results for two values of \code{h} shows whether
+they are resolved.
 }
 \examples{
 m <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 2); }")

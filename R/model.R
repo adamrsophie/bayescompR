@@ -560,16 +560,26 @@ bayescomp_grad_log_prob <- function(model, upars, jacobian = TRUE, propto = FALS
 #' `bayescomp_hessian()` returns the Hessian of the log density at
 #' unconstrained values and `bayescomp_hessian_vector()` its product with a
 #' vector, without forming the matrix. Both take central finite differences
-#' of the reverse mode gradient (2 gradients per column, or 2 in all for a
-#' product), not nested automatic differentiation, so they work with every
-#' backend that gives gradients; their error is of order `h^2`.
+#' of the reverse mode gradient, not nested automatic differentiation, so
+#' they work with every backend that gives gradients. The Hessian takes 2
+#' gradients per parameter and the product 2 gradients; the log density at
+#' `upars` comes from one more evaluation without gradient.
+#'
+#' The step for parameter `i` is `h * max(1, abs(upars[i]))` (for the
+#' product, `h * max(1, max(abs(upars)))` along the unit direction of `v`),
+#' rounded to a step that is exactly representable at `upars`. The error is
+#' the truncation error, of order `h^2` times the third derivatives, plus a
+#' rounding error of order `.Machine$double.eps` times the size of the
+#' gradient divided by the step; the default balances the two for well
+#' scaled models. Comparing results for two values of `h` shows whether
+#' they are resolved.
 #'
 #' @inheritParams bayescomp_log_prob
 #' @param upars Unconstrained parameter values (a numeric vector), or
 #'   constrained values as for [bayescomp_log_prob()].
-#' @param v A vector with one entry per unconstrained parameter.
-#' @param h Finite difference step; for the product it is scaled by the
-#'   norm of `v`.
+#' @param v A finite numeric vector with one entry per unconstrained
+#'   parameter.
+#' @param h Relative finite difference step, one finite positive number.
 #' @return The symmetrized Hessian matrix, or the product vector, with the
 #'   log density in attribute `"log_prob"`.
 #' @examples
@@ -579,21 +589,54 @@ bayescomp_grad_log_prob <- function(model, upars, jacobian = TRUE, propto = FALS
 #' @export
 bayescomp_hessian <- function(model, upars, jacobian = TRUE, propto = FALSE, h = 1e-5) {
   u <- check_upars(model, as_upars(model, upars))
+  check_fd_step(h)
   lpg <- model_lpg(model, jacobian, propto, TRUE)
-  H <- num_hessian(lpg, u, h)
-  structure(H, log_prob = lpg(u)$value)
+  n <- length(u)
+  H <- matrix(0, n, n)
+  for (i in seq_len(n)) {
+    e <- numeric(n)
+    e[i] <- h * max(1, abs(u[i]))
+    st <- fd_points(u, e)
+    H[, i] <- (lpg(st$up)$grad - lpg(st$down)$grad) / st$width[i]
+  }
+  structure(0.5 * (H + t(H)), log_prob = bayescomp_log_prob(model, u, jacobian = jacobian, propto = propto))
 }
 
 #' @rdname bayescomp_hessian
 #' @export
 bayescomp_hessian_vector <- function(model, upars, v, jacobian = TRUE, propto = FALSE, h = 1e-5) {
   u <- check_upars(model, as_upars(model, upars))
-  if (!is.numeric(v) || length(v) != length(u)) stop(sprintf("'v' must be a numeric vector of length %d", length(u)), call. = FALSE)
+  check_fd_step(h)
+  if (!is.numeric(v) || length(v) != length(u) || !all(is.finite(v)))
+    stop(sprintf("'v' must be a finite numeric vector of length %d", length(u)), call. = FALSE)
+  lp <- bayescomp_log_prob(model, u, jacobian = jacobian, propto = propto)
+  # the norm of v scaled by its largest entry, so that it neither overflows
+  # nor underflows
+  sc <- max(abs(v))
+  if (sc == 0) return(structure(numeric(length(u)), log_prob = lp))
+  w <- v / sc
+  nw <- sqrt(sum(w * w))
+  d <- w / nw
   lpg <- model_lpg(model, jacobian, propto, TRUE)
-  nv <- sqrt(sum(v^2))
-  if (nv == 0) return(structure(numeric(length(u)), log_prob = lpg(u)$value))
-  e <- h / nv * v
-  structure((lpg(u + e)$grad - lpg(u - e)$grad) / (2 * h / nv), log_prob = lpg(u)$value)
+  st <- fd_points(u, h * max(1, max(abs(u))) * d)
+  # the difference along d over the length of the represented step
+  len <- sqrt(sum(((st$up - st$down) / 2)^2))
+  structure((lpg(st$up)$grad - lpg(st$down)$grad) / (2 * len) * nw * sc, log_prob = lp)
+}
+
+check_fd_step <- function(h) {
+  if (!(is.numeric(h) && length(h) == 1L && is.finite(h) && h > 0))
+    stop("'h' must be one finite positive number", call. = FALSE)
+}
+
+# u + e and u - e and, per coordinate, the represented width (up - down)
+fd_points <- function(u, e) {
+  up <- u + e
+  down <- u - e
+  width <- up - down
+  if (all(width[e != 0] == 0) || !all(is.finite(c(up, down))))
+    stop("the finite difference step is not representable at these values; give another 'h'", call. = FALSE)
+  list(up = up, down = down, width = width)
 }
 
 # constrained values (a list or a file) to unconstrained ones
