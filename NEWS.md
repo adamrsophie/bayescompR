@@ -31,27 +31,46 @@
   linear predictors draw one category per element; they mixed the
   cutpoints of all elements into one draw.
 
+* The squared distances of GP covariance functions with fixed inputs are
+  computed from coordinate differences, so points far from the origin keep
+  their separation, and values with and without gradients agree.
+* Two sided truncation of a distribution with an upper tail function
+  (`T[40, 41]` on a standard normal) uses upper tail probabilities for
+  intervals above the median; the density was infinite.
+* `wishart_cholesky_lpdf()` and `inv_wishart_cholesky_lpdf()` reject
+  matrices that are not Cholesky factors (lower triangular with a positive
+  diagonal), as Stan does, instead of evaluating them through the
+  covariance matrices.
+
 ## New features
 
 * `bayescomp_sgmcmc()` gains `lp_every`, so the exact full data `lp__` can
   be computed at only some saved draws or not at all.
 * `bayescomp_log_lik()` and `bayescomp_posterior_predict()` support
-  truncated statements (renormalized per observation, predictive draws by
-  rejection) and user defined densities (one joint term per statement), and
-  `bayescomp_log_lik(group = )` sums observations by group for leave one
-  group out cross validation.
+  truncated statements (renormalized per observation; predictive draws by
+  inversion for the normal, which also works far in the tails, and by
+  rejection otherwise) and user defined densities (one joint term per
+  statement), and `bayescomp_log_lik(group = )` sums observations by group
+  for leave one group out cross validation. Pointwise terms use the
+  argument values the statement used, also when an argument reads
+  `target()`.
 * `bayescomp_hessian()` and `bayescomp_hessian_vector()` give the Hessian
   of the log density and its product with a vector, by central differences
-  of the gradient.
+  of the gradient with steps scaled to the parameter values.
 * `bayescomp_capabilities()` lists the algorithm behind each ODE, DAE,
   algebraic solver, integrator, `map_rect` and `reduce_sum` interface, the
   controls it honors and ignores, and how it is differentiated.
 * `bayescomp_sample(resume = )` continues a finished fit exactly: from the
   state after the last transition (not the last kept draw) with the chain's
-  random number stream, so the parameter draws equal those of one longer
-  run.
+  random number stream, transition controls and thinning phase, also after
+  a warmup only run, so the parameter draws equal those of one longer run.
+  `config$resume` of the result records whether a continuation was exact.
 
 ## Performance
+
+* The factorizations of Gaussian GLMs with fixed data are kept within a
+  memory budget instead of 64 per model, so models with many such
+  statements do not factor them again on every evaluation.
 
 * MALA and static HMC reuse the density and gradient of the retained state
   (one evaluation per MALA transition instead of two), and NUTS computes the

@@ -794,15 +794,42 @@ test_that("matrix multivariate and Dirichlet densities check their shapes", {
   expect_error(mvn(matrix(0, 3, 2), c(0, 0, 0), diag(2)), "size mismatch", class = "bayescomp_shape_error")
 })
 
-test_that("Cholesky Wishart densities fall back and check the degrees of freedom", {
+test_that("Cholesky Wishart densities reject invalid factors and check the degrees of freedom", {
   ns <- asNamespace("bayescompR")
   L <- t(chol(matrix(c(2, 0.5, 0.5, 1), 2)))
   full <- L; full[1, 2] <- 0.3
-  # a factor with a nonzero upper triangle goes through the covariance path
-  W <- full %*% t(full)
-  expect_equal(ns$lp_wishart_cholesky(full, 4, L, FALSE),
-               ns$lp_wishart(0.5 * (W + t(W)), 4, L %*% t(L), FALSE) + ns$chol_jac(full), tolerance = 1e-12)
-  expect_error(ns$lp_wishart_cholesky(L, 0.5, L, FALSE), "Degrees of freedom", class = "bayescomp_domain_error")
+  for (f in list(ns$lp_wishart_cholesky, ns$lp_inv_wishart_cholesky)) {
+    expect_error(f(full, 4, L, FALSE), "not lower triangular", class = "bayescomp_domain_error")
+    expect_error(f(L, 4, full, FALSE), "not lower triangular", class = "bayescomp_domain_error")
+    expect_error(f(L %*% diag(c(1, -1)), 4, L, FALSE), "diagonal must be positive", class = "bayescomp_domain_error")
+    expect_error(f(L, 4, diag(3), FALSE), "size mismatch", class = "bayescomp_shape_error")
+    expect_error(f(L, 0.5, L, FALSE), "Degrees of freedom", class = "bayescomp_domain_error")
+  }
+  m <- bayescomp_model("parameters { real z; } transformed parameters { matrix[2,2] L = [[1,z],[0.3,1.2]]; }
+    model { target += wishart_cholesky_lpdf(L | 5, diag_matrix(rep_vector(1,2))); }")
+  expect_error(bayescomp_log_prob(m, 0.1, jacobian = FALSE), "not lower triangular")
+})
+
+test_that("fixed input GP covariances agree with and without gradients at extreme scales", {
+  code <- "data { array[2] vector[1] x; array[1] real ell; } parameters { real s; } model { target += sum(gp_exp_quad_cov(x, s, ell)); }"
+  for (off in c(0, 1e8)) {
+    m <- bayescomp_model(code, data = list(x = matrix(c(off, off + 1), 2, 1), ell = 1))
+    g <- bayescomp_grad_log_prob(m, 1, jacobian = FALSE)
+    expect_identical(bayescomp_log_prob(m, 1, jacobian = FALSE), attr(g, "log_prob"))
+    expect_equal(attr(g, "log_prob"), 2 + 2 * exp(-0.5), tolerance = 1e-14)
+    expect_equal(as.numeric(g), 2 * (2 + 2 * exp(-0.5)), tolerance = 1e-14)
+  }
+  m <- bayescomp_model(code, data = list(x = matrix(c(0, 1), 2, 1), ell = 1))
+  expect_equal(as.numeric(bayescomp_grad_log_prob(m, 1e-170, jacobian = FALSE)), 2e-170 * (2 + 2 * exp(-0.5)), tolerance = 1e-12)
+  m <- bayescomp_model("data { array[3] vector[2] x; } parameters { array[2] real<lower=0> ell; } model { target += sum(gp_exp_quad_cov(x, 1.5, ell)); }",
+                       data = list(x = matrix(c(0, 1, 1, 0, 2, 2), 3, 2)))
+  g <- bayescomp_grad_log_prob(m, log(c(1e-160, 0.7)), jacobian = FALSE)
+  expect_true(all(is.finite(g)))
+  u <- log(c(0.8, 0.7)); h <- 1e-6
+  fd <- vapply(1:2, function(k) { e <- replace(c(0, 0), k, h); (bayescomp_log_prob(m, u + e, jacobian = FALSE) - bayescomp_log_prob(m, u - e, jacobian = FALSE)) / (2 * h) }, 0)
+  g <- bayescomp_grad_log_prob(m, u, jacobian = FALSE)
+  expect_equal(as.numeric(g), fd, tolerance = 1e-7)
+  expect_identical(bayescomp_log_prob(m, u, jacobian = FALSE), attr(g, "log_prob"))
 })
 
 test_that("triangular right division and fixed ARD covariances check their arguments", {
@@ -828,4 +855,138 @@ test_that("pointwise output reports unsupported statements", {
   expect_error(bayescompR:::trunc_norm(list(0, 1), 2, 1, NULL, NULL, FALSE, "normal"), "lower bound is greater", class = "bayescomp_domain_error")
   m3 <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 1); }")
   expect_equal(as.numeric(bayescomp_hessian_vector(m3, c(0, 0), c(0, 0))), c(0, 0))
+})
+
+pw_fixed_fit <- function(code, data, init = list(a = 0), draws = 2L) {
+  m <- bayescomp_model(code, data = data)
+  bayescomp_sample(m, algorithm = "fixed_param", chains = 1, iter_warmup = 0, iter_sampling = draws,
+                   init = init, seed = 42, refresh = 0)
+}
+
+test_that("pointwise terms use the argument values the statement used", {
+  fit <- pw_fixed_fit("data { real y; } parameters { real a; } model { y ~ normal(target(), 1); }", list(y = 1))
+  expect_equal(unname(bayescomp_log_lik(fit)[1, ]), dnorm(1, 0, 1, log = TRUE))
+  fit <- pw_fixed_fit("data { real y; } parameters { real a; }
+    model { target += normal_lpdf(y | target(), 1); target += normal_lpdf(y | target(), 1); }", list(y = 1))
+  l1 <- dnorm(1, 0, 1, log = TRUE)
+  expect_equal(unname(bayescomp_log_lik(fit)[1, ]), c(l1, dnorm(1, l1, 1, log = TRUE)))
+  fit <- pw_fixed_fit("functions { real my_lpdf(real y, real mu) { return normal_lpdf(y | mu, 1); } }
+    data { vector[2] y; } parameters { real a; }
+    model { for (i in 1:2) y[i] ~ my(a + target()); y ~ normal(a, 1) T[target() - 10, 10]; }", list(y = c(1, 2)))
+  l1 <- dnorm(1, 0, 1, log = TRUE); l2 <- dnorm(2, l1, 1, log = TRUE)
+  lo <- l1 + l2 - 10
+  tn <- function(y) dnorm(y, log = TRUE) - log(pnorm(10) - pnorm(lo))
+  expect_equal(unname(bayescomp_log_lik(fit)[1, ]), c(l1, l2, tn(1), tn(2)))
+  # the model density is unchanged
+  expect_equal(bayescomp_log_prob(fit$model, 0, jacobian = FALSE, propto = FALSE), sum(c(l1, l2, tn(1), tn(2))))
+})
+
+test_that("log link pointwise terms stay finite when the mean underflows", {
+  for (d in c("poisson_log(eta)", "neg_binomial_2_log(eta, 2)")) {
+    fit <- pw_fixed_fit(paste0("data { int y; real eta; } parameters { real a; } model { y ~ ", d, "; }"), list(y = 1L, eta = -1000))
+    expect_equal(unname(bayescomp_log_lik(fit)[1, ]), -1000)
+  }
+  k <- bayescompR:::pw_kernels
+  for (e in c(-1000, -3, 0, 5, 30)) for (y in c(0, 1, 7)) {
+    expect_equal(k$poisson_log(y, e), bayescompR:::lp_poisson_log(y, e, FALSE), tolerance = 1e-12)
+    expect_equal(k$neg_binomial_2_log(y, e, 2), bayescompR:::lp_neg_binomial_2_log(y, e, 2, FALSE), tolerance = 1e-12)
+  }
+  expect_equal(k$poisson_log(c(0, 1, 0), c(-Inf, -Inf, Inf)), c(0, -Inf, -Inf))
+  fit <- pw_fixed_fit("data { array[2] int y; matrix[2, 1] x; } parameters { real a; } model { y ~ poisson_log_glm(x, -1000, [1]'); }",
+                      list(y = c(0L, 1L), x = matrix(c(0, 1), 2)))
+  expect_equal(unname(bayescomp_log_lik(fit)[1, ]), c(-exp(-1000), -999))
+})
+
+test_that("grouped log likelihoods reject missing labels and sum by group", {
+  fit <- pw_fixed_fit("data { vector[4] y; } parameters { real a; } model { y ~ normal(a, 1); }", list(y = 1:4))
+  ll <- bayescomp_log_lik(fit)
+  expect_error(bayescomp_log_lik(fit, group = c("a", NA, "b", "b")), "missing values")
+  g <- bayescomp_log_lik(fit, group = factor(c("b", "a", "b", "a"), levels = c("z", "a", "b")))
+  expect_equal(colnames(g), c("b", "a"))
+  expect_equal(unname(g), unname(cbind(ll[, 1] + ll[, 3], ll[, 2] + ll[, 4])))
+  expect_equal(unname(bayescomp_log_lik(fit, group = c(2, 2, 2, 2))), unname(matrix(rowSums(ll))))
+  expect_equal(dim(bayescomp_log_lik(fit, "array", group = c(1, 1, 2, 2))), c(2L, 1L, 2L))
+})
+
+test_that("two sided truncation is normalized in the far tails", {
+  code <- "data { real y; real lo; real hi; } parameters { real a; } model { y ~ normal(a, 1) T[lo, hi]; }"
+  ref <- function(y, a, lo, hi) {
+    if (lo > a) { l1 <- pnorm(lo, a, 1, FALSE, TRUE); l2 <- pnorm(hi, a, 1, FALSE, TRUE) }
+    else { l1 <- pnorm(hi, a, 1, TRUE, TRUE); l2 <- pnorm(lo, a, 1, TRUE, TRUE) }
+    dnorm(y, a, log = TRUE) - (l1 + log(-expm1(l2 - l1)))
+  }
+  for (cs in list(c(40.5, 40, 41), c(-40.5, -41, -40), c(0.5, -1, 2), c(1, 0.9, 1.1))) {
+    m <- bayescomp_model(code, data = list(y = cs[1], lo = cs[2], hi = cs[3]))
+    expect_equal(bayescomp_log_prob(m, 0.3, jacobian = FALSE, propto = FALSE), ref(cs[1], 0.3, cs[2], cs[3]), tolerance = 1e-10)
+    h <- 1e-6
+    fd <- (bayescomp_log_prob(m, 0.3 + h, jacobian = FALSE) - bayescomp_log_prob(m, 0.3 - h, jacobian = FALSE)) / (2 * h)
+    expect_equal(as.numeric(bayescomp_grad_log_prob(m, 0.3, jacobian = FALSE)), fd, tolerance = 1e-6)
+  }
+  m <- bayescomp_model("data { int y; } parameters { real<lower=0> l; } model { y ~ poisson(l) T[30, 40]; }", data = list(y = 32L))
+  expect_equal(bayescomp_log_prob(m, log(2), jacobian = FALSE, propto = FALSE), dpois(32, 2, log = TRUE) - log(sum(dpois(30:40, 2))), tolerance = 1e-10)
+})
+
+test_that("truncated normal predictive draws are taken by inversion", {
+  set.seed(1)
+  for (b in list(c(0, Inf), c(8, Inf), c(40, 41), c(-41, -40), c(-1, 2))) {
+    z <- bayescompR:::rtrunc_normal(rep(0, 2e4), 1, b[1], b[2])
+    expect_true(all(z >= b[1] & z <= b[2]))
+    q <- stats::median(z)
+    cc <- if (b[1] > 0) { la <- pnorm(b[1], lower.tail = FALSE, log.p = TRUE); lb <- pnorm(b[2], lower.tail = FALSE, log.p = TRUE)
+                          (1 - exp(pnorm(q, lower.tail = FALSE, log.p = TRUE) - la)) / (1 - exp(lb - la)) }
+          else { la <- pnorm(b[2], log.p = TRUE); lb <- pnorm(b[1], log.p = TRUE); (exp(pnorm(q, log.p = TRUE) - la) - exp(lb - la)) / (1 - exp(lb - la)) }
+    expect_equal(cc, 0.5, tolerance = 0.02)
+  }
+  fit <- pw_fixed_fit("data { vector[3] y; } parameters { real a; } model { y ~ normal(a, 1) T[8, ]; }", list(y = rep(8.1, 3)))
+  p <- bayescomp_posterior_predict(fit, seed = 1)
+  expect_false(anyNA(p)); expect_true(all(p >= 8))
+})
+
+test_that("resume keeps the controls, a finished warmup and the elliptical center", {
+  m <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 1); }")
+  same <- function(alg, extra = list(), nw = 20L, segs = c(6L, 6L), thin = 1L) {
+    common <- c(list(model = m, chains = 1L, algorithm = alg, iter_warmup = nw, init = list(x = c(.3, -.2)),
+                     seed = 531L, refresh = 0L, thin = thin), extra)
+    full <- do.call(bayescomp_sample, c(common, list(iter_sampling = sum(segs))))
+    prev <- do.call(bayescomp_sample, c(common, list(iter_sampling = segs[1])))
+    u <- prev$unconstrained[[1]]
+    for (k in segs[-1]) {
+      prev <- bayescomp_sample(m, resume = prev, iter_sampling = k, seed = 819L, refresh = 0)
+      u <- rbind(u, prev$unconstrained[[1]])
+    }
+    expect_identical(u, full$unconstrained[[1]])
+    expect_true(prev$config$resume$exact)
+  }
+  same("nuts", list(step_size_jitter = 0.3)); same("nuts", list(max_treedepth = 1L))
+  same("hmc", list(int_time = 0.7)); same("metropolis", list(block = FALSE))
+  for (a in c("nuts", "mala", "elliptical_slice")) same(a, segs = c(0L, 8L))
+  same("elliptical_slice", nw = 0L)
+  same("nuts", segs = c(4L, 5L, 6L), thin = 3L)
+  f <- bayescomp_sample(m, chains = 1, iter_warmup = 20, iter_sampling = 3, seed = 1, refresh = 0)
+  r <- bayescomp_sample(m, resume = f, iter_sampling = 3, refresh = 0, max_treedepth = 3)
+  expect_false(r$config$resume$exact); expect_identical(r$config$resume$changed, "max_treedepth")
+  m2 <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(1, 1); }")
+  expect_warning(bayescomp_sample(m2, resume = f, iter_sampling = 3, refresh = 0), "not an exact continuation")
+})
+
+test_that("finite difference curvature handles scale and checks its arguments", {
+  m <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 1); }")
+  expect_equal(unclass(bayescomp_hessian(m, c(1e12, -1e12))), -diag(2), ignore_attr = TRUE, tolerance = 1e-6)
+  for (v in list(c(1e200, 2e200), c(1e-200, 2e-200)))
+    expect_equal(as.numeric(bayescomp_hessian_vector(m, c(.2, -.3), v)), -v, tolerance = 1e-8)
+  expect_error(bayescomp_hessian(m, c(.2, -.3), h = 0), "finite positive")
+  expect_error(bayescomp_hessian_vector(m, c(.2, -.3), c(NA, 1)), "finite numeric")
+  expect_equal(attr(bayescomp_hessian_vector(m, c(.2, -.3), c(1, 1)), "log_prob"), bayescomp_log_prob(m, c(.2, -.3)))
+})
+
+test_that("Gaussian GLM factorizations are kept for many statements of one model", {
+  set.seed(1); K <- 70; N <- 8; P <- 2
+  m <- bayescomp_model("data { int K; int N; int P; array[K] matrix[N, P] X; array[K] vector[N] Y; } parameters { real a; vector[P] b; real<lower=0> s; }
+    model { for (k in 1:K) Y[k] ~ normal_id_glm(X[k], a, b, s); }",
+    data = list(K = K, N = N, P = P, X = array(rnorm(K * N * P), c(K, N, P)), Y = matrix(rnorm(K * N), K)))
+  u <- c(0.1, 0.2, -0.1, 0)
+  g1 <- bayescomp_grad_log_prob(m, u)
+  expect_length(m$env$.glm_store$entries, K)
+  expect_identical(bayescomp_grad_log_prob(m, u), g1)
+  expect_length(m$env$.glm_store$entries, K)
 })
