@@ -43,3 +43,15 @@ test_that("native backends are used, validated and never mixed silently", {
   expect_error(bayescomp_native_error("E_SHAPE: no"), class = "bayescomp_shape_error")
   expect_error(bayescomp_native_error("E_INTERNAL: boom"), "boom")
 })
+
+test_that("value only samplers use a backend that provides only the gradient function", {
+  bayescomp_register_backend("fake_ldg", c("log_density", "gradient"), ir_versions = "1.0.0",
+    compile = function(ir, model) list(log_density_gradient = function(u, jacobian, propto)
+      list(value = -0.5 * sum((u - 1)^2), grad = -(u - 1))))
+  on.exit(rm("fake_ldg", envir = .backends))
+  m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(1, 1); }", backend = "fake_ldg", allow_fallback = TRUE)
+  expect_equal(bayescomp_log_prob(m, 0.5), -0.125)
+  fit <- bayescomp_sample(m, algorithm = "metropolis", chains = 1, iter_warmup = 50, iter_sampling = 50, seed = 1, refresh = 0)
+  lp <- as.data.frame(fit$draws)[[1L]]
+  expect_true(all(is.finite(lp)))
+})

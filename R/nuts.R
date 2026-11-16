@@ -76,7 +76,10 @@ nuts_build_tree <- function(st, depth, sign, H0) {
     q_prev <- st$z$q
     st$z <- leapfrog(st$pot, st$metric, st$z, sign * st$eps)
     st$n_leapfrog <- st$n_leapfrog + 1L
-    h <- ps_H(st$metric, st$z)
+    # the inverse metric times the momentum serves both the kinetic energy
+    # and the turning criterion; a dense metric makes it O(dim^2)
+    ps <- metric_dtau(st$metric, st$z$p)
+    h <- st$z$V + 0.5 * sum(st$z$p * ps)
     if (is.nan(h)) h <- Inf
     if ((h - H0) > st$max_deltaH) {
       # the last point of the trajectory before the energy blew up
@@ -84,7 +87,6 @@ nuts_build_tree <- function(st, depth, sign, H0) {
       st$divergent <- TRUE
     }
     st$sum_metro <- st$sum_metro + if (H0 - h > 0) 1 else exp(H0 - h)
-    ps <- metric_dtau(st$metric, st$z$p)
     return(list(valid = !st$divergent, propose = st$z, psb = ps, pse = ps, rho = st$z$p,
                 pb = st$z$p, pe = st$z$p, lsw = H0 - h))
   }
@@ -167,7 +169,7 @@ nuts_transition <- function(st, q) {
 # static HMC with integration time int_time (Stan's static_hmc)
 hmc_transition <- function(st, q) {
   m <- st$metric
-  r <- st$pot(q)
+  r <- if (identical(st$last_q, q)) st$last_r else st$pot(q)
   z <- list(q = q, p = metric_sample_p(m, length(q)), V = r$V, g = r$g)
   H0 <- ps_H(m, z)
   L <- max(1L, as.integer(st$int_time / st$eps))
@@ -177,6 +179,8 @@ hmc_transition <- function(st, q) {
   if (is.nan(h)) h <- Inf
   acc <- min(1, exp(H0 - h))
   if (stats::runif(1) > acc) z <- z0
+  st$last_q <- z$q
+  st$last_r <- list(V = z$V, g = z$g)
   list(q = z$q, lp = -z$V, accept_stat = acc, treedepth = 0L, n_leapfrog = L,
        divergent = (h - H0) > st$max_deltaH, energy = ps_H(m, z), p = z$p, g = z$g)
 }

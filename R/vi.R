@@ -42,6 +42,8 @@ bayescomp_variational <- function(model, algorithm = c("meanfield", "fullrank"),
   trace <- NULL
   res <- run_chains(model, 1L, seed, 1L, function(id) {
     lpg <- safe_lp(model, jacobian = TRUE)
+    # the ELBO and the output draws need values only, not gradients
+    lv <- attr(lpg, "value")
     mu0 <- find_init(model, init, 1L)
     full <- algorithm == "fullrank"
     vp0 <- list(mu = mu0, omega = rep(0, n), L = diag(n))
@@ -54,7 +56,7 @@ bayescomp_variational <- function(model, algorithm = c("meanfield", "fullrank"),
     }
     elbo <- function(vp) {
       th <- transform(vp, draw_z(elbo_samples))
-      lp <- apply(th, 1L, function(q) lpg(q)$value)
+      lp <- apply(th, 1L, lv)
       # as Stan's calc_ELBO: draws whose log density is not finite are
       # dropped, and the ELBO fails only when every draw is dropped
       if (!any(is.finite(lp))) return(-Inf)
@@ -131,7 +133,7 @@ bayescomp_variational <- function(model, algorithm = c("meanfield", "fullrank"),
     # as CmdStan: log_g__ unnormalized in the standard normal draws, log_p__
     # with all constants
     log_g <- -0.5 * rowSums(z^2)
-    log_p <- apply(qs, 1L, function(q) lpg(q)$value)
+    log_p <- apply(qs, 1L, lv)
     log_p <- log_p + propto_shift(model, qs, log_p)
     gq <- chain_write_draws(model, qs, FALSE)
     trace <<- list(elbo = r$trace, eta = eta, iterations = r$iter, converged = r$converged,

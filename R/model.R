@@ -182,7 +182,10 @@ bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL
 # value only log density: the same code without a tape
 model_lp <- function(model, jacobian, propto, print = FALSE) {
   nat <- model$native
-  if (!is.null(nat)) return(function(u) nat$log_density_gradient(u, jacobian, propto)$value)
+  if (!is.null(nat)) {
+    if (!is.null(nat[["log_density"]])) return(function(u) nat[["log_density"]](u, jacobian, propto))
+    return(function(u) nat$log_density_gradient(u, jacobian, propto)$value)
+  }
   f <- model_fun(model, "log_prob")
   # with propto, which terms are kept depends on which arguments are
   # parameters, so the tape still records (only the backward sweep is

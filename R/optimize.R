@@ -312,7 +312,7 @@ bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L
     say("Generating draws")
     log_p <- if (isTRUE(calculate_lp)) vapply(seq_len(draws), function(i) {
       if (refresh > 0L && i %% refresh == 0L) say("iteration: %d / %d", i, draws)
-      lpg(qs[i, ])$value
+      attr(lpg, "value")(qs[i, ])
     }, 0) else rep(NaN, draws)
     gq <- chain_write_draws(model, qs, FALSE)
     dg <- matrix(0, draws, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))

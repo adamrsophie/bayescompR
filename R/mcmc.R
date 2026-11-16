@@ -24,7 +24,7 @@
 lp_value_fun <- function(model, print = FALSE, jacobian = TRUE, propto = FALSE) {
   if (!is.null(model$native)) {
     nat <- model$native
-    fv <- nat$log_density %||% function(u, jacobian, propto) nat$log_density_gradient(u, jacobian, propto)$value
+    fv <- nat[["log_density"]] %||% function(u, jacobian, propto) nat$log_density_gradient(u, jacobian, propto)$value
     return(function(q) {
       # the same conditions as the R path below: only domain errors and
       # rejections give -Inf, everything else aborts
@@ -54,7 +54,7 @@ metric_chol_mult <- function(m, z) {
   if (m$type == "diag_e") sqrt(m$inv) * z else as.vector(crossprod(m$U, z))
 }
 metric_chol_solve <- function(m, x) {
-  if (m$type == "diag_e") x / sqrt(m$inv) else as.vector(forwardsolve(t(m$U), x))
+  if (m$type == "diag_e") x / sqrt(m$inv) else as.vector(backsolve(m$U, x, transpose = TRUE))
 }
 metric_direction <- function(m, i) {
   if (m$type == "diag_e") { d <- numeric(length(m$inv)); d[i] <- sqrt(m$inv[i]); d } else m$U[i, ]
@@ -92,7 +92,9 @@ metropolis_transition <- function(st, q) {
 mala_transition <- function(st, q) {
   m <- st$metric
   e <- st$eps
-  r0 <- st$pot(q)
+  # the retained state of the previous transition is where this one starts
+  cached <- identical(st$last_q, q)
+  r0 <- if (cached) st$last_r else st$pot(q)
   drift <- function(r, q) q - 0.5 * e^2 * metric_dtau_cov(m, r$g)
   mu0 <- drift(r0, q)
   qn <- mu0 + e * metric_chol_mult(m, stats::rnorm(length(q)))
@@ -106,7 +108,9 @@ mala_transition <- function(st, q) {
     acc <- if (is.nan(la)) 0 else min(1, exp(la))
   }
   if (stats::runif(1) < acc) { q <- qn; r0 <- r1 }
-  mh_out(q, -r0$V, acc, 2L)
+  st$last_q <- q
+  st$last_r <- r0
+  mh_out(q, -r0$V, acc, if (cached) 1L else 2L)
 }
 # covariance (inverse metric) times a vector
 metric_dtau_cov <- function(m, g) if (m$type == "diag_e") m$inv * g else as.vector(m$inv %*% g)
