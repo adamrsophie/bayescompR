@@ -206,8 +206,63 @@ defdist("std_normal", "reals", lp_std_normal,
 def("std_normal_rng", character(0), "real", function() stats::rnorm(1), rng = TRUE)
 
 lp_normal_id_glm <- function(y, x, alpha, beta, sigma, propto) {
+  lp <- normal_glm_prepared(y, x, alpha, beta, sigma, propto)
+  if (!is.null(lp)) return(lp)
   mu <- glm_linpred("normal_id_glm_lpdf", x, alpha, beta)
   lp_normal(y, mu, sigma, propto)
+}
+
+# With fixed data y and x, a scalar intercept and a scalar scale, the sum of
+# squares is ||R theta[piv] - c||^2 + r2 for the pivoted QR factorization of
+# A = [1 | x] and c, r2 from Q'y. Each evaluation is then O(P^2) instead of
+# O(N P). The factorization is kept for the last few (x, y) pairs and made
+# the second time a pair is seen, so data that change at every call (such as
+# cycling minibatches) never pay for it. Any other case, or data the checks
+# would reject, returns NULL for the general path.
+.glm_cache <- new.env(parent = emptyenv())
+normal_glm_prep <- function(y, x) {
+  old <- .glm_cache$entries
+  hit <- 0L
+  for (k in seq_along(old)) if (identical(old[[k]]$x, x) && identical(old[[k]]$y, y)) { hit <- k; break }
+  if (hit == 0L) {
+    .glm_cache$entries <- c(list(list(x = x, y = y, seen = TRUE)), old[seq_len(min(length(old), mvn_cache_size - 1L))])
+    return(NULL)
+  }
+  if (is.null(old[[hit]]$seen)) return(old[[hit]]$prep)
+  N <- nrow(x); P1 <- ncol(x) + 1L
+  prep <- NULL
+  if (N > P1 && all(is.finite(x)) && all(is.finite(y))) {
+    q <- qr(cbind(1, x))
+    if (q$rank == P1) {
+      qty <- qr.qty(q, as.numeric(y))
+      prep <- list(R = qr.R(q), piv = q$pivot, c = qty[seq_len(P1)], r2 = sum(qty[-seq_len(P1)]^2), N = N)
+    }
+  }
+  old[[hit]] <- list(x = x, y = y, prep = prep)
+  .glm_cache$entries <- old
+  prep
+}
+normal_glm_prepared <- function(y, x, alpha, beta, sigma, propto) {
+  vx <- val(x); vy <- val(y); va <- val(alpha); vb <- val(beta); vs <- val(sigma)
+  if (inherits(x, "bcad") || inherits(y, "bcad") || !is.matrix(vx) || !is.numeric(vy) ||
+      length(vy) != nrow(vx) || length(va) != 1L || length(vs) != 1L || ncol(vx) != length(vb) ||
+      !all(is.finite(va)) || !all(is.finite(vb))) return(NULL)
+  pr <- normal_glm_prep(vy, vx)
+  if (is.null(pr)) return(NULL)
+  chk_positive_finite("normal_lpdf", "Scale parameter", sigma)
+  N <- pr$N
+  th <- c(va, as.vector(vb))[pr$piv]
+  r <- as.vector(pr$R %*% th) - pr$c
+  sse <- sum(r * r) + pr$r2
+  lp <- 0
+  if (!propto) lp <- lp - N * 0.9189385332046727
+  if (inc(propto, sigma)) lp <- lp - N * log(vs)
+  if (inc(propto, alpha, beta, sigma)) lp <- lp - 0.5 * sse / vs^2
+  ad_node(lp, list(alpha, beta, sigma), function(g) {
+    gt <- numeric(length(th))
+    gt[pr$piv] <- -as.vector(crossprod(pr$R, r)) / vs^2
+    list(g * gt[1L], unbroadcast(g * gt[-1L], vb), g * (sse / vs^3 - N / vs))
+  })
 }
 glm_linpred <- function(f, x, alpha, beta) {
   vx <- val(x)
@@ -217,8 +272,17 @@ glm_linpred <- function(f, x, alpha, beta) {
     return(eta)
   }
   if (ncol(vx) != nelem(beta)) stop_shape(sprintf("%s: columns of x (%d) must match the size of beta (%d)", f, ncol(vx), nelem(beta)))
-  eta <- op_mat_vec(x, beta)
-  eta + flat(as_dbl(alpha))
+  # one node for x beta + alpha
+  va <- val(alpha); vb <- val(beta)
+  if (length(va) != 1L && length(va) != nrow(vx))
+    stop_shape(sprintf("%s: size of alpha (%d) must be 1 or match the rows of x (%d)", f, length(va), nrow(vx)))
+  eta <- as.vector(vx %*% as.vector(vb)) + as.vector(va)
+  ad_node(eta, list(x, alpha, beta), function(g) {
+    g <- rep_len(as.numeric(g), length(eta))
+    list(if (inherits(x, "bcad")) outer(g, as.vector(vb)),
+         if (inherits(alpha, "bcad")) unbroadcast(g, va),
+         if (inherits(beta, "bcad")) unbroadcast(as.vector(crossprod(vx, g)), vb))
+  })
 }
 for (xt in c("matrix", "row_vector", "vector")) {
   def("normal_id_glm_lpdf", c("reals", xt, "reals", "vector", "reals"), "real", function(...) lp_normal_id_glm(..., propto = FALSE), density = TRUE, dist = "normal_id_glm")
@@ -1430,30 +1494,47 @@ defdist("dirichlet", c("vectors", "vectors"), lp_dirichlet,
   }, rng_ret = "vector")
 .lib$dirichlet_rng[[1L]]$ret <- "vector"
 
+# A "vectors" argument as columns: a K vector for one vector (or a one row
+# array), else the K x n transpose of its n x K matrix of rows. The matrix is
+# transposed whole, never split into rows.
+vec_cols <- function(x) {
+  v <- val(x)
+  x <- as_dbl(x)
+  d <- dim(v)
+  if (is.null(d)) return(list(n = 1L, K = length(v), M = x))
+  if (d[1L] == 1L) return(list(n = 1L, K = d[2L], M = ad_reshape(x, NULL)))
+  list(n = d[1L], K = d[2L], M = ad_transpose(x))
+}
+# the columns of `cl` (from vec_cols) as a K x N matrix; one vector is
+# repeated, and its adjoint is the row sum of the matrix adjoint
+cols_to <- function(cl, N) {
+  if (cl$n != 1L) return(cl$M)
+  x <- cl$M
+  vx <- val(x)
+  y <- matrix(vx, length(vx), N)
+  if (!inherits(x, "bcad")) return(y)
+  ad_node(y, list(x), function(g) list(rowSums(g)))
+}
+
 mvn_core <- function(f, y, mu, logdet_half, solve_fn, propto, depends) {
-  ys <- vec_rows(y)
-  ms <- vec_rows(mu)
-  N <- max(length(ys), length(ms))
-  if (length(ys) != 1L && length(ms) != 1L && length(ys) != length(ms)) stop_shape(sprintf("%s: size mismatch between the random variable and the location", f))
-  K <- nelem(ys[[1L]])
+  yc <- vec_cols(y)
+  mc <- vec_cols(mu)
+  if (yc$n != 1L && mc$n != 1L && yc$n != mc$n) stop_shape(sprintf("%s: size mismatch between the random variable and the location", f))
+  if (yc$n == 0L || mc$n == 0L) return(0)
+  N <- max(yc$n, mc$n)
+  K <- yc$K
   lp <- 0
   if (!propto) lp <- lp - N * K * 0.5 * log(2 * pi)
   if (inc(propto, depends)) lp <- lp - N * logdet_half
-  for (x in ys) if (nelem(x) != K) stop_shape(sprintf("%s: size mismatch", f))
-  for (x in ms) if (nelem(x) != K) stop_shape(sprintf("%s: size mismatch", f))
-  for (x in ys) chk_not_nan(f, "Random variable", x)
-  for (x in ms) chk_finite(f, "Location parameter", x)
+  if (mc$K != K) stop_shape(sprintf("%s: size mismatch", f))
+  # the columns are checked in the order of the original rows
+  chk_not_nan(f, "Random variable", yc$M)
+  chk_finite(f, "Location parameter", mc$M)
   if (!inc(propto, y, mu, depends)) return(lp)
   # all observations at once: the K x N matrix of differences goes through
   # one solve
-  if (N == 1L) return(lp - 0.5 * solve_fn(as_dbl(ys[[1L]]) - as_dbl(ms[[1L]])))
-  # a data matrix of rows is transposed directly instead of split and restacked
-  cols <- function(x, xs) {
-    v <- val(x)
-    if (!inherits(x, "bcad") && is.matrix(v) && length(xs) == N) return(t(v))
-    stack_cols(xs, N, K)
-  }
-  lp - 0.5 * solve_fn(cols(y, ys) - cols(mu, ms))
+  if (N == 1L) return(lp - 0.5 * solve_fn(yc$M - mc$M))
+  lp - 0.5 * solve_fn(cols_to(yc, N) - cols_to(mc, N))
 }
 # K x N matrix whose columns are the vectors xs (one vector is repeated)
 stack_cols <- function(xs, N, K) {
@@ -1532,12 +1613,12 @@ def("multi_normal_rng", c("vectors", "matrix"), mv_rng_ret, function(mu, S) mvn_
 def("multi_normal_cholesky_rng", c("vectors", "matrix"), mv_rng_ret, function(mu, L) mvn_rng(mu, val(L)), rng = TRUE)
 
 mvt_core <- function(f, y, nu, mu, L, propto) {
-  ys <- vec_rows(y)
-  ms <- vec_rows(mu)
-  N <- max(length(ys), length(ms))
-  if (!(length(ys) %in% c(1L, N) && length(ms) %in% c(1L, N)))
-    stop_shape(sprintf("%s: %d random variables and %d locations", f, length(ys), length(ms)))
-  K <- nelem(ys[[1L]])
+  yc <- vec_cols(y)
+  mc <- vec_cols(mu)
+  N <- max(yc$n, mc$n)
+  if (!(yc$n %in% c(1L, N) && mc$n %in% c(1L, N)))
+    stop_shape(sprintf("%s: %d random variables and %d locations", f, yc$n, mc$n))
+  K <- yc$K
   chk_positive(f, "Degrees of freedom parameter", nu)
   nu <- as_dbl(nu)
   lp <- 0
@@ -1545,7 +1626,7 @@ mvt_core <- function(f, y, nu, mu, L, propto) {
   if (!propto) lp <- lp - N * K / 2 * log(pi)
   if (inc(propto, L)) lp <- lp - N * ad_sum(log(.lib$diagonal[[1L]]$impl(L)))
   # all observations through one triangular solve
-  D <- if (N == 1L) as_dbl(ys[[1L]]) - as_dbl(ms[[1L]]) else stack_cols(ys, N, K) - stack_cols(ms, N, K)
+  D <- if (N == 1L) yc$M - mc$M else cols_to(yc, N) - cols_to(mc, N)
   z <- ad_tri_solve(L, D, f)
   q <- if (N == 1L) ad_sum(z * z) else ad_reshape(ad_matmul(matrix(1, 1L, K), z * z), NULL)
   lp <- lp - (nu + K) / 2 * ad_sum(log1p(q / nu))

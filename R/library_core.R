@@ -161,7 +161,7 @@ chk_finite <- function(f, name, x) {
 }
 chk_not_nan <- function(f, name, x) {
   v <- val(x)
-  if (any(is.nan(v) | is.na(v))) stop_domain(sprintf("%s: %s is nan, but must not be nan", f, name))
+  if (anyNA(v, recursive = TRUE)) stop_domain(sprintf("%s: %s is nan, but must not be nan", f, name))
 }
 chk_positive <- function(f, name, x) {
   v <- val(x)
