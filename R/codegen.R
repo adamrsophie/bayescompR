@@ -285,11 +285,21 @@ cg_print_items <- function(items) {
 # of a multivariate density, a matrix) is one joint observation. GLMs are
 # rewritten to their univariate family with the linear predictor, so each
 # row of x is one observation as in the equivalent unfused model.
-cg_pointwise <- function(fname, lhs_e, arg_es, lhs, args, sg, truncated) {
-  if (!identical(.cg$block, "model") || !isTRUE(lhs_e$data_only) || isTRUE(sg$user)) return(NULL)
+cg_pointwise <- function(fname, lhs_e, arg_es, lhs, args, sg, trunc) {
+  if (!identical(.cg$block, "model") || !isTRUE(lhs_e$data_only)) return(NULL)
   root <- lhs_e
   while (identical(root$kind, "index") || identical(root$kind, "paren")) root <- root$x %||% root$a
   label <- if (identical(root$kind, "var")) root$name else "y"
+  pw_call <- function(spec, uf = NULL, a = c(list(lhs), unname(args)))
+    cl(as.name("if"), cl(as.name("!"), cl(as.name("is.null"), cl(as.name("$"), CTX, as.name("pw")))),
+       cl_list(rt_pointwise, c(list(CTX, label, spec, uf, trunc), a)))
+  if (isTRUE(sg$user)) {
+    # a user defined density is one joint observation per statement
+    if (!is.null(trunc)) return(pw_call(list(unsupported = "truncated user defined")))
+    aa <- Map(function(code, a, t) promote_to(code, a$type, t), c(list(lhs), args), c(list(lhs_e), arg_es), sg$args)
+    uf <- cl_list(as.name("function"), list(as.pairlist(alist(... = )), cl_list(as.name(sg$mangled), list(as.name("..."), CTX))))
+    return(pw_call(list(), uf, unname(aa)))
+  }
   types <- c(list(lhs_e$type), lapply(arg_es, `[[`, "type"))
   base <- sub("_(lpdf|lpmf|lupdf|lupmf)$", "", fname)
   suffix <- if (grepl("pmf$", fname)) "_lpmf" else "_lpdf"
@@ -317,9 +327,8 @@ cg_pointwise <- function(fname, lhs_e, arg_es, lhs, args, sg, truncated) {
   allvec <- all(sig$args %in% c("reals", "ints", "real", "int"))
   spec <- list(full = sig$impl, rng = rng, glm = glm$convert, el = if (split) vec, rows = rows,
                kern = if (split && allvec) pw_kernels[[fam]], vrng = split && allvec,
-               truncated = truncated)
-  cl(as.name("if"), cl(as.name("!"), cl(as.name("is.null"), cl(as.name("$"), CTX, as.name("pw")))),
-     cl_list(rt_pointwise, c(list(CTX, label, spec, lhs), unname(args))))
+               unsupported = if (!is.null(trunc) && !split) "truncated multivariate")
+  pw_call(spec)
 }
 
 lib_sig <- function(name, types) {
@@ -435,9 +444,7 @@ cg_stmt <- function(st, ctx) {
            cg_size_guard(st$fname, sg, types, cl_list(full, c(list(lhs), unname(args)))))
       }
       out <- list(cl(rt_target_add, CTX, call))
-      pw <- cg_pointwise(st$fname, st$lhs, st$args, lhs, args, sg, truncated = !is.null(st$trunc))
-      # after the statement, which checks the arguments first
-      if (!is.null(pw)) out <- c(out, list(pw))
+      trc <- NULL
       if (!is.null(st$trunc)) {
         tr <- st$trunc
         mkfun <- function(sig) {
@@ -453,18 +460,19 @@ cg_stmt <- function(st, ctx) {
         }
         lcdf_f <- mkfun(tr$lcdf_sig)
         lccdf_f <- mkfun(tr$lccdf_sig)
-        out <- c(out, list(cl(rt_truncate, CTX, lhs,
-                              if (is.null(tr$lo)) NULL else cg_expr(tr$lo),
-                              if (is.null(tr$hi)) NULL else cg_expr(tr$hi),
-                              lcdf_f, lccdf_f, cl_list(as.name("list"), unname(args)),
-                              isTRUE(tr$discrete), tr$fam)))
+        lo_c <- if (is.null(tr$lo)) NULL else cg_expr(tr$lo)
+        hi_c <- if (is.null(tr$hi)) NULL else cg_expr(tr$hi)
+        trc <- cl(list, lo = lo_c, hi = hi_c, lcdf = lcdf_f, lccdf = lccdf_f, discrete = isTRUE(tr$discrete), fam = tr$fam)
+        tcall <- cl(rt_truncate, CTX, lhs, lo_c, hi_c, lcdf_f, lccdf_f, cl_list(as.name("list"), unname(args)), isTRUE(tr$discrete), tr$fam)
       }
-      out
+      pw <- cg_pointwise(st$fname, st$lhs, st$args, lhs, args, sg, trc)
+      # after the statement, which checks the arguments first
+      c(out, if (!is.null(st$trunc)) list(tcall), if (!is.null(pw)) list(pw))
     },
     target_add = {
       v <- st$value
       pw <- if (identical(v$kind, "call") && length(v$args) && grepl("_(lpdf|lpmf|lupdf|lupmf)$", v$name))
-        cg_pointwise(v$name, v$args[[1L]], v$args[-1L], cg_expr(v$args[[1L]]), lapply(v$args[-1L], cg_expr), v$sig, FALSE)
+        cg_pointwise(v$name, v$args[[1L]], v$args[-1L], cg_expr(v$args[[1L]]), lapply(v$args[-1L], cg_expr), v$sig, NULL)
       c(list(cl(rt_target_add, CTX, cg_expr(st$value))), if (!is.null(pw)) list(pw))
     },
     jacobian_add = list(cl(as.name("if"), cl(as.name("isTRUE"), cl(as.name("$"), CTX, as.name("jacobian"))),

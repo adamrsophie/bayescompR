@@ -84,3 +84,37 @@ test_that("one cutpoint vector per observation gives one term per observation", 
   expect_equal(unname(bayescomp_log_lik(fit)), ref)
   expect_true(all(bayescomp_posterior_predict(fit, seed = 1) %in% 1:3))
 })
+
+test_that("truncated and user defined statements give pointwise terms", {
+  set.seed(6); N <- 5; y <- abs(rnorm(N)) + 0.1; k <- c(0L, 2L, 5L, 1L, 3L)
+  m <- bayescomp_model("data { int N; vector[N] y; array[N] int k; } parameters { real mu; real<lower=0> s; real<lower=0> l; }
+    model { mu ~ normal(0, 1); s ~ lognormal(0, 1); l ~ gamma(2, 1); for (n in 1:N) y[n] ~ normal(mu, s) T[0, ]; k ~ poisson(l) T[, 6]; }",
+    data = list(N = N, y = y, k = k))
+  fit <- bayescomp_sample(m, chains = 1, iter_warmup = 30, iter_sampling = 3, seed = 1, refresh = 0)
+  mu <- draws_matrix_of(fit, "mu"); s <- draws_matrix_of(fit, "s"); l <- draws_matrix_of(fit, "l")
+  ref <- t(vapply(1:3, function(i) c(dnorm(y, mu[i], s[i], log = TRUE) - pnorm(0, mu[i], s[i], lower.tail = FALSE, log.p = TRUE),
+                                     dpois(k, l[i], log = TRUE) - ppois(6, l[i], log.p = TRUE)), numeric(2 * N)))
+  expect_equal(unname(bayescomp_log_lik(fit)), ref, tolerance = 1e-10)
+  pp <- bayescomp_posterior_predict(fit, seed = 1)
+  expect_true(all(pp[, 1:N] >= 0) && all(pp[, N + 1:N] <= 6))
+  m2 <- bayescomp_model("functions { real my_lpdf(real y, real mu) { return normal_lpdf(y | mu, 1); } }
+    data { int N; vector[N] y; } parameters { real mu; } model { for (n in 1:N) y[n] ~ my(mu); }", data = list(N = N, y = y))
+  fit2 <- bayescomp_sample(m2, chains = 1, iter_warmup = 30, iter_sampling = 3, seed = 1, refresh = 0)
+  mu2 <- draws_matrix_of(fit2, "mu")
+  ll <- bayescomp_log_lik(fit2)
+  expect_equal(colnames(ll), sprintf("y[%d]", 1:N))
+  expect_equal(unname(ll), t(vapply(1:3, function(i) dnorm(y, mu2[i], 1, log = TRUE), numeric(N))))
+  expect_true(all(is.na(bayescomp_posterior_predict(fit2))))
+})
+
+test_that("log likelihood columns can be summed by group", {
+  m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; } model { y ~ normal(mu, 1); }",
+                       data = list(N = 4, y = c(-1, 0, 1, 2)))
+  fit <- bayescomp_sample(m, chains = 2, iter_warmup = 30, iter_sampling = 3, seed = 1, refresh = 0)
+  ll <- bayescomp_log_lik(fit)
+  g <- bayescomp_log_lik(fit, group = c("a", "b", "a", "b"))
+  expect_equal(colnames(g), c("a", "b"))
+  expect_equal(unname(g[, "a"]), unname(ll[, 1] + ll[, 3]))
+  expect_equal(dim(bayescomp_log_lik(fit, "array", group = rep(1, 4))), c(3L, 2L, 1L))
+  expect_error(bayescomp_log_lik(fit, group = 1:3), "one entry per observation")
+})

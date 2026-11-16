@@ -1154,16 +1154,22 @@ lp_ordered_logistic <- function(k, eta, cuts, propto) {
 lp_ordered_probit <- function(k, eta, cuts, propto) {
   ordered_core("ordered_probit_lpmf", k, eta, cuts, ad_log_Phi, function(x) ad_log1m_Phi(x))
 }
+# one category per element of eta, with one cutpoint vector shared or one
+# per element (rows of an array of vectors)
+ordered_rng <- function(eta, c, cdf) {
+  ve <- as.vector(val(eta)); vc <- val(c)
+  C <- if (is.null(dim(vc))) matrix(vc, 1L) else vc
+  n <- max(length(ve), nrow(C))
+  r <- vapply(seq_len(n), function(i) {
+    p <- -diff(c(1, cdf(ve[if (length(ve) == 1L) 1L else i] - C[if (nrow(C) == 1L) 1L else i, ]), 0))
+    sample.int(length(p), 1L, prob = pmax(p, 0))
+  }, 0L)
+  r
+}
 defdist("ordered_logistic", c("ints", "reals", "vecarr"), lp_ordered_logistic, discrete = TRUE,
-  rng = function(eta, c) {
-    p <- -diff(c(1, stats::plogis(val(eta) - val(c)), 0))
-    sample.int(length(p), 1L, prob = pmax(p, 0))
-  })
+  rng = function(eta, c) ordered_rng(eta, c, stats::plogis))
 defdist("ordered_probit", c("ints", "reals", "vecarr"), lp_ordered_probit, discrete = TRUE,
-  rng = function(eta, c) {
-    p <- -diff(c(1, stats::pnorm(val(eta) - val(c)), 0))
-    sample.int(length(p), 1L, prob = pmax(p, 0))
-  })
+  rng = function(eta, c) ordered_rng(eta, c, stats::pnorm))
 
 lp_neg_binomial <- function(n, alpha, beta, propto) {
   f <- "neg_binomial_lpmf"

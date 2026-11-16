@@ -5,7 +5,7 @@
 \alias{bayescomp_posterior_predict}
 \title{Pointwise log likelihood and posterior predictive draws}
 \usage{
-bayescomp_log_lik(fit, format = c("matrix", "array"))
+bayescomp_log_lik(fit, format = c("matrix", "array"), group = NULL)
 
 bayescomp_posterior_predict(fit, format = c("matrix", "array"), seed = NULL)
 }
@@ -15,12 +15,15 @@ bayescomp_posterior_predict(fit, format = c("matrix", "array"), seed = NULL)
 \item{format}{\code{"matrix"} for a draws by observations matrix (chains
 stacked), \code{"array"} for an iterations by chains by observations array.}
 
+\item{group}{Optional vector with one entry per observation column; the
+columns of each group are summed and named by the group.}
+
 \item{seed}{Seed for the predictive draws.}
 }
 \value{
-A matrix or array with one column (slice) per observation.
-\code{bayescomp_posterior_predict()} gives \code{NA} for distributions without an
-\verb{_rng} function.
+A matrix or array with one column (slice) per observation or
+group. \code{bayescomp_posterior_predict()} gives \code{NA} for distributions
+without an \verb{_rng} function.
 }
 \description{
 Evaluates the model block at each draw and records, for every sampling
@@ -33,7 +36,11 @@ log odds shared by all elements, and GLMs one column per row of \code{x}, as
 the equivalent unfused statement does. A multivariate statement is one
 joint observation, so it gives one log likelihood column, while its
 predictive draws have one column per element of \code{y}. Truncated
-statements and user defined densities are not supported.
+statements are renormalized for each observation, and their predictive
+draws are taken by rejection. A user defined density is one joint
+observation per statement (one per iteration inside a loop) and has no
+predictive draws. \code{group} sums the log likelihood of observations that
+belong together, for leave one group out cross validation.
 }
 \examples{
 m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
