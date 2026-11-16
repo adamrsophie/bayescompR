@@ -16,6 +16,7 @@ bayescomp_sgmcmc(
   iter_warmup = 500L,
   iter_sampling = 2000L,
   thin = 1L,
+  lp_every = 1L,
   init = 2,
   seed = NULL,
   cores = getOption("mc.cores", 1L)
@@ -41,6 +42,10 @@ observations \code{idx} (with \code{idx = integer(0)} for the prior).}
 
 \item{chains, iter_warmup, iter_sampling, thin, init, seed, cores}{As in
 \code{\link[=bayescomp_sample]{bayescomp_sample()}}.}
+
+\item{lp_every}{The exact \code{lp__} needs the full data, so it is computed
+at every \code{lp_every}-th saved draw only and is \code{NA} at the others; \code{0}
+never computes it. The draws do not depend on it.}
 }
 \value{
 A \code{bayescomp_fit} with method \code{"sgmcmc"}.

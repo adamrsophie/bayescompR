@@ -28,14 +28,14 @@
 #' dim(bayescomp_posterior_predict(fit, seed = 2))
 #' @export
 bayescomp_log_lik <- function(fit, format = c("matrix", "array")) {
-  pointwise_out(pointwise_eval(fit, FALSE)$ll, match.arg(format))
+  pointwise_out(pointwise_eval(fit, FALSE), match.arg(format))
 }
 
 #' @rdname bayescomp_log_lik
 #' @export
 bayescomp_posterior_predict <- function(fit, format = c("matrix", "array"), seed = NULL) {
   if (!is.null(seed)) set.seed(seed)
-  pointwise_out(pointwise_eval(fit, TRUE)$yrep, match.arg(format))
+  pointwise_out(pointwise_eval(fit, TRUE), match.arg(format))
 }
 
 pointwise_out <- function(a, format) {
@@ -68,11 +68,13 @@ pointwise_eval <- function(fit, rng) {
     stop("the model block has no sampling statement on data to take pointwise terms from", call. = FALSE)
   nm <- make.unique(first$names)
   n <- nrow(qs[[1L]])
-  ll <- yr <- array(NA_real_, c(n, length(qs), length(nm)), dimnames = list(NULL, NULL, nm))
+  # only the requested output is kept: the log likelihood, or with `rng` the
+  # predictive draws
+  key <- if (rng) "yrep" else "ll"
+  out <- array(NA_real_, c(n, length(qs), length(nm)), dimnames = list(NULL, NULL, nm))
   for (c in seq_along(qs)) for (i in seq_len(n)) {
     r <- if (c == 1L && i == 1L) first else one(qs[[c]][i, ])
-    ll[i, c, ] <- r$ll
-    if (rng) yr[i, c, ] <- r$yrep
+    out[i, c, ] <- r[[key]]
   }
-  list(ll = ll, yrep = yr)
+  out
 }

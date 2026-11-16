@@ -68,6 +68,9 @@ split_setup <- function(model, n_name, subset) {
 #' @param n_name Name of the observation count in the data.
 #' @param subset Optional `function(data, idx)` returning the data for the
 #'   observations `idx` (with `idx = integer(0)` for the prior).
+#' @param lp_every The exact `lp__` needs the full data, so it is computed
+#'   at every `lp_every`-th saved draw only and is `NA` at the others; `0`
+#'   never computes it. The draws do not depend on it.
 #' @param chains,iter_warmup,iter_sampling,thin,init,seed,cores As in
 #'   [bayescomp_sample()].
 #' @return A `bayescomp_fit` with method `"sgmcmc"`.
@@ -85,9 +88,11 @@ split_setup <- function(model, n_name, subset) {
 #' @export
 bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32L, step_size = NULL,
                              friction = 0.1, n_name = "N", subset = NULL, chains = 4L, iter_warmup = 500L,
-                             iter_sampling = 2000L, thin = 1L, init = 2, seed = NULL, cores = getOption("mc.cores", 1L)) {
+                             iter_sampling = 2000L, thin = 1L, lp_every = 1L, init = 2, seed = NULL,
+                             cores = getOption("mc.cores", 1L)) {
   check_model(model)
   method <- match.arg(method)
+  lp_every <- as_count(lp_every, "lp_every")
   n <- model$dim
   sp <- split_setup(model, n_name, subset)
   b <- min(as_count(batch_size, "batch_size", 1L), sp$N)
@@ -115,8 +120,9 @@ bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32
     eps <- step_size
     if (is.null(eps)) {
       # scale from the curvature at a nearby mode
-      o <- tryCatch(stats::optim(u, function(x) -full(x)$value, function(x) -full(x)$grad, method = "BFGS",
-                                 control = list(maxit = 200)), error = function(e) NULL)
+      ob <- joint_objective(full)
+      o <- tryCatch(stats::optim(u, ob$fn, ob$gr, method = "BFGS", control = list(maxit = 200)),
+                    error = function(e) NULL)
       if (!is.null(o)) u <- o$par
       H <- num_hessian_V(function(x) -full(x)$grad, u)
       lam <- tryCatch(max(eigen(H, symmetric = TRUE, only.values = TRUE)$values), error = function(e) NA)
@@ -147,7 +153,8 @@ bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32
       if (it > nw && ((it - nw - 1L) %% thin == 0L)) {
         row <- row + 1L
         qs[row, ] <- u
-        dg[row, c("lp__", "stepsize__")] <- c(lp_full(u), eps)
+        dg[row, "lp__"] <- if (lp_every > 0L && (row - 1L) %% lp_every == 0L) lp_full(u) else NA_real_
+        dg[row, "stepsize__"] <- eps
       }
     }
     list(q = qs, gq = chain_write_draws(model, qs, FALSE), diag = dg, step_size = eps, inv_metric = NULL,
@@ -216,8 +223,8 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
         list(value = v, grad = g)
       }
       st <- tryCatch(solve(Qc, rc), error = function(e) m_old)
-      o <- stats::optim(st, function(x) { v <- f(x)$value; if (is.finite(v)) -v else 1e100 },
-                        function(x) -f(x)$grad, method = "BFGS", control = list(maxit = 500, reltol = 1e-12))
+      ob <- joint_objective(f, bad = 1e100)
+      o <- stats::optim(st, ob$fn, ob$gr, method = "BFGS", control = list(maxit = 500, reltol = 1e-12))
       H <- num_hessian_V(function(x) -f(x)$grad, o$par)
       list(m = o$par, P = H)
     }
@@ -267,4 +274,22 @@ par_lapply <- function(X, f, cores = 1L) {
   if (cores > 1L && length(X) > 1L && .Platform$OS.type != "windows")
     parallel::mclapply(X, f, mc.cores = min(cores, length(X)))
   else lapply(X, f)
+}
+
+# stats::optim() asks for the value and the gradient separately, usually at
+# the same point. `f` returns both at once, so keep its last result and reuse
+# it when the next request is for the identical point. `bad` replaces a
+# nonfinite value; NULL keeps it.
+joint_objective <- function(f, bad = NULL) {
+  force(f)
+  last_x <- NULL; last <- NULL
+  at <- function(x) {
+    if (!identical(x, last_x)) { last <<- f(x); last_x <<- x }
+    last
+  }
+  list(fn = function(x) {
+         v <- -at(x)$value
+         if (!is.null(bad) && !is.finite(v)) bad else v
+       },
+       gr = function(x) -at(x)$grad)
 }
