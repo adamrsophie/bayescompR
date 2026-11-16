@@ -555,6 +555,47 @@ bayescomp_grad_log_prob <- function(model, upars, jacobian = TRUE, propto = FALS
   structure(r$grad, log_prob = r$value)
 }
 
+#' Hessian of the log density
+#'
+#' `bayescomp_hessian()` returns the Hessian of the log density at
+#' unconstrained values and `bayescomp_hessian_vector()` its product with a
+#' vector, without forming the matrix. Both take central finite differences
+#' of the reverse mode gradient (2 gradients per column, or 2 in all for a
+#' product), not nested automatic differentiation, so they work with every
+#' backend that gives gradients; their error is of order `h^2`.
+#'
+#' @inheritParams bayescomp_log_prob
+#' @param upars Unconstrained parameter values (a numeric vector), or
+#'   constrained values as for [bayescomp_log_prob()].
+#' @param v A vector with one entry per unconstrained parameter.
+#' @param h Finite difference step; for the product it is scaled by the
+#'   norm of `v`.
+#' @return The symmetrized Hessian matrix, or the product vector, with the
+#'   log density in attribute `"log_prob"`.
+#' @examples
+#' m <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 2); }")
+#' bayescomp_hessian(m, c(0.1, 0.2))
+#' bayescomp_hessian_vector(m, c(0.1, 0.2), c(1, 0))
+#' @export
+bayescomp_hessian <- function(model, upars, jacobian = TRUE, propto = FALSE, h = 1e-5) {
+  u <- check_upars(model, as_upars(model, upars))
+  lpg <- model_lpg(model, jacobian, propto, TRUE)
+  H <- num_hessian(lpg, u, h)
+  structure(H, log_prob = lpg(u)$value)
+}
+
+#' @rdname bayescomp_hessian
+#' @export
+bayescomp_hessian_vector <- function(model, upars, v, jacobian = TRUE, propto = FALSE, h = 1e-5) {
+  u <- check_upars(model, as_upars(model, upars))
+  if (!is.numeric(v) || length(v) != length(u)) stop(sprintf("'v' must be a numeric vector of length %d", length(u)), call. = FALSE)
+  lpg <- model_lpg(model, jacobian, propto, TRUE)
+  nv <- sqrt(sum(v^2))
+  if (nv == 0) return(structure(numeric(length(u)), log_prob = lpg(u)$value))
+  e <- h / nv * v
+  structure((lpg(u + e)$grad - lpg(u - e)$grad) / (2 * h / nv), log_prob = lpg(u)$value)
+}
+
 # constrained values (a list or a file) to unconstrained ones
 as_upars <- function(model, upars) {
   if (is.character(upars)) upars <- bayescomp_read_data(upars)

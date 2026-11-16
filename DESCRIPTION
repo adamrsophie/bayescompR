@@ -84,6 +84,7 @@ Collate:
     'tuples.R'
     'hof.R'
     'hof_runtime.R'
+    'capabilities.R'
     'laplace.R'
     'semantic.R'
     'runtime.R'
