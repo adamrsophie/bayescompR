@@ -563,6 +563,18 @@ test_that("multivariate normal and Student t on matrices match the row by row su
       expect_equal(a$grad, b$grad, tolerance = 1e-12)
     }
   }
+  # one random vector against a matrix of locations
+  yv <- rnorm(K)
+  one <- function(z) mvn(bayescompR:::ad_gather(z, seq_len(K)), pick(z, K + seq_len(N * K), c(N, K)), L, FALSE)
+  each <- function(z) {
+    out <- 0
+    for (i in seq_len(N)) out <- out + mvn(bayescompR:::ad_gather(z, seq_len(K)),
+                                           bayescompR:::ad_gather(z, K + i + (seq_len(K) - 1L) * N), L, FALSE)
+    out
+  }
+  a <- vg(one, c(yv, as.vector(M))); b <- vg(each, c(yv, as.vector(M)))
+  expect_equal(a$value, b$value, tolerance = 1e-12)
+  expect_equal(a$grad, b$grad, tolerance = 1e-12)
   # invalid elements are reported in the order of the rows
   bm <- M; bm[3, 1] <- Inf; bm[2, 2] <- -Inf
   expect_error(mvn(Y, bm, L, FALSE), "Location parameter is -Inf", class = "bayescomp_domain_error")

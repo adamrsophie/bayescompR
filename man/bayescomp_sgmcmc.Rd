@@ -16,10 +16,10 @@ bayescomp_sgmcmc(
   iter_warmup = 500L,
   iter_sampling = 2000L,
   thin = 1L,
-  lp_every = 1L,
   init = 2,
   seed = NULL,
-  cores = getOption("mc.cores", 1L)
+  cores = getOption("mc.cores", 1L),
+  lp_every = 1L
 )
 }
 \arguments{

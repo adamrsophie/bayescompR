@@ -215,20 +215,16 @@ lp_normal_id_glm <- function(y, x, alpha, beta, sigma, propto) {
 # With fixed data y and x, a scalar intercept and a scalar scale, the sum of
 # squares is ||R theta[piv] - c||^2 + r2 for the pivoted QR factorization of
 # A = [1 | x] and c, r2 from Q'y. Each evaluation is then O(P^2) instead of
-# O(N P). The factorization is kept for the last few (x, y) pairs and made
-# the second time a pair is seen, so data that change at every call (such as
-# cycling minibatches) never pay for it. Any other case, or data the checks
-# would reject, returns NULL for the general path.
+# O(N P). The path depends only on the data, never on what was evaluated
+# before, so results do not change with call history.
+# ponytail: identity keyed cache of glm_cache_size pairs; data cycling
+# through more pairs (many minibatches) refactor at each call, bind the
+# factorization to the model instance if that matters
 .glm_cache <- new.env(parent = emptyenv())
+glm_cache_size <- 64L
 normal_glm_prep <- function(y, x) {
   old <- .glm_cache$entries
-  hit <- 0L
-  for (k in seq_along(old)) if (identical(old[[k]]$x, x) && identical(old[[k]]$y, y)) { hit <- k; break }
-  if (hit == 0L) {
-    .glm_cache$entries <- c(list(list(x = x, y = y, seen = TRUE)), old[seq_len(min(length(old), mvn_cache_size - 1L))])
-    return(NULL)
-  }
-  if (is.null(old[[hit]]$seen)) return(old[[hit]]$prep)
+  for (e in old) if (identical(e$x, x) && identical(e$y, y)) return(e$prep)
   N <- nrow(x); P1 <- ncol(x) + 1L
   prep <- NULL
   if (N > P1 && all(is.finite(x)) && all(is.finite(y))) {
@@ -238,8 +234,7 @@ normal_glm_prep <- function(y, x) {
       prep <- list(R = qr.R(q), piv = q$pivot, c = qty[seq_len(P1)], r2 = sum(qty[-seq_len(P1)]^2), N = N)
     }
   }
-  old[[hit]] <- list(x = x, y = y, prep = prep)
-  .glm_cache$entries <- old
+  .glm_cache$entries <- c(list(list(x = x, y = y, prep = prep)), old[seq_len(min(length(old), glm_cache_size - 1L))])
   prep
 }
 normal_glm_prepared <- function(y, x, alpha, beta, sigma, propto) {

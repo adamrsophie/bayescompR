@@ -68,11 +68,11 @@ split_setup <- function(model, n_name, subset) {
 #' @param n_name Name of the observation count in the data.
 #' @param subset Optional `function(data, idx)` returning the data for the
 #'   observations `idx` (with `idx = integer(0)` for the prior).
+#' @param chains,iter_warmup,iter_sampling,thin,init,seed,cores As in
+#'   [bayescomp_sample()].
 #' @param lp_every The exact `lp__` needs the full data, so it is computed
 #'   at every `lp_every`-th saved draw only and is `NA` at the others; `0`
 #'   never computes it. The draws do not depend on it.
-#' @param chains,iter_warmup,iter_sampling,thin,init,seed,cores As in
-#'   [bayescomp_sample()].
 #' @return A `bayescomp_fit` with method `"sgmcmc"`.
 #' @references Welling, M. and Teh, Y. W. (2011). Bayesian learning via
 #'   stochastic gradient Langevin dynamics. *ICML*. Chen, T., Fox, E. and
@@ -88,8 +88,8 @@ split_setup <- function(model, n_name, subset) {
 #' @export
 bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32L, step_size = NULL,
                              friction = 0.1, n_name = "N", subset = NULL, chains = 4L, iter_warmup = 500L,
-                             iter_sampling = 2000L, thin = 1L, lp_every = 1L, init = 2, seed = NULL,
-                             cores = getOption("mc.cores", 1L)) {
+                             iter_sampling = 2000L, thin = 1L, init = 2, seed = NULL, cores = getOption("mc.cores", 1L),
+                             lp_every = 1L) {
   check_model(model)
   method <- match.arg(method)
   lp_every <- as_count(lp_every, "lp_every")
