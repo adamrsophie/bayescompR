@@ -495,7 +495,17 @@ model_fun <- function(model, which) {
       log_prob = alist(.u = , .ctx = ),
       write = alist(.u = , .ctx = , .tp = , .gq = ),
       unconstrain = alist(.vals = ))
-    f <- make_function(fm, body, model$env)
+    g <- make_function(fm, body, model$env)
+    # data dependent factorizations made during the call belong to this
+    # instance (see normal_glm_prep())
+    store <- model$env$.glm_store
+    if (is.null(store)) store <- model$env$.glm_store <- new.env(parent = emptyenv())
+    f <- function(...) {
+      prev <- .glm_cache$cur
+      .glm_cache$cur <- store
+      on.exit(.glm_cache$cur <- prev)
+      g(...)
+    }
     assign(key, f, envir = model$env)
   }
   f

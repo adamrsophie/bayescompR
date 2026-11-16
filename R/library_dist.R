@@ -217,13 +217,15 @@ lp_normal_id_glm <- function(y, x, alpha, beta, sigma, propto) {
 # A = [1 | x] and c, r2 from Q'y. Each evaluation is then O(P^2) instead of
 # O(N P). The path depends only on the data, never on what was evaluated
 # before, so results do not change with call history.
-# ponytail: identity keyed cache of glm_cache_size pairs; data cycling
-# through more pairs (many minibatches) refactor at each call, bind the
-# factorization to the model instance if that matters
+# The factorizations are owned by the model instance (see model_fun()), so
+# models made for many data subsets (SG-MCMC minibatches, EP sites) each
+# keep their own; calls outside a model use a shared store.
+# ponytail: identity keyed list of glm_cache_size pairs per instance
 .glm_cache <- new.env(parent = emptyenv())
 glm_cache_size <- 64L
 normal_glm_prep <- function(y, x) {
-  old <- .glm_cache$entries
+  store <- .glm_cache$cur %||% .glm_cache
+  old <- store$entries
   for (e in old) if (identical(e$x, x) && identical(e$y, y)) return(e$prep)
   N <- nrow(x); P1 <- ncol(x) + 1L
   prep <- NULL
@@ -234,7 +236,7 @@ normal_glm_prep <- function(y, x) {
       prep <- list(R = qr.R(q), piv = q$pivot, c = qty[seq_len(P1)], r2 = sum(qty[-seq_len(P1)]^2), N = N)
     }
   }
-  .glm_cache$entries <- c(list(list(x = x, y = y, prep = prep)), old[seq_len(min(length(old), glm_cache_size - 1L))])
+  store$entries <- c(list(list(x = x, y = y, prep = prep)), old[seq_len(min(length(old), glm_cache_size - 1L))])
   prep
 }
 normal_glm_prepared <- function(y, x, alpha, beta, sigma, propto) {
@@ -1455,31 +1457,35 @@ vec_rows <- function(x) {
 
 lp_dirichlet <- function(theta, alpha, propto) {
   f <- "dirichlet_lpdf"
-  th <- vec_rows(theta)
-  al <- vec_rows(alpha)
-  N <- max(length(th), length(al))
-  if (length(th) != 1L && length(al) != 1L && length(th) != length(al)) stop_shape(sprintf("%s: size mismatch", f))
-  for (a in al) chk_positive_finite(f, "prior sample sizes", a)
-  for (t in th) {
-    m <- simplex_check(val(t))
+  # columns of K x n matrices in the order of the original rows
+  tc <- vec_cols(theta)
+  ac <- vec_cols(alpha)
+  if (tc$n != 1L && ac$n != 1L && tc$n != ac$n) stop_shape(sprintf("%s: size mismatch", f))
+  if (tc$n == 0L || ac$n == 0L) return(0)
+  N <- max(tc$n, ac$n)
+  chk_positive_finite(f, "prior sample sizes", ac$M)
+  V <- matrix(val(tc$M), tc$K)
+  bad <- which(colSums(is.na(V) | V < 0, na.rm = TRUE) > 0 | !(abs(colSums(V) - 1) <= 1e-8))
+  for (j in bad) {
+    m <- simplex_check(V[, j])
     if (!is.null(m)) stop_domain(paste(f, ": probabilities", m))
   }
-  K <- nelem(th[[1L]])
-  for (x in c(th, al)) if (nelem(x) != K) stop_shape(sprintf("%s: size mismatch", f))
+  K <- tc$K
+  if (ac$K != K) stop_shape(sprintf("%s: size mismatch", f))
   lp <- 0
   if (N == 1L) {
-    t <- as_dbl(th[[1L]]); a <- as_dbl(al[[1L]])
+    t <- tc$M; a <- ac$M
     if (inc(propto, a)) lp <- lp + lgamma(ad_sum(a)) - ad_sum(lgamma(a))
     if (inc(propto, t, a)) lp <- lp + ad_sum(ad_mult_log(a - 1, t))
     return(lp)
   }
   # all observations at once (columns of K x N matrices)
-  A <- stack_cols(al, N, K)
+  A <- cols_to(ac, N)
   if (inc(propto, alpha)) {
-    lp <- lp + (if (length(al) == 1L) N * (lgamma(ad_sum(as_dbl(al[[1L]]))) - ad_sum(lgamma(as_dbl(al[[1L]]))))
-                else ad_sum(lgamma(ad_matmul(matrix(1, 1L, K), A))) - ad_sum(lgamma(A)))
+    lp <- lp + (if (ac$n == 1L) N * (lgamma(ad_sum(ac$M)) - ad_sum(lgamma(ac$M)))
+                else ad_sum(lgamma(ad_matmul(matrix(1, 1L, K), ac$M))) - ad_sum(lgamma(ac$M)))
   }
-  if (inc(propto, theta, alpha)) lp <- lp + ad_sum(ad_mult_log(A - 1, stack_cols(th, N, K)))
+  if (inc(propto, theta, alpha)) lp <- lp + ad_sum(ad_mult_log(A - 1, cols_to(tc, N)))
   lp
 }
 defdist("dirichlet", c("vectors", "vectors"), lp_dirichlet,
@@ -1530,14 +1536,6 @@ mvn_core <- function(f, y, mu, logdet_half, solve_fn, propto, depends) {
   # one solve
   if (N == 1L) return(lp - 0.5 * solve_fn(yc$M - mc$M))
   lp - 0.5 * solve_fn(cols_to(yc, N) - cols_to(mc, N))
-}
-# K x N matrix whose columns are the vectors xs (one vector is repeated)
-stack_cols <- function(xs, N, K) {
-  if (length(xs) == 1L) {
-    x <- as_dbl(xs[[1L]])
-    return(ad_gather(x, rep(seq_len(K), N), c(K, N)))
-  }
-  ad_reshape(ad_c(lapply(xs, as_dbl)), c(K, N))
 }
 # Cholesky factor and half log determinant of a covariance or precision
 # matrix that is data: the last one is kept, so a fixed matrix is factored
@@ -1757,7 +1755,38 @@ chol_jac <- function(L) {
   ld <- log(ad_gather(as_dbl(L), (seq_len(K) - 1L) * K + seq_len(K)))
   K * log(2) + ad_sum((K - seq_len(K) + 1) * ld)
 }
+# Densities of Cholesky factors computed from the factors: log determinants
+# from their diagonals and the trace term as ||L1^-1 L2||_F^2 through one
+# triangular solve, instead of forming W and S and factoring them again.
+# Taken when both factors are finite, lower triangular (zero upper
+# triangle) with a positive diagonal; as in Stan the upper triangle is not
+# read. Anything else goes through the covariance matrices.
+wishart_chol_direct <- function(f, LW, nu, LS, propto, inverse) {
+  vW <- val(LW); vS <- val(LS)
+  tri_ok <- function(v) is.matrix(v) && nrow(v) == ncol(v) && all(is.finite(v)) && all(v[upper.tri(v)] == 0) && all(diag(v) > 0)
+  if (!tri_ok(vW) || !tri_ok(vS) || nrow(vW) != nrow(vS)) return(NULL)
+  K <- nrow(vW)
+  if (val(nu) <= K - 1) stop_domain(sprintf("%s: Degrees of freedom must be greater than %d", f, K - 1L))
+  # only the lower triangles carry adjoints
+  lo <- which(lower.tri(vW, diag = TRUE))
+  low <- function(L) if (is_ad(L)) ad_scatter(matrix(0, K, K), lo, ad_gather(L, lo)) else L
+  nu <- as_dbl(nu); LW <- low(LW); LS <- low(LS)
+  dg <- (seq_len(K) - 1L) * K + seq_len(K)
+  ldS <- 2 * ad_sum(log(ad_gather(LS, dg)))
+  ldW <- 2 * ad_sum(log(ad_gather(LW, dg)))
+  lp <- 0
+  if (inc(propto, nu)) lp <- lp - nu * K / 2 * log(2) - .lib$lmgamma[[1L]]$impl(K, nu / 2)
+  if (inc(propto, nu, LS)) lp <- lp + (if (inverse) 1 else -1) * nu / 2 * ldS
+  if (inc(propto, nu, LW)) lp <- lp + (if (inverse) -(nu + K + 1) else nu - K - 1) / 2 * ldW
+  if (inc(propto, LW, LS)) {
+    M <- if (inverse) ad_tri_solve(LW, LS, f) else ad_tri_solve(LS, LW, f)
+    lp <- lp - 0.5 * ad_sum(M * M)
+  }
+  lp + (if (inc(propto, LW)) chol_jac(LW) else 0)
+}
 lp_wishart_cholesky <- function(LW, nu, LS, propto) {
+  lp <- wishart_chol_direct("wishart_lpdf", LW, nu, LS, propto, FALSE)
+  if (!is.null(lp)) return(lp)
   LW <- as_dbl(LW); LS <- as_dbl(LS)
   W <- ad_matmul(LW, ad_transpose(LW))
   S <- ad_matmul(LS, ad_transpose(LS))
@@ -1768,6 +1797,8 @@ def("wishart_cholesky_rng", c("real", "matrix"), "matrix", function(nu, LS) {
   t(chol(stats::rWishart(1L, val(nu), val(LS) %*% t(val(LS)))[, , 1L]))
 }, rng = TRUE)
 lp_inv_wishart_cholesky <- function(LW, nu, LS, propto) {
+  lp <- wishart_chol_direct("inv_wishart_lpdf", LW, nu, LS, propto, TRUE)
+  if (!is.null(lp)) return(lp)
   LW <- as_dbl(LW); LS <- as_dbl(LS)
   W <- ad_matmul(LW, ad_transpose(LW))
   S <- ad_matmul(LS, ad_transpose(LS))

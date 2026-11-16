@@ -533,14 +533,40 @@ gp_ard_scale <- function(name, x, l) {
   as_dbl(x) / ad_gather(as_dbl(l), rep(seq_len(ncol(v)), each = nrow(v)), dim(v))
 }
 gp_kernel_ard <- function(name, kfun) {
+  sqexp <- identical(kfun, k_sqexp)
   def(name, c("vector[]", "real", "real[]"), "matrix", function(x, s, l) {
     chk_positive(name, "magnitude", s)
+    if (sqexp && !is_ad(x) && any_ad(s, l)) return(gp_sqexp_ard_fixed(name, x, x, s, l))
     xs <- gp_ard_scale(name, x, l)
     kfun(gp_sqdist(xs, xs), as_dbl(s), 1)
   })
   def(name, c("vector[]", "vector[]", "real", "real[]"), "matrix", function(x1, x2, s, l) {
     chk_positive(name, "magnitude", s)
+    if (sqexp && !any_ad(x1, x2) && any_ad(s, l)) return(gp_sqexp_ard_fixed(name, x1, x2, s, l))
     kfun(gp_sqdist(gp_ard_scale(name, x1, l), gp_ard_scale(name, x2, l)), as_dbl(s), 1)
+  })
+}
+# Squared exponential ARD covariance of fixed inputs as one node: the
+# forward pass is the one the general path computes; the reverse pass
+# accumulates the magnitude and length scale adjoints from the kept
+# covariance, recomputing the differences of one input dimension at a time,
+# instead of a tape of gathers and products per dimension.
+gp_sqexp_ard_fixed <- function(name, x1, x2, s, l) {
+  v1 <- val(x1); v2 <- val(x2)
+  chk_positive(name, "length scale", l)
+  vl <- as.numeric(val(l))
+  if (ncol(v1) != length(vl) || ncol(v2) != length(vl)) stop_shape(sprintf("%s: the number of length scales must equal the dimension of the inputs", name))
+  Z1 <- v1 / rep(vl, each = nrow(v1))
+  Z2 <- v2 / rep(vl, each = nrow(v2))
+  dd <- function(k) outer(Z1[, k], Z2[, k], `-`)
+  d2 <- 0
+  for (k in seq_along(vl)) d2 <- d2 + dd(k)^2
+  vs <- val(s)
+  C <- vs * vs * exp(-0.5 * d2)
+  ad_node(C, list(s, l), function(g) {
+    W <- g * C
+    list(if (is_ad(s)) 2 * sum(W) / vs,
+         if (is_ad(l)) vapply(seq_along(vl), function(k) sum(W * dd(k)^2) / vl[k], 0))
   })
 }
 gp_kernel_ard("gp_exp_quad_cov", k_sqexp)
