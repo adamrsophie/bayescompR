@@ -225,17 +225,18 @@ cx_mul_ew <- function(a, b) {
 }
 # a^b elementwise with scalar broadcasting, as exp(b log a); 0^b is 0
 cx_pow_ew <- function(a, b) {
-  out <- cx_exp(cx_mul_ew(b, cx_log(a)))
-  za <- cx_value(a)
-  if (any(za == 0)) {
-    # ponytail: the zero base is patched in value only (no derivative through it)
-    zv <- cx_value(out)
-    zb <- cx_value(b)
-    zero <- rep_len(as.vector(za) == 0, length(zv)) & Re(rep_len(as.vector(zb), length(zv))) > 0
-    zv[zero] <- 0
-    out <- cx_from_z(zv, cx_edims(out))
-  }
-  out
+  za <- as.vector(cx_value(a))
+  if (!any(za == 0)) return(cx_exp(cx_mul_ew(b, cx_log(a))))
+  # a zero base gives 0^0 = 1 and 0^b = 0 for Re(b) > 0; it is replaced by 1
+  # before the logarithm, so the other elements keep their derivatives and
+  # no 0 * Inf reaches them
+  z0 <- za == 0
+  a1 <- ad_reshape(ad_ifelse(rep(z0, 2L), c(rep(1, length(za)), rep(0, length(za))), a), dim(val(a)))
+  out <- cx_exp(cx_mul_ew(b, cx_log(a1)))
+  n <- cx_n(out)
+  zb <- rep_len(as.vector(cx_value(b)), n)
+  r0 <- ifelse(zb == 0, 1, ifelse(Re(zb) > 0, 0, NaN))
+  ad_reshape(ad_ifelse(rep(rep_len(z0, n), 2L), c(r0, rep(0, n)), out), dim(val(out)))
 }
 
 holo_funs <- list(
@@ -257,20 +258,20 @@ holo_funs <- list(
   atanh = list(atanh, function(z, w) 1 / (1 - z * z)))
 for (nm in names(holo_funs)) local({
   f <- holo_funs[[nm]]
-  def(nm, "complex", "complex", function(x) cx_holo(x, f[[1L]], f[[2L]]))
+  def(nm, "complex", "complex", function(x) cx_holo(x, f[[1L]], f[[2L]]), cxargs = TRUE)
 })
 def("proj", "complex", "complex", function(x) {
   z <- cx_value(x)
   if (is.infinite(Re(z)) || is.infinite(Im(z))) return(c(Inf, if (Im(z) < 0 || (Im(z) == 0 && 1 / Im(z) < 0)) -0 else 0))
   x
-})
+}, cxargs = TRUE)
 def("polar", c("real", "real"), "complex", function(r, theta) {
   r <- as_dbl(r); theta <- as_dbl(theta)
   if (val(r) < 0 || is.nan(val(r))) stop_domain(sprintf("polar: magnitude is %s, but must be nonnegative", fmt_num(val(r))))
   cx_make(r * cos(theta), r * sin(theta), integer(0))
 })
-def("arg", "complex", "real", cx_arg)
-def("norm", "complex", "real", cx_norm)
+def("arg", "complex", "real", cx_arg, cxargs = TRUE)
+def("norm", "complex", "real", cx_norm, cxargs = TRUE)
 
 # all complex types (any array dimensions)
 r_realpart <- function(types) ty_realpart(types[[1L]])

@@ -242,7 +242,7 @@ rt_dist_call <- function(fname, f, mask, ...) {
 rt_target_add <- function(ctx, v) {
   if (is.null(ctx)) stop_semantic("target can only be incremented in a log density context")
   vv <- val(v)
-  if (any(is.nan(vv))) stop_domain("target increment is NaN")
+  if (anyNA(vv)) stop_domain("target increment is NaN")
   n <- ctx$n_target + 1L
   # detach the list before writing so R modifies it in place instead of
   # copying it on every increment, and grow it by doubling

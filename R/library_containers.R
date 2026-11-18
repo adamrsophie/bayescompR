@@ -54,13 +54,15 @@ def("min", "int[]", "int", function(x) {
   if (!length(x)) stop_domain("min: integer array of size zero")
   min(x)
 })
+# the position of the extreme value; a NaN is the result, as in Stan
+which_ext <- function(v, w) if (anyNA(v)) which(is.na(v))[1L] else w(v)
 def("max", "container", "real", function(x) {
   if (!nelem(x)) return(-Inf)
-  ad_select(flat(as_dbl(x)), which.max(as.vector(val(x))))
+  ad_select(flat(as_dbl(x)), which_ext(as.vector(val(x)), which.max))
 })
 def("min", "container", "real", function(x) {
   if (!nelem(x)) return(Inf)
-  ad_select(flat(as_dbl(x)), which.min(as.vector(val(x))))
+  ad_select(flat(as_dbl(x)), which_ext(as.vector(val(x)), which.min))
 })
 def("norm1", "vecs1", "real", function(x) ad_sum(abs(as_dbl(x))))
 def("norm2", "vecs1", "real", function(x) sqrt(ad_sum(as_dbl(x) * as_dbl(x))))

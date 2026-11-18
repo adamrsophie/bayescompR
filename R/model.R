@@ -160,7 +160,7 @@ bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL
   prov <- stats::setNames(as.list(ifelse(caps %in% used, be$name, "r")), caps)
   out <- structure(list(code = src, ir = ir, compiled = m, env = inst$env, decls = inst$decls,
                         params = inst$params, dim = inst$dim, data = data, backend = be$name,
-                        provenance = prov, native = NULL, reads_target = ir_reads_target(ir)),
+                        provenance = prov, native = NULL),
                    class = "bayescomp_model")
   if (be$name == "r") return(out)
   core <- setdiff(c("log_density", "gradient"), be$capabilities)
@@ -175,20 +175,6 @@ bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL
     stop(sprintf("backend '%s' did not return a log_density_gradient function", be$name), call. = FALSE)
   out$native <- native
   out
-}
-
-# does the program read target() (in any block or function)? Its value then
-# depends on whether constants are dropped, so a nonlinear use of it makes
-# the normalized and the proportional densities differ by more than a
-# constant
-ir_reads_target <- function(e) {
-  if (!is.list(e)) return(FALSE)
-  if (identical(e$builtin, "target")) return(TRUE)
-  for (k in names(e) %||% seq_along(e)) {
-    if (k %in% c("loc", "type", "sig")) next
-    if (is.list(e[[k]]) && ir_reads_target(e[[k]])) return(TRUE)
-  }
-  FALSE
 }
 
 # log density and gradient on the unconstrained scale from the model's
@@ -370,7 +356,7 @@ decl_info <- function(d, env) {
   info
 }
 
-instantiate <- function(m, data, generate = FALSE) {
+instantiate <- function(m, data, generate = FALSE, unchecked = character()) {
   ns <- environment(rt_decl)
   fenv <- new.env(parent = ns)
   for (f in m$funs) assign(f$name, make_function(f$formals, f$body, fenv), envir = fenv)
@@ -400,7 +386,7 @@ instantiate <- function(m, data, generate = FALSE) {
     env$.decls <- decls
     args <- eval(cg_cons_args(d$type), env)
     msg <- check_variable(v, info, args)
-    if (!is.null(msg)) stop_data(sprintf("variable '%s' %s", d$name, msg))
+    if (!is.null(msg) && !d$name %in% unchecked) stop_data(sprintf("variable '%s' %s", d$name, msg))
   }
   if (generate) return(gen)
   extra <- setdiff(names(data), vapply(m$data_decls, `[[`, "", "name"))

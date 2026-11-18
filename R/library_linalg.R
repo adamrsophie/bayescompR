@@ -11,6 +11,11 @@ sym_check <- function(f, A, tol = 1e-8) {
   if (any(!is.finite(v))) stop_domain(sprintf("%s: matrix has non-finite elements", f))
   if (max(abs(v - t(v)), 0) > tol * max(1, max(abs(v)))) stop_domain(sprintf("%s: matrix is not symmetric", f))
 }
+# symmetric and positive definite, as Stan's check_pos_definite
+spd_check <- function(f, A) {
+  sym_check(f, A)
+  if (inherits(try(chol(val(A)), silent = TRUE), "try-error")) stop_domain(sprintf("%s: matrix is not positive definite", f))
+}
 square_check <- function(f, A) {
   v <- val(A)
   if (nrow(v) != ncol(v)) stop_domain(sprintf("%s: matrix is not square (%d x %d)", f, nrow(v), ncol(v)))
@@ -61,7 +66,9 @@ ad_log_det <- function(A) {
   d <- determinant(vA, logarithm = TRUE)
   y <- as.numeric(d$modulus)
   if (!is_ad(A)) return(y)
-  ad_node(y, list(A), function(g) list(g * t(solve(vA))))
+  # at a singular matrix the inverse does not exist and the gradient is not
+  # finite, so the point is rejected
+  ad_node(y, list(A), function(g) list(g * t(tryCatch(solve(vA), error = function(e) vA * NaN))))
 }
 def("log_determinant", "matrix", "real", ad_log_det)
 def("log_determinant_spd", "matrix", "real", function(A) {
@@ -75,7 +82,14 @@ def("determinant", "matrix", "real", function(A) {
   vA <- val(A)
   y <- det(vA)
   if (!is_ad(A)) return(y)
-  ad_node(y, list(A), function(g) list(g * y * t(solve(vA))))
+  # the gradient is the cofactor matrix, from the SVD A = U S V' as
+  # det(U) det(V) U diag(prod of the other singular values) V', which also
+  # holds at a singular matrix
+  ad_node(y, list(A), function(g) {
+    s <- svd(vA)
+    p <- vapply(seq_along(s$d), function(i) prod(s$d[-i]), 0)
+    list(g * sign(det(s$u)) * sign(det(s$v)) * (s$u %*% (p * t(s$v))))
+  })
 })
 
 # solve A x = B
@@ -102,10 +116,10 @@ ad_solve <- function(A, B, f = "mdivide_left") {
 def("mdivide_left", c("matrix", "vector"), "vector", function(A, b) ad_solve(A, b))
 def("mdivide_left", c("matrix", "matrix"), "matrix", function(A, B) ad_solve(A, B))
 def("mdivide_left_spd", c("matrix", "vector"), "vector", function(A, b) {
-  sym_check("mdivide_left_spd", A); ad_solve(A, b, "mdivide_left_spd")
+  spd_check("mdivide_left_spd", A); ad_solve(A, b, "mdivide_left_spd")
 })
 def("mdivide_left_spd", c("matrix", "matrix"), "matrix", function(A, B) {
-  sym_check("mdivide_left_spd", A); ad_solve(A, B, "mdivide_left_spd")
+  spd_check("mdivide_left_spd", A); ad_solve(A, B, "mdivide_left_spd")
 })
 # B / A = B * inverse(A) = t(solve(t(A), t(B)))
 mdivide_right_impl <- function(B, A, rowvec = FALSE) {
@@ -560,9 +574,14 @@ gp_ard_fixed_d2 <- function(name, x1, x2, l) {
   v1 <- val(x1); v2 <- val(x2)
   chk_positive(name, "length scale", l)
   if (ncol(v1) != nelem(l) || ncol(v2) != nelem(l)) stop_shape(sprintf("%s: the number of length scales must equal the dimension of the inputs", name))
-  il2 <- 1 / (as_dbl(l) * as_dbl(l))
+  # scale the differences, then square: squaring a tiny length scale first
+  # underflows and gives 0 * Inf on the diagonal
+  il <- flat(1 / as_dbl(l))
   d2 <- 0
-  for (k in seq_len(ncol(v1))) d2 <- d2 + outer(v1[, k], v2[, k], `-`)^2 * ad_select(flat(il2), k)
+  for (k in seq_len(ncol(v1))) {
+    z <- outer(v1[, k], v2[, k], `-`) * ad_select(il, k)
+    d2 <- d2 + z * z
+  }
   d2
 }
 # Squared exponential ARD covariance of fixed inputs as one node: the

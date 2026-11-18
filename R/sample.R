@@ -125,6 +125,8 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
       stop("the model and the fit in 'resume' have different numbers of parameters", call. = FALSE)
     chains <- length(resume$unconstrained)
     old <- resume$config
+    if (!missing(algorithm) && !identical(algorithm[1L], old$algorithm))
+      warning(sprintf("'algorithm' is ignored when resuming: the chains continue with %s", old$algorithm), call. = FALSE)
     algorithm <- old$algorithm
     metric <- old$metric
     iter_warmup <- 0L
@@ -141,14 +143,15 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
       if (eval(call("missing", as.name(a)))) assign(a, prev)
       else if (!isTRUE(all.equal(get(a), prev, check.attributes = FALSE))) changed <- c(changed, a)
     }
-    given_step <- !missing(step_size)
-    given_metric <- !missing(inv_metric)
+    given_step <- !missing(step_size) && !is.null(step_size)
+    given_metric <- !missing(inv_metric) && !is.null(inv_metric)
     changed <- c(changed, if (given_step) "step_size", if (given_metric) "inv_metric")
     # an exact continuation needs the same model and data; anything else is
     # a warm start from the last state
     # (random numbers drawn in transformed data must also be the same)
     same_model <- identical(model$code, resume$model$code) && identical(model$data, resume$model$data) &&
-      (!ir_calls_rng(model$ir$blocks[["transformed data"]]) || identical(model$compiled$seed, resume$model$compiled$seed))
+      (!ir_calls_rng(model$ir$blocks[["transformed data"]]) ||
+         (!is.null(model$compiled$seed) && identical(model$compiled$seed, resume$model$compiled$seed)))
     if (!same_model)
       warning("the model or data differ from those of the fit in 'resume': its chains start from their last state, ",
               "but without their random number streams, so this is not an exact continuation", call. = FALSE)
@@ -212,11 +215,18 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
       cf$center <- fin$center
       cf$sampling_offset <- fin$n_sampling %||% 0L
     } else q0 <- find_init(model, init, id, gradient = !(algorithm %in% c("metropolis", "slice", "elliptical_slice", "fixed_param")))
+    # generated quantities draw from their own substream of the chain's
+    # stream, so a continuation also continues them and their draws do not
+    # overlap the transitions of the next run
+    gq_rng <- if (!is.null(resume) && same_model && isTRUE(fin$exact) && !is.null(fin$gq_rng)) fin$gq_rng
+              else parallel::nextRNGSubStream(get(".Random.seed", envir = globalenv()))
     out <- if (n == 0L || algorithm == "fixed_param") fixed_param_chain(cf, q0) else run_hmc_chain(model, q0, cf, id)
+    assign(".Random.seed", gq_rng, envir = globalenv())
     # after an interrupt, a second one (a parallel chain is signaled again
     # by the parent) must not lose the draws kept
     out$gq <- if (isTRUE(out$interrupted)) suspendInterrupts(chain_write_draws(model, out$q, show_print))
               else chain_write_draws(model, out$q, show_print)
+    out$final$gq_rng <- get(".Random.seed", envir = globalenv())
     out
   })
   res <- interrupted_chains(res)
@@ -224,7 +234,7 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
     # exact only when every chain finished (was not interrupted) and kept
     # its state and random number stream
     complete <- length(resume$final) == chains && !isTRUE(resume$interrupted) &&
-      all(vapply(resume$final, function(f) isTRUE(f$exact) && !is.null(f$rng) && !is.null(f$q), TRUE))
+      all(vapply(resume$final, function(f) isTRUE(f$exact) && !is.null(f$rng) && !is.null(f$gq_rng) && !is.null(f$q), TRUE))
     cfg$resume <- list(exact = same_model && complete && !length(changed), changed = changed)
   }
   fit <- make_fit(model, res, cfg, method = "sample", seed = seed, elapsed = proc.time()[["elapsed"]] - t0)

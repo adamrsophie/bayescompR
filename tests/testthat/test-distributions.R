@@ -112,13 +112,13 @@ test_that("rng functions draw from the right distributions", {
 
 test_that("edge cases of special functions and densities", {
   m <- bayescomp_model("generated quantities {
-    real g0 = gamma_lpdf(0 | 1, 2);
     real h1 = hypergeometric_2F1(1, 1, 2, -3);
     real h2 = hypergeometric_2F1(1, 1, 2, 0.4);
     real ie = inv_erfc(0.3);
   }")
   v <- bayescomp_constrain(m, numeric(0))
-  expect_equal(v$g0, log(2))
+  # Stan 2.40 requires a positive gamma variate
+  expect_error(lib_fun("gamma_lpdf")(0, 1, 2), "must be positive")
   expect_equal(v$h1, log(4) / 3, tolerance = 1e-10)
   expect_equal(v$h2, -log(0.6) / 0.4, tolerance = 1e-10)
   expect_equal(2 * stats::pnorm(-v$ie * sqrt(2)), 0.3)

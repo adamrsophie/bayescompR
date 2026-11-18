@@ -162,6 +162,8 @@ cg_call <- function(e) {
   args <- lapply(e$args, cg_expr)
   if (isTRUE(sg$user)) {
     args <- Map(function(code, a, t) promote_to(code, a$type, t), args, e$args, sg$args)
+    # a density inside the function keeps its terms for these arguments
+    args <- cg_keep_args(unname(args), e$args)
     call <- cl_list(as.name(sg$mangled), c(unname(args), list(CTX)))
     # a user density called by its normalized name runs with propto off
     if (grepl("_(lpdf|lpmf)$", e$name)) call <- cl(rt_normalized, call, CTX)
@@ -281,6 +283,7 @@ cg_tilde <- function(st, once = FALSE) {
   sg <- st$sig
   call <- if (isTRUE(sg$user)) {
     aa <- Map(function(code, a, t) promote_to(code, a$type, t), c(list(lhs), args), c(list(st$lhs), st$args), sg$args)
+    aa <- cg_keep_args(unname(aa), c(list(st$lhs), st$args))
     cl_list(as.name(sg$mangled), c(unname(aa), list(CTX)))
   } else {
     types <- c(list(st$lhs$type), lapply(st$args, `[[`, "type"))
@@ -511,7 +514,7 @@ cg_stmt <- function(st, ctx) {
       if (st$op != "=") {
         bop <- substr(st$op, 1L, nchar(st$op) - 1L)
         fake <- list(kind = "binop", op = bop, a = lhs, b = rhs, type = binop_type(bop, lhs$type, rhs$type))
-        rcode <- cg_binop(fake)
+        rcode <- cg_expr(fake)
         rtype <- fake$type
       } else {
         rtype <- rhs$type
@@ -543,8 +546,14 @@ cg_stmt <- function(st, ctx) {
       else list(cl(as.name("if"), cl(truthy, cg_expr(st$cond)), th, blk(cg_stmt(st$els, ctx))))
     },
     "while" = list(cl(as.name("while"), cl(truthy, cg_expr(st$cond)), blk(cg_stmt(st$body, ctx)))),
-    "for" = list(cl(as.name("for"), vsym(st$var), cl(rt_range, cg_expr(st$lo), cg_expr(st$hi)),
-                    blk(cg_stmt(st$body, ctx)))),
+    "for" = if (loop_bound_varies(st$hi, st$body)) {
+      # the bound is tested again before every iteration
+      i <- vsym(st$var)
+      list(cl(as.name("<-"), i, cl(as.name("-"), cg_expr(st$lo), 1L)),
+           cl(as.name("while"), cl(as.name("{"), cl(as.name("<-"), i, cl(as.name("+"), i, 1L)), cl(as.name("<="), i, cg_expr(st$hi))),
+              blk(cg_stmt(st$body, ctx))))
+    } else list(cl(as.name("for"), vsym(st$var), cl(rt_range, cg_expr(st$lo), cg_expr(st$hi)),
+                   blk(cg_stmt(st$body, ctx)))),
     foreach = list(cl(as.name("for"), vsym(st$var), cl(rt_foreach, cg_expr(st$iter), st$iter$type$nd, st$iter$type$base),
                       blk(cg_stmt(st$body, ctx)))),
     "break" = list(quote(break)),

@@ -243,8 +243,16 @@ sem_decl_type <- function(s, t, need_data, bn, loc) {
 sem_size_expr <- function(s, e, need_data) {
   te <- sem_expr(s, e)
   if (!is_int_ty(te$type)) stop_semantic(sprintf("size must be an integer, found %s", ty_str(te$type)), te$loc)
-  if (need_data && !te$data_only) stop_semantic("sizes of top level variables must only depend on data", te$loc)
+  # integer expressions count as data elsewhere, so the variables read are
+  # checked too (to_int(floor(theta)) is an integer that is not data)
+  if (need_data && (!te$data_only || reads_nondata(te))) stop_semantic("sizes of top level variables must only depend on data", te$loc)
   te
+}
+reads_nondata <- function(e) {
+  if (!is.list(e)) return(FALSE)
+  if (identical(e$kind, "var") && isTRUE(e$origin %in% c("parameters", "transformed parameters", "generated quantities", "model"))) return(TRUE)
+  for (k in names(e) %||% seq_along(e)) if (!k %in% c("loc", "type", "sig") && is.list(e[[k]]) && reads_nondata(e[[k]])) return(TRUE)
+  FALSE
 }
 
 # ---- statements ---------------------------------------------------------------------

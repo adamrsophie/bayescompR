@@ -242,12 +242,21 @@ bshape <- function(a, b) {
   invisible(NULL)
 }
 
+# g * d where a zero adjoint gives zero even when d is not finite (an
+# element of a container that does not reach the result, such as the off
+# diagonal of sqrt(D) at 0, must not turn the gradient into NaN)
+gmul <- function(g, d) {
+  r <- g * d
+  if (anyNA(r)) r[rep_len(g == 0, length(r))] <- 0
+  r
+}
+
 # elementwise unary op with derivative function df(x, y) giving dy/dx
 ad_unary <- function(x, f, df) {
   vx <- val(x)
   y <- f(vx)
   if (!inherits(x, "bcad")) return(y)
-  ad_node(y, list(x), function(g) list(g * df(vx, y)))
+  ad_node(y, list(x), function(g) list(gmul(g, df(vx, y))))
 }
 
 # elementwise binary op; da(a, b, y), db(a, b, y) are partial derivatives
@@ -259,8 +268,8 @@ ad_binary <- function(a, b, f, da, db) {
   if (!inherits(a, "bcad") && !inherits(b, "bcad")) return(y)
   ad_node(y, list(a, b), function(g) {
     list(
-      if (inherits(a, "bcad")) unbroadcast(g * da(va, vb, y), va),
-      if (inherits(b, "bcad")) unbroadcast(g * db(va, vb, y), vb)
+      if (inherits(a, "bcad")) unbroadcast(gmul(g, da(va, vb, y)), va),
+      if (inherits(b, "bcad")) unbroadcast(gmul(g, db(va, vb, y)), vb)
     )
   })
 }
@@ -349,8 +358,8 @@ Summary.bcad <- function(..., na.rm = FALSE) {
   switch(.Generic,
     sum = ad_sum(x),
     prod = ad_prod(x),
-    max = ad_select(x, which.max(val(x))),
-    min = ad_select(x, which.min(val(x))),
+    max = ad_select(x, which_ext(val(x), which.max)),
+    min = ad_select(x, which_ext(val(x), which.min)),
     stop("unsupported summary ", .Generic, " for differentiable values", call. = FALSE))
 }
 

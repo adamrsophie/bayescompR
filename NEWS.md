@@ -39,8 +39,11 @@
   intervals above the median; the density was infinite.
 * Loop vectorization no longer rewrites a loop over a user defined density
   (whose scalar and vector overloads can differ), evaluates nothing for a
-  loop with no iterations, and leaves loops whose bounds read `target()`
-  or have effects as loops.
+  loop with no iterations, and leaves loops whose bounds read `target()`,
+  have effects or change in the body as loops.
+* A `for` loop tests its upper bound before every iteration, as Stan does,
+  when the bound reads `target()` or a variable the body assigns; it was
+  evaluated once.
 * The prepared `normal_id_glm()` factorization centers the data and
   standardizes the residuals, so data far from the origin and very small
   or large scales give the same value and gradient as the unfused
@@ -48,9 +51,11 @@
   error is not negligible against the scale.
 * Truncation of a density with a scalar outcome and vector parameters
   subtracts one normalizing term per element.
-* Metropolis, slice and the other samplers that use only density values
-  evaluate a program that reads `target()` with constants dropped, as HMC
-  does; with constants kept the two targets differ in shape.
+* Metropolis, slice, ensemble and Gibbs samplers evaluate the density with
+  constants dropped, as HMC does. The two targets differ by more than a
+  constant when a program reads `target()` or drops a data only statement
+  in a parameter dependent branch. Evidence estimators and model
+  probabilities keep the normalized density.
 * ARD covariance functions of fixed inputs (`gp_exp_quad_cov`, Matern and
   exponential with one length scale per dimension) take differences
   before scaling, so the covariance does not depend on the origin.
@@ -71,16 +76,47 @@
   observations outside their bounds are `-Inf`.
 * `bayescomp_sample(resume = )` reports an exact continuation only when
   every chain finished and kept its state and random number stream, and
-  transformed data random numbers are the same; `fixed_param` chains keep
-  their thinning phase.
+  transformed data random numbers are the same (with a seed);
+  `fixed_param` chains keep their thinning phase. Generated quantities
+  draw from their own substream of each chain's stream, so a continuation
+  also continues them instead of repeating or overlapping draws.
+  `step_size = NULL` and `inv_metric = NULL` keep the adapted values, and
+  a different `algorithm` warns that it is ignored.
 * Expectation propagation warns about sites whose update never succeeded
   and does not report convergence while one is missing.
 * Adaptation windows of one draw keep the metric; `bayescomp_hessian_vector()`
   scales its step by the coordinates the direction moves; the ODE
   `max_num_steps` applies between output times, as in Stan;
-  `multi_normal_cholesky` checks its Cholesky factor and `multi_student_t`
-  the sizes of its arguments; SG-MCMC rejects a nonpositive step size;
+  `multi_normal_cholesky` with arrays of vectors checks its Cholesky
+  factor (as Stan does) and `multi_student_t` the sizes of its arguments; SG-MCMC rejects a nonpositive step size;
   Laplace fits record the seed they drew.
+* Complex compound assignment (`z += 1`, `w *= z`) uses complex
+  arithmetic; `z ^ b` keeps the derivatives of the other elements when one
+  base is zero and gives `0 ^ 0 = 1`; `norm()`, `arg()`, `proj()` and the
+  complex elementary functions accept real arguments.
+* `categorical_logit_glm` with a `row_vector` of predictors uses every
+  outcome and checks the size of the intercepts, and its `_lupmf` is 0 for
+  data only arguments; `normal_id_glm` accepts a `vector` of predictors as
+  one column; a target increment that is `NA` is an error.
+* `gamma`, `rayleigh` and `loglogistic` densities require a positive
+  variate, as in Stan; `mdivide_left_spd` rejects a matrix that is not
+  positive definite.
+* `determinant()` has the cofactor gradient also at a singular matrix, and
+  `log_determinant()` rejects the point instead of failing.
+* `student_t` and `cauchy` densities are finite for residuals whose square
+  overflows.
+* `max()` and `min()` of a container with NaN return NaN.
+* Arguments of user defined functions called in the model block keep the
+  terms of `_lupdf` densities they reach, also after `floor()` of a
+  parameter.
+* A zero adjoint no longer turns an infinite elementwise derivative into
+  NaN, so `sqrt()` of a matrix with zeros has a finite gradient.
+* `return .5;` parses, and sizes of top level variables that depend on
+  parameters through an integer are a semantic error.
+* SG-MCMC, expectation propagation and nested sampling accept a model that
+  declares `int<lower=1> N`; parallel SMC and EP workers draw from seeds
+  per stage instead of overlapping streams, and a worker error is
+  reported.
 * `wishart_cholesky_lpdf()` and `inv_wishart_cholesky_lpdf()` reject
   matrices that are not Cholesky factors (lower triangular with a positive
   diagonal), as Stan does, instead of evaluating them through the
@@ -125,6 +161,9 @@
 * `mdivide_right_tri_low()` uses triangular solves.
 * The negative binomial precision partial no longer sums over large counts
   whose result is discarded.
+* The negative binomial precision partial is one vectorized digamma
+  difference (with a series where the precision is large) instead of a sum
+  per observation.
 * Cholesky factors are kept for up to four fixed covariance matrices.
 * Covariance transforms build their index layout once per shape.
 * Multivariate normal and Student t densities transpose arrays of vectors

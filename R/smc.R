@@ -158,10 +158,17 @@ bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinde
 eval_rows <- function(f, U, cores = 1L) {
   if (cores > 1L && .Platform$OS.type != "windows") {
     ch <- split(seq_len(nrow(U)), cut(seq_len(nrow(U)), cores, labels = FALSE))
-    unlist(parallel::mclapply(ch, function(ix) vapply(ix, function(i) f(U[i, ]), 0), mc.cores = cores), use.names = FALSE)
+    unlist(mc_checked(parallel::mclapply(ch, function(ix) vapply(ix, function(i) f(U[i, ]), 0), mc.cores = cores)), use.names = FALSE)
   } else {
     vapply(seq_len(nrow(U)), function(i) f(U[i, ]), 0)
   }
+}
+
+# results of mclapply, stopping on the first worker error
+mc_checked <- function(res) {
+  bad <- vapply(res, inherits, TRUE, what = "try-error")
+  if (any(bad)) stop("a parallel worker failed: ", conditionMessage(attr(res[[which(bad)[1L]]], "condition")), call. = FALSE)
+  res
 }
 
 systematic_resample <- function(w) {
@@ -243,7 +250,11 @@ smc_gradient_moves <- function(U, lg, lpv, beta, mu, L, Lc, eps, kernel, hmc_ste
     c(u, st$lg, st$lp, acc_sum / steps)
   }
   rows <- if (cores > 1L && .Platform$OS.type != "windows") {
-    parallel::mclapply(seq_len(N), one, mc.cores = cores)
+    # each particle gets its own seed drawn from the chain's stream at every
+    # stage; the streams mclapply derives would start a few draws apart from
+    # one stage to the next and repeat each other's numbers
+    base <- sample.int(.Machine$integer.max - N, 1L)
+    mc_checked(parallel::mclapply(seq_len(N), function(i) { set.seed(base + i); one(i) }, mc.cores = cores, mc.set.seed = FALSE))
   } else lapply(seq_len(N), one)
   M <- do.call(rbind, rows)
   n <- ncol(U)

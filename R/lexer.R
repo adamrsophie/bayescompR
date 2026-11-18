@@ -101,7 +101,8 @@ stan_lex <- function(src) {
     # tuple projection: x.1, f(x).2, t.2.1
     if (ch == "." && is_digit(peek(1L)) && nt > 0L) {
       pt <- toks[[nt]]
-      proj_ok <- pt$type == "ident" || (pt$type == "op" && pt$value %in% c(")", "]")) ||
+      # after a keyword such as return, .5 is a number
+      proj_ok <- (pt$type == "ident" && !pt$value %in% stan_reserved_words) || (pt$type == "op" && pt$value %in% c(")", "]")) ||
         (pt$type == "int" && nt > 1L && identical(toks[[nt - 1L]]$value, ".") && toks[[nt - 1L]]$type == "op")
       if (proj_ok) {
         advance()

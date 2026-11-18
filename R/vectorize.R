@@ -125,6 +125,26 @@ vec_effectful <- function(e) {
 
 vec_is_n <- function(e, n) identical(e$kind, "var") && identical(e$name, n)
 
+# names of the variables an AST reads
+ir_var_names <- function(e) {
+  if (!is.list(e)) return(character())
+  out <- if (identical(e$kind, "var") && is.character(e$name)) e$name else character()
+  for (k in names(e) %||% seq_along(e)) if (!k %in% c("loc", "type", "sig") && is.list(e[[k]])) out <- c(out, ir_var_names(e[[k]]))
+  unique(out)
+}
+
+# does a statement assign to any of the variables `vs`?
+ir_assigns_any <- function(st, vs) {
+  if (!is.list(st)) return(FALSE)
+  if (identical(st$kind, "assign") && any(vapply(vs, function(v) vec_mentions(st$lhs, v), TRUE))) return(TRUE)
+  for (k in names(st) %||% seq_along(st)) if (!k %in% c("loc", "type", "sig") && is.list(st[[k]]) && ir_assigns_any(st[[k]], vs)) return(TRUE)
+  FALSE
+}
+
+# Stan tests the upper bound of a for loop before every iteration; it can
+# change when it reads target() or a variable the body assigns
+loop_bound_varies <- function(hi, body) vec_effectful(hi) || ir_assigns_any(body, ir_var_names(hi))
+
 vec_scalar <- function(t) is.list(t) && identical(t$nd %||% 0L, 0L) && isTRUE(t$base %in% c("int", "real"))
 
 vec_for <- function(a, t) {
@@ -133,7 +153,8 @@ vec_for <- function(a, t) {
   if (vec_mentions(a$lo, n) || vec_mentions(a$hi, n)) return(NULL)
   # the bounds are evaluated once (and again by the guard below), which is
   # only the same as the loop when they cannot change between evaluations
-  if (vec_effectful(a$lo) || vec_effectful(a$hi)) return(NULL)
+  if (vec_effectful(a$lo) || vec_effectful(a$hi) || loop_bound_varies(a$hi, a$body) ||
+      ir_assigns_any(a$body, ir_var_names(a$lo))) return(NULL)
   abody <- vec_as_list(a$body); tbody <- vec_as_list(t$body)
   if (!length(abody) || length(abody) != length(tbody)) return(NULL)
   # variables written in the loop

@@ -20,11 +20,13 @@
 # log density without the gradient: the tape is disabled. Without a tape
 # every value is a constant, so propto would drop every sampling statement;
 # the full density is evaluated and, in the chain driver, shifted by a
-# constant so that lp__ matches the propto value used by HMC. A program that
-# reads target() is the exception: there the two conventions differ by more
-# than a constant, so it is evaluated with constants dropped, as for HMC
-# (recording a tape to know which terms are constant).
-lp_value_fun <- function(model, print = FALSE, jacobian = TRUE, propto = isTRUE(model$reads_target)) {
+# constant so that lp__ matches the propto value used by HMC. Samplers pass
+# propto = TRUE: the two conventions differ by more than a constant when a
+# program reads target() or drops a data only statement in a parameter
+# dependent branch, so samplers use Stan's (constants dropped, with a tape to
+# know which terms are constant). Evidence and model probability code needs
+# the normalized density and keeps the default.
+lp_value_fun <- function(model, print = FALSE, jacobian = TRUE, propto = FALSE) {
   if (!is.null(model$native)) {
     nat <- model$native
     fv <- nat[["log_density"]] %||% function(u, jacobian, propto) nat$log_density_gradient(u, jacobian, propto)$value

@@ -1030,10 +1030,8 @@ test_that("truncation normalizes every term of a broadcast density", {
 
 test_that("value only samplers use the proportional target of programs that read target()", {
   m <- bayescomp_model("parameters { real x; } model { x ~ std_normal(); target += 8 * log1p_exp(target()); }")
-  expect_true(m$reads_target)
-  f <- bayescompR:::lp_value_fun(m)
+  f <- bayescompR:::lp_value_fun(m, propto = TRUE)
   expect_equal(f(2) - f(0), bayescomp_log_prob(m, 2, propto = TRUE) - bayescomp_log_prob(m, 0, propto = TRUE))
-  expect_false(bayescomp_model("parameters { real x; } model { x ~ std_normal(); }")$reads_target)
 })
 
 test_that("ARD covariances of fixed inputs do not depend on the origin", {
@@ -1118,7 +1116,7 @@ test_that("resume of fixed_param keeps the thinning phase and exactness is check
 
 test_that("multivariate densities check sizes and Cholesky factors", {
   expect_error(lib_fun("multi_student_t_lpdf")(c(.1, .2), 3, 0, diag(2)), "size mismatch")
-  expect_error(lib_fun("multi_normal_cholesky_lpdf")(c(1, 2), c(0, 0), matrix(c(1, 0, 8, 1), 2)), "lower triangular")
+  expect_error(lib_fun("multi_normal_cholesky_lpdf")(rbind(c(1, 2), c(0, 1)), c(0, 0), matrix(c(1, 0, 8, 1), 2)), "lower triangular")
 })
 
 test_that("an adaptation window of one draw keeps the metric", {
@@ -1143,4 +1141,100 @@ test_that("the ODE step limit applies between output times", {
 test_that("SG-MCMC rejects a nonpositive step size", {
   m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; } model { y ~ normal(mu, 1); }", data = list(N = 4, y = 1:4))
   expect_error(bayescomp_sgmcmc(m, step_size = -0.01, chains = 1, iter_warmup = 2, iter_sampling = 2), "positive number")
+})
+
+test_that("evidence estimators keep the normalized density of programs that read target()", {
+  m <- bayescomp_model("parameters { real x; } model { x ~ normal(0, 1); if (0) print(target()); }")
+  lp <- bayescompR:::lp_value_fun(m)
+  expect_equal(lp(0.5), dnorm(0.5, log = TRUE))
+  expect_equal(bayescompR:::lp_value_fun(m, propto = TRUE)(0.5), -0.125)
+})
+
+test_that("value only samplers drop data only terms in parameter dependent branches", {
+  m <- bayescomp_model("parameters { real x; } model { x ~ normal(0, 1); if (x > 0) 0 ~ normal(0, 1); else 0 ~ normal(0, 5); }")
+  lp <- bayescompR:::lp_value_fun(m, propto = TRUE)
+  expect_equal(lp(1) - lp(-1), 0)
+})
+
+test_that("for loops test their upper bound before every iteration", {
+  m <- bayescomp_model("parameters { real x; } model { int K = 3; for (i in 1:K) { K -= 1; x ~ normal(0, 1); } }")
+  expect_equal(bayescomp_log_prob(m, 1, propto = FALSE), 2 * dnorm(1, log = TRUE))
+  m <- bayescomp_model("parameters { real x; } model { x ~ normal(0, 1); for (i in 1:2) if (target() > -2) x ~ normal(0, 1); }")
+  expect_equal(bayescomp_log_prob(m, 0, propto = FALSE), 3 * dnorm(0, log = TRUE))
+})
+
+test_that("resumed chains continue generated quantities without repeating draws", {
+  m <- bayescomp_model("parameters { real x; } model { x ~ normal(0, 1); } generated quantities { real z = normal_rng(0, 1); }")
+  d <- function(f) as.numeric(posterior::as_draws_matrix(f$draws)[, "z"])
+  r1 <- bayescomp_sample(m, chains = 1, iter_warmup = 30, iter_sampling = 10, seed = 3, refresh = 0)
+  r2 <- bayescomp_sample(m, resume = r1, iter_sampling = 10, refresh = 0)
+  r0 <- bayescomp_sample(m, chains = 1, iter_warmup = 30, iter_sampling = 20, seed = 3, refresh = 0)
+  expect_equal(c(d(r1), d(r2)), d(r0))
+  g <- bayescomp_model("generated quantities { real z = normal_rng(0, 1); }")
+  f1 <- bayescomp_sample(g, algorithm = "fixed_param", chains = 1, iter_sampling = 3, seed = 2, refresh = 0)
+  f2 <- bayescomp_sample(g, resume = f1, iter_sampling = 3, refresh = 0)
+  expect_false(any(d(f2) %in% d(f1)))
+  # a model without a seed whose transformed data draws random numbers
+  td <- "transformed data { real c = normal_rng(0, 1); } parameters { real b; } model { b ~ normal(c, 1); }"
+  a <- bayescomp_sample(bayescomp_model(td), chains = 1, iter_warmup = 5, iter_sampling = 2, seed = 1, refresh = 0)
+  expect_warning(r <- bayescomp_sample(bayescomp_model(td), resume = a, iter_sampling = 2, refresh = 0), "differ")
+  expect_false(r$config$resume$exact)
+})
+
+test_that("ARD distances, negative binomial and Student t stay finite at extremes", {
+  m <- bayescomp_model("parameters { real x; } model { target += sum(gp_exp_quad_cov({[0.0]', [1.0]'}, 1.0, {exp(-400 + x)})); }")
+  expect_equal(lp_and_grad(m, 0), c(2, 0))
+  m <- bayescomp_model("parameters { real x; } model { 1e160 ~ student_t(3, x, 1); }")
+  v <- lp_and_grad(m, 0)
+  expect_equal(v[1], lgamma(2) - lgamma(1.5) - 0.5 * log(3 * pi) - 2 * (2 * log(1e160) - log(3)))
+  expect_true(is.finite(v[2]))
+  nb <- bayescompR:::lgamma_ratio_dphi(c(0, 3, 500, 5), c(2, 1e-300, 1e12, 0.7))
+  expect_equal(nb[c(1, 2, 4)], c(0, digamma(3 + 1e-300) - digamma(1e-300), digamma(5.7) - digamma(0.7)))
+  expect_equal(nb[3], 500 / 1e12, tolerance = 1e-8)
+})
+
+test_that("determinants of singular matrices have a finite gradient", {
+  m <- bayescomp_model("parameters { real x; } model { target += determinant(diag_matrix([x, 1]')); }")
+  expect_equal(lp_and_grad(m, 0), c(0, 1))
+  m <- bayescomp_model("parameters { real x; } model { target += determinant([[x, 2], [3, x * x]]); }")
+  expect_equal(as.numeric(bayescomp_grad_log_prob(m, 1.5)), 3 * 1.5^2)
+  expect_error(lib_fun("mdivide_left_spd")(matrix(c(1, 2, 2, 1), 2), c(1, 1)), "positive definite")
+})
+
+test_that("complex compound assignment, powers at zero and real promotion", {
+  m <- bayescomp_model("generated quantities { complex z = to_complex(1, 2); z += 1; complex w = to_complex(1, 2); w *= to_complex(2, 3);
+    real n = norm(3.0); complex q = pow(to_complex(0, 0), to_complex(0, 0)); }")
+  v <- unclass(posterior::as_draws_matrix(bayescomp_sample(m, algorithm = "fixed_param", chains = 1, iter_sampling = 1, refresh = 0, seed = 1)$draws))[1, ]
+  expect_equal(unname(v[c("z[real]", "z[imag]", "w[real]", "w[imag]", "n", "q[real]", "q[imag]")]), c(2, 2, -4, 7, 9, 1, 0))
+  m <- bayescomp_model("parameters { real t; } model { complex_vector[2] z = [to_complex(0, 0), to_complex(t, 0)]'; target += get_real((z ^ 2)[2]); }")
+  expect_equal(lp_and_grad(m, 3), c(9, 6))
+})
+
+test_that("GLM densities with a shared row of x, a vector x, and short intercepts", {
+  m <- bayescomp_model("data { array[4] int y; row_vector[2] x; } parameters { vector[3] a; matrix[2, 3] B; } model { y ~ categorical_logit_glm(x, a, B); }",
+                       data = list(y = c(1L, 2L, 3L, 2L), x = c(0.5, -1)))
+  expect_equal(bayescomp_log_prob(m, rep(0, 9)), -4 * log(3))
+  m <- bayescomp_model("data { int y; row_vector[2] x; } parameters { vector[1] a; matrix[2, 3] B; } model { y ~ categorical_logit_glm(x, a, B); }",
+                       data = list(y = 2L, x = c(0.5, -1)))
+  expect_error(bayescomp_log_prob(m, rep(0, 7)), "size of alpha")
+  m <- bayescomp_model("data { vector[4] x; vector[4] y; } parameters { real a; vector[1] b; real<lower=0> s; } model { y ~ normal_id_glm(x, a, b, s); }",
+                       data = list(x = 1:4, y = 2 * (1:4)))
+  expect_equal(bayescomp_log_prob(m, c(0, 2, 0), propto = FALSE), 4 * dnorm(0, log = TRUE))
+})
+
+test_that("checks and edge cases match Stan", {
+  expect_error(lib_fun("rayleigh_lpdf")(0, 1), "must be positive")
+  expect_error(lib_fun("loglogistic_lpdf")(0, 1, 2), "must be positive")
+  m <- bayescomp_model("parameters { real x; } model { vector[2] v; real m = max(v); x ~ normal(0, 1); }")
+  expect_equal(bayescomp_log_prob(m, 0, propto = FALSE), dnorm(0, log = TRUE))
+  expect_equal(bayescomp_log_prob(bayescomp_model("functions { real h() { return .5; } } parameters { real x; } model { x ~ normal(h(), 1); }"), 0.5, propto = FALSE),
+               dnorm(0, log = TRUE))
+  expect_error(bayescomp_check("parameters { real<lower=1> s; } generated quantities { vector[to_int(floor(s))] v; }"), "only depend on data")
+  m <- bayescomp_model("functions { real my_lpdf(real y, real mu) { return normal_lupdf(y | mu, 1); } }
+    parameters { real x; } model { 1.5 ~ my(floor(x)); }")
+  expect_equal(bayescomp_log_prob(m, 1.2, propto = TRUE), -0.125)
+  m <- bayescomp_model("parameters { real<lower=0> t; } model { matrix[2, 2] K = sqrt([[0, 1], [1, 0]] / square(t)); target += K[1, 2]; }")
+  expect_true(is.finite(bayescomp_grad_log_prob(m, 0)))
+  m <- bayescomp_model("data { int<lower=1> N; vector[N] y; } parameters { real mu; } model { y ~ normal(mu, 1); }", data = list(N = 4, y = 1:4))
+  expect_no_error(bayescomp_sgmcmc(m, batch_size = 2, chains = 1, iter_warmup = 3, iter_sampling = 3, seed = 1))
 })

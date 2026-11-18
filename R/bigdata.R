@@ -9,7 +9,9 @@
 # The subset model uses the seed of the full model, so random numbers drawn
 # in transformed data (that do not depend on the subset) are the same in
 # every subset and in the full model.
-model_with_data <- function(model, data) {
+# `unchecked`: data variables whose constraints are not checked (the
+# observation count of the prior only model, 0 also when declared <lower=1>)
+model_with_data <- function(model, data, unchecked = character()) {
   if (is.null(model$compiled$seed) && ir_calls_rng(model$ir$blocks[["transformed data"]]))
     stop("transformed data draws random numbers; give the model a seed (bayescomp_model(seed = )) so that every data subset uses the same draws",
          call. = FALSE)
@@ -18,7 +20,7 @@ model_with_data <- function(model, data) {
     out <- bayescomp_model(model$code, data = data, backend = model$backend, seed = model$compiled$seed,
                            allow_fallback = any(unlist(model$provenance) == "r"))
   } else {
-    inst <- with_seed(model$compiled$seed, instantiate(model$compiled, data))
+    inst <- with_seed(model$compiled$seed, instantiate(model$compiled, data, unchecked = unchecked))
     out <- model
     out$env <- inst$env; out$decls <- inst$decls; out$data <- data; out$params <- inst$params; out$dim <- inst$dim
   }
@@ -59,7 +61,7 @@ split_setup <- function(model, n_name, subset) {
   N <- model$data[[n_name]]
   if (is.null(N) || length(N) != 1L) stop(sprintf("the data has no observation count '%s'", n_name), call. = FALSE)
   if (is.null(subset)) subset <- default_subset(n_name)
-  prior <- model_with_data(model, subset(model$data, integer(0)))
+  prior <- model_with_data(model, subset(model$data, integer(0)), unchecked = n_name)
   list(N = as.integer(N), subset = subset, prior = prior)
 }
 
@@ -295,9 +297,12 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
 }
 
 par_lapply <- function(X, f, cores = 1L) {
-  if (cores > 1L && length(X) > 1L && .Platform$OS.type != "windows")
-    parallel::mclapply(X, f, mc.cores = min(cores, length(X)))
-  else lapply(X, f)
+  if (cores > 1L && length(X) > 1L && .Platform$OS.type != "windows") {
+    # a seed per element drawn from the caller's stream (see bayescomp_smc)
+    base <- sample.int(.Machine$integer.max - length(X), 1L)
+    mc_checked(parallel::mclapply(seq_along(X), function(i) { set.seed(base + i); f(X[[i]]) },
+                                  mc.cores = min(cores, length(X)), mc.set.seed = FALSE))
+  } else lapply(X, f)
 }
 
 # stats::optim() asks for the value and the gradient separately, usually at

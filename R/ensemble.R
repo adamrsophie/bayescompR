@@ -58,7 +58,7 @@ bayescomp_ensemble <- function(model, method = c("stretch", "de"), walkers = NUL
   if (is.null(gamma)) gamma <- 2.38 / sqrt(2 * n)
   t0 <- proc.time()[["elapsed"]]
   rc <- run_chains(model, chains, seed, cores, function(id) {
-    lpf <- lp_value_fun(model)
+    lpf <- lp_value_fun(model, propto = TRUE)
     X <- t(vapply(seq_len(W), function(w) find_init(model, init, (id - 1L) * W + w, gradient = FALSE), numeric(n)))
     if (n == 1L) X <- matrix(X, ncol = 1L)
     lp <- vapply(seq_len(W), function(w) lpf(X[w, ]), 0)

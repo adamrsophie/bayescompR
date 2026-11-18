@@ -289,8 +289,9 @@ est_value <- function(e) {
 
 run_hmc_chain <- function(model, q0, cfg, chain_id) {
   n <- length(q0)
-  lp_full <- lp_value_fun(model, print = cfg$print)
-  # Metropolis and the slice samplers need only log density values
+  # Metropolis and the slice samplers need only log density values, of the
+  # same (proportional) target as HMC
+  lp_full <- lp_value_fun(model, print = cfg$print, propto = TRUE)
   pot <- if (cfg$algorithm %in% c("metropolis", "slice", "elliptical_slice")) {
     function(q) list(V = -lp_full(q), g = numeric(n))
   } else hmc_potential(model, print = cfg$print)
