@@ -119,4 +119,9 @@ Collate:
     'ir.R'
     'bugs_parse.R'
     'bugs_data.R'
+    'bugs_dist.R'
+    'bugs_codegen.R'
+    'bugs_compile.R'
+    'bugs_mcmc.R'
+    'bugs_api.R'
 Config/roxygen2/version: 8.1.1
