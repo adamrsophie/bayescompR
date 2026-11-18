@@ -159,7 +159,10 @@
   locals (`real mu = ...;`, replaced by their values), uses
   `dot_product(X[n], b)`, adds any scalar to `target` (including `_lcdf`
   and `_lccdf` terms), or sits in a `profile` block: 10 to 28 times faster
-  gradients for such loops over 200 observations.
+  gradients for such loops over 200 observations. A loop such as
+  `for (n in 1:N) y[n] ~ ordered_logistic(eta[n], c)` with a shared vector
+  argument (cutpoints, a simplex, logits) that does not depend on the loop
+  is rewritten as well (about 50 times faster over 300 observations).
 
 * Proportional log density values (Metropolis, slice, ensemble and Gibbs
   sampling, ADVI, Pathfinder, optimization) no longer record a tape. The

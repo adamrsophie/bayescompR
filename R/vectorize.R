@@ -240,7 +240,7 @@ vec_stmt <- function(a, t, ctx) {
       # truncation bounds are scalars evaluated once
       if (!is.null(a$trunc) && any(vapply(list(a$trunc$lo, a$trunc$hi), function(b) vec_mentions(b, ctx$n) || vec_effectful(b), TRUE)))
         return(NULL)
-      if (!all(vapply(t$args, function(x) vec_scalar(x$type), TRUE))) return(NULL)
+      if (!all(vec_args_ok(a$args, t$args, t$sig$args[-1L], ctx$n))) return(NULL)
       lhs <- vec_expr(a$lhs, t$lhs, ctx)
       if (is.null(lhs)) return(NULL)
       args <- Map(function(x, y) vec_expr(x, y, ctx), a$args, t$args)
@@ -261,7 +261,7 @@ vec_stmt <- function(a, t, ctx) {
         return(a)
       }
       if (!identical(tv$kind, "call") || isTRUE(tv$sig$user) || length(v$args) != length(tv$args)) return(NULL)
-      if (!all(vapply(tv$args, function(x) vec_scalar(x$type), TRUE))) return(NULL)
+      if (!all(vec_args_ok(v$args, tv$args, tv$sig$args, ctx$n))) return(NULL)
       args <- Map(function(x, y) vec_expr(x, y, ctx), v$args, tv$args)
       if (any(vapply(args, is.null, TRUE)) || !any(vapply(args, `[[`, TRUE, "dep"))) return(NULL)
       v$args <- lapply(args, vec_out, ctx = ctx, arith = FALSE)
@@ -281,6 +281,17 @@ vec_stmt <- function(a, t, ctx) {
       a
     },
     NULL)
+}
+
+# arguments a vectorized density accepts: scalars, and in a position the
+# signature shares between elements (cutpoints, a simplex) a vector that
+# does not depend on the loop. In an elementwise position ("reals") a vector
+# would broadcast the outcome instead.
+vec_args_ok <- function(as, ts, pos, n) {
+  Map(function(a, t, p) vec_scalar(t$type) ||
+        (!is.null(p) && !p %in% c("reals", "ints", "real", "int") && identical(t$type$base, "vector") &&
+         (t$type$nd %||% 0L) == 0L && !vec_mentions(a, n) && !vec_effectful(a)),
+      as, ts, as.list(pos)[seq_along(ts)]) |> unlist()
 }
 
 # the final form of a vectorized expression; in arithmetic and as an

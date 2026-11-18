@@ -47,6 +47,15 @@ test_that("scalar locals, dot products, scalar target increments and profile blo
                  "for (n in 1:N) y[n] ~ normal(a + x[n], s) T[-3, 4];", "for (n in 1:N) y[n] ~ normal(0, s) T[-5, ];"))
     same_as_loop(paste(dd, body, "}"), d, u, 1L)
   same_as_loop(paste(dd, "for (n in 1:N) y[n] ~ normal(a, s) T[x[n] - 5, ]; }"), d, u, 0L)
+  # a shared vector argument (cutpoints, logits) that does not depend on the loop
+  dc <- c(d, list(c = sample(4, N, TRUE)))
+  dd2 <- "data { int N; vector[N] x; array[N] int c; } parameters { real a; ordered[3] k; vector[4] v; } model {"
+  u2 <- c(0.1, -0.5, 0.2, 0.3, 0.1, -0.2, 0.4, 0)
+  for (body in c("for (n in 1:N) c[n] ~ ordered_logistic(a * x[n], k);", "for (n in 1:N) c[n] ~ ordered_probit(a * x[n], k);",
+                 "for (n in 1:N) c[n] ~ categorical_logit(v);", "for (n in 1:N) target += categorical_logit_lpmf(c[n] | v);"))
+    same_as_loop(paste(dd2, body, "}"), dc, u2, 1L)
+  # a vector in an elementwise position broadcasts the outcome: not rewritten
+  same_as_loop(paste(dd2, "for (n in 1:N) x[n] ~ normal(v, 1); }"), dc, u2, 0L)
   # a local the body assigns again, or one without a value, stays a loop
   same_as_loop(paste(dd, "for (n in 1:N) { real mu = a; mu += x[n]; y[n] ~ normal(mu, s); } }"), d, u, 0L)
   same_as_loop(paste(dd, "for (n in 1:N) { real mu; mu = a; y[n] ~ normal(mu, s); } }"), d, u, 0L)
