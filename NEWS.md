@@ -149,6 +149,12 @@
 
 ## Performance
 
+* Loop vectorization also rewrites loops whose body declares scalar
+  locals (`real mu = ...;`, replaced by their values), uses
+  `dot_product(X[n], b)`, adds any scalar to `target` (including `_lcdf`
+  and `_lccdf` terms), or sits in a `profile` block: 10 to 28 times faster
+  gradients for such loops over 200 observations.
+
 * Proportional log density values (Metropolis, slice, ensemble and Gibbs
   sampling, ADVI, Pathfinder, optimization) no longer record a tape. The
   program runs on plain numbers and only the parameter dependent arguments

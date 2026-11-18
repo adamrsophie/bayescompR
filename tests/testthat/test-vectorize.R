@@ -25,7 +25,26 @@ test_that("independent loops are vectorized with the same density and gradient",
   same_as_loop(paste(dd, "parameters { real a; } model { vector[N] mu = rep_vector(a, N); for (n in 1:N) mu[n] += 2 * x[n]; y ~ normal(mu, 1); }"), d, 0.3, 1L)
   same_as_loop(paste(dd, "parameters { real a; } transformed parameters { vector[N] m; for (n in 1:N) m[n] = inv_logit(a + y[n]); } model { y ~ normal(m, 1); }"), d, 0.3, 1L)
   same_as_loop(paste(dd, "parameters { real a; real<lower=0> s; } model { for (j in 1:2) for (n in 1:N) y[n] ~ normal(a * j - x[n] / s, s); }"), d, c(0.1, 0.2), 1L)
-  same_as_loop(paste(dd, "parameters { real a; } model { for (n in 1:N) { real m = a * x[n]; y[n] ~ normal(m, 1); } }"), d, 0.2, 0L)
+  same_as_loop(paste(dd, "parameters { real a; } model { for (n in 1:N) { real m = a * x[n]; y[n] ~ normal(m, 1); } }"), d, 0.2, 1L)
+})
+
+test_that("scalar locals, dot products, scalar target increments and profile blocks are vectorized", {
+  set.seed(2)
+  N <- 30; X <- matrix(rnorm(N * 3), N); g <- sample(4, N, TRUE)
+  d <- list(N = N, X = X, g = g, y = rnorm(N), x = rnorm(N))
+  dd <- "data { int N; matrix[N, 3] X; array[N] int g; vector[N] y; vector[N] x; } parameters { real a; vector[3] b; vector[4] u; real<lower=0> s; } model {"
+  u <- seq(-0.4, 0.4, length.out = 9)
+  for (body in c("for (n in 1:N) { real mu = a + b[1] * x[n] + u[g[n]]; y[n] ~ normal(mu, s); }",
+                 "for (n in 1:N) { real e = y[n] - a; real z = e / s; target += -0.5 * square(z) - log(s); }",
+                 "for (n in 1:N) y[n] ~ normal(a + dot_product(X[n], b), s);",
+                 "for (n in 1:N) target += -0.5 * square((y[n] - a - X[n] * b) / s);",
+                 "for (n in 1:N) target += normal_lccdf(y[n] | a + x[n], s);",
+                 "profile(\"lik\") { for (n in 1:N) y[n] ~ normal(a + X[n] * b, s); }",
+                 "for (n in 1:0) { real mu = a; y[n] ~ normal(mu, s); }"))
+    same_as_loop(paste(dd, body, "}"), d, u, 1L)
+  # a local the body assigns again, or one without a value, stays a loop
+  same_as_loop(paste(dd, "for (n in 1:N) { real mu = a; mu += x[n]; y[n] ~ normal(mu, s); } }"), d, u, 0L)
+  same_as_loop(paste(dd, "for (n in 1:N) { real mu; mu = a; y[n] ~ normal(mu, s); } }"), d, u, 0L)
 })
 
 test_that("loops that are not independent stay loops", {

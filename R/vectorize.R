@@ -25,7 +25,10 @@
 #     dimensional array, `X[n] * b` with `X` a matrix and `b` a vector, and
 #     `X[n, k]`,
 #   * arithmetic (`+ - * / ^`, unary minus) on scalars,
-#   * elementwise functions of one scalar (exp, log, inv_logit, ...).
+#   * elementwise functions of one scalar (exp, log, inv_logit, ...),
+#   * `dot_product(X[n], b)`.
+# Scalar locals declared with a value in the body are replaced by that
+# value; `target +=` of any scalar adds the sum of the vector.
 # A variable assigned in the loop may only be read as `v[n]` in the loop.
 
 vec_unary <- c("exp", "log", "log1p", "expm1", "log2", "log10", "exp2", "inv_logit", "logit", "log_inv_logit",
@@ -88,7 +91,8 @@ vec_stmts <- function(as, ts, st) {
       } else {
         a$body <- vec_block(vec_stmts(vec_as_list(a$body), vec_as_list(t$body), st), a$body$loc %||% a$loc)
       }
-    } else if (identical(a$kind, "block_stmt") && identical(t$kind, "block_stmt") && is.null(a$profile)) {
+    } else if (identical(a$kind, "block_stmt") && identical(t$kind, "block_stmt")) {
+      # also the body of a profile block, which stays a profile block
       a$body <- vec_stmts(a$body, t$body, st)
     } else if (identical(a$kind, "if") && identical(t$kind, "if")) {
       for (k in c("then", "els")) if (!is.null(a[[k]]) && !is.null(t[[k]]))
@@ -157,6 +161,11 @@ vec_for <- function(a, t) {
       ir_assigns_any(a$body, ir_var_names(a$lo))) return(NULL)
   abody <- vec_as_list(a$body); tbody <- vec_as_list(t$body)
   if (!length(abody) || length(abody) != length(tbody)) return(NULL)
+  # scalar locals of the body are replaced by their values
+  inl <- vec_inline_locals(abody, tbody, n)
+  if (is.null(inl)) return(NULL)
+  abody <- inl$a; tbody <- inl$t
+  if (!length(abody)) return(NULL)
   # variables written in the loop
   written <- character()
   for (k in seq_along(abody)) {
@@ -190,6 +199,30 @@ vec_for <- function(a, t) {
   list(list(kind = "if", cond = cond, then = vec_block(out, a$loc), els = NULL, loc = a$loc))
 }
 
+# `real mu = e;` in a loop body: later statements read e instead, so the
+# body is a sequence of statements the rewrite handles. Only for a scalar
+# with a value without effects that the body does not assign again.
+vec_inline_locals <- function(as, ts, n) {
+  i <- 1L
+  while (i <= length(as)) {
+    a <- as[[i]]; t <- ts[[i]]
+    if (!identical(a$kind, "decl")) { i <- i + 1L; next }
+    if (is.null(a$init) || is.null(t$init) || !vec_scalar(t$vtype) || vec_effectful(a$init)) return(NULL)
+    rest <- seq_along(as)[-seq_len(i)]
+    if (any(vapply(as[rest], ir_assigns_any, TRUE, vs = a$name))) return(NULL)
+    ra <- list(kind = "paren", a = a$init, loc = a$init$loc)
+    for (k in rest) { as[[k]] <- vec_subst(as[[k]], a$name, ra); ts[[k]] <- vec_subst(ts[[k]], a$name, t$init) }
+    as <- as[-i]; ts <- ts[-i]
+  }
+  list(a = as, t = ts)
+}
+vec_subst <- function(e, v, r) {
+  if (!is.list(e)) return(e)
+  if (identical(e$kind, "var") && identical(e$name, v)) return(r)
+  for (k in names(e) %||% seq_along(e)) if (!k %in% c("loc", "type", "sig") && is.list(e[[k]])) e[[k]] <- vec_subst(e[[k]], v, r)
+  e
+}
+
 vec_range <- function(ctx) list(kind = "range", lo = ctx$lo, hi = ctx$hi, loc = ctx$loc)
 vec_call <- function(name, args, loc) list(kind = "call", name = name, args = args, cond_bar = FALSE, loc = loc)
 vec_size <- function(ctx) {
@@ -216,8 +249,15 @@ vec_stmt <- function(a, t, ctx) {
     },
     target_add = {
       v <- a$value; tv <- t$value
-      if (!identical(v$kind, "call") || !identical(tv$kind, "call") || isTRUE(tv$sig$user)) return(NULL)
-      if (!grepl("_(lpdf|lpmf|lupdf|lupmf)$", v$name) || length(v$args) != length(tv$args)) return(NULL)
+      if (!(identical(v$kind, "call") && grepl("_(lpdf|lpmf|lupdf|lupmf|lcdf|lccdf)$", v$name))) {
+        # any other scalar: target += of the vector adds its sum
+        if (!vec_scalar(tv$type)) return(NULL)
+        r <- vec_expr(v, tv, ctx)
+        if (is.null(r) || !r$dep || identical(r$kind, "mat")) return(NULL)
+        a$value <- vec_out(r, ctx, arith = TRUE)
+        return(a)
+      }
+      if (!identical(tv$kind, "call") || isTRUE(tv$sig$user) || length(v$args) != length(tv$args)) return(NULL)
       if (!all(vapply(tv$args, function(x) vec_scalar(x$type), TRUE))) return(NULL)
       args <- Map(function(x, y) vec_expr(x, y, ctx), v$args, tv$args)
       if (any(vapply(args, is.null, TRUE)) || !any(vapply(args, `[[`, TRUE, "dep"))) return(NULL)
@@ -304,6 +344,14 @@ vec_expr <- function(a, t, ctx) {
       list(ast = a, dep = TRUE, kind = "vec")
     },
     call = {
+      # dot_product(X[n], b): a row of a matrix times a vector
+      if (identical(a$name, "dot_product") && length(a$args) == 2L && !isTRUE(t$sig$user)) {
+        ra <- vec_expr(a$args[[1L]], t$args[[1L]], ctx)
+        tb <- t$args[[2L]]$type
+        if (is.null(ra) || !identical(ra$kind, "mat") || vec_mentions(a$args[[2L]], n) || vec_effectful(a$args[[2L]]) ||
+            !identical(tb$base, "vector") || (tb$nd %||% 0L) != 0L) return(NULL)
+        return(list(ast = list(kind = "binop", op = "*", a = ra$ast, b = a$args[[2L]], loc = a$loc), dep = TRUE, kind = "vec"))
+      }
       if (!a$name %in% vec_unary || length(a$args) != 1L || isTRUE(t$sig$user) || !vec_scalar(t$type)) return(NULL)
       r <- vec_expr(a$args[[1L]], t$args[[1L]], ctx)
       if (is.null(r) || identical(r$kind, "mat")) return(NULL)
