@@ -201,7 +201,8 @@ vec_for <- function(a, t) {
 
 # `real mu = e;` in a loop body: later statements read e instead, so the
 # body is a sequence of statements the rewrite handles. Only for a scalar
-# with a value without effects that the body does not assign again.
+# with a value without effects, when the later statements assign neither
+# the local nor a variable its value reads.
 vec_inline_locals <- function(as, ts, n) {
   i <- 1L
   while (i <= length(as)) {
@@ -209,7 +210,7 @@ vec_inline_locals <- function(as, ts, n) {
     if (!identical(a$kind, "decl")) { i <- i + 1L; next }
     if (is.null(a$init) || is.null(t$init) || !vec_scalar(t$vtype) || vec_effectful(a$init)) return(NULL)
     rest <- seq_along(as)[-seq_len(i)]
-    if (any(vapply(as[rest], ir_assigns_any, TRUE, vs = a$name))) return(NULL)
+    if (any(vapply(as[rest], ir_assigns_any, TRUE, vs = c(a$name, ir_var_names(a$init))))) return(NULL)
     ra <- list(kind = "paren", a = a$init, loc = a$init$loc)
     for (k in rest) { as[[k]] <- vec_subst(as[[k]], a$name, ra); ts[[k]] <- vec_subst(ts[[k]], a$name, t$init) }
     as <- as[-i]; ts <- ts[-i]

@@ -59,6 +59,8 @@ test_that("scalar locals, dot products, scalar target increments and profile blo
   # a local the body assigns again, or one without a value, stays a loop
   same_as_loop(paste(dd, "for (n in 1:N) { real mu = a; mu += x[n]; y[n] ~ normal(mu, s); } }"), d, u, 0L)
   same_as_loop(paste(dd, "for (n in 1:N) { real mu; mu = a; y[n] ~ normal(mu, s); } }"), d, u, 0L)
+  # a local whose value reads a variable the body assigns later
+  same_as_loop(paste(dd, "vector[N] w = x * a; for (n in 1:N) { real m = w[n]; w[n] = 2 * m; y[n] ~ normal(m, s); } }"), d, u, 0L)
 })
 
 test_that("loops that are not independent stay loops", {
@@ -74,6 +76,10 @@ test_that("empty and out of range loops behave as loops", {
   same_as_loop("data { int N; vector[N] y; } parameters { real a; } model { for (n in 3:2) y[n] ~ normal(a, 1); }", list(N = 3L, y = 1:3), 0.1, 1L)
   m <- bayescomp_model("data { int N; vector[N] y; } parameters { real a; } model { for (n in 1:(N + 1)) y[n] ~ normal(a, 1); }", data = list(N = 3L, y = 1:3))
   expect_error(bayescomp_log_prob(m, 0.1), "index out of range")
+  # truncated statements in an empty loop add nothing
+  for (b in c("T[0, ]", "T[-1, 3]"))
+    same_as_loop(sprintf("data { int N; vector[N] y; vector[N] x; } parameters { real a; real<lower=0> s; } model { s ~ normal(0, 1); for (n in 1:0) y[n] ~ normal(a + x[n], s) %s; }", b),
+                 list(N = 2L, y = c(0.5, 1), x = c(0, 1)), c(0.1, 0.2), 1L)
 })
 
 test_that("element writes in a loop that cannot be vectorized use linear memory", {

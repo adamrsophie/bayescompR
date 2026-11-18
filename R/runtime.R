@@ -373,12 +373,10 @@ rt_truncate <- function(ctx, y, lo, hi, lcdf, lccdf, args, discrete, fam) {
   if (scalar_args) {
     rt_target_add(ctx, -N * one(args))
   } else if (is.null(lo) || is.null(hi)) {
-    # one bound: the vectorized cumulative function at the repeated bound is
-    # the sum of the normalizers, one node instead of one per element
-    if (is.null(hi)) {
-      b <- if (discrete) val(lo) - 1L else val(lo)
-      rt_target_add(ctx, -do.call(lccdf, c(list(rep_len(b, N)), args)))
-    } else rt_target_add(ctx, -do.call(lcdf, c(list(rep_len(val(hi), N)), args)))
+    # one bound: the vectorized cumulative function of the scalar bound and
+    # the vector parameters is the sum of the N normalizers, one node
+    # instead of one per element
+    rt_target_add(ctx, -one(args))
   } else {
     for (i in seq_len(N)) {
       ai <- lapply(args, function(a) if (length(val(a)) == 1L) a else ad_select(flat(a), i))
