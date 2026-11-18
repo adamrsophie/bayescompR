@@ -97,7 +97,12 @@ ad_leaf <- function(v) {
 # `grads` is a function(g) returning a list, one adjoint contribution per
 # parent (NULL for non differentiable parents).
 ad_node <- function(v, parents, grads) {
-  if (is.null(.ad$tape)) return(v)
+  if (is.null(.ad$tape)) {
+    # marks mode: a value computed from a marked argument (a GLM linear
+    # predictor) stays marked, so the density it reaches keeps its terms
+    if (.ad$vmark) for (p in parents) if (inherits(p, "bcad")) return(structure(list(v = v, id = 0L), class = "bcad"))
+    return(v)
+  }
   if (.ad$vonly) {
     for (p in parents) if (inherits(p, "bcad")) return(structure(list(v = v, id = 1L), class = "bcad"))
     return(v)

@@ -1255,7 +1255,10 @@ test_that("proportional values without a tape equal the taped value", {
     list("data { real y; } parameters { real mu; real<lower=0> s; } model { real k = 3; y ~ normal(mu, s) T[0, ]; k ~ normal(floor(mu), 1);
           target += normal_lupdf(1 | mu, s) + normal_lupdf(1 | 0, 1); }", list(y = 0.4)),
     list("functions { vector f(real t, vector y, real k) { return -k * y; } } data { array[2] real ts; } parameters { real<lower=0> k; }
-          model { array[2] vector[1] y = ode_rk45(f, [1]', 0, ts, k); target += normal_lupdf(0.5 | y[2, 1], 0.1); }", list(ts = c(0.5, 1))))
+          model { array[2] vector[1] y = ode_rk45(f, [1]', 0, ts, k); target += normal_lupdf(0.5 | y[2, 1], 0.1); }", list(ts = c(0.5, 1))),
+    # a GLM computes its linear predictor inside the library
+    list("data { int N; matrix[N, 2] X; array[N] int k; } parameters { real a; vector[2] b; } model { a ~ normal(0, 1); k ~ poisson_log_glm(X, a, b); }",
+         list(N = 3, X = matrix(c(1, 0, -1, 0.5, 2, 1), 3), k = c(0L, 2L, 5L))))
   for (pr in progs) {
     m <- bayescomp_model(pr[[1]], data = pr[[2]])
     u <- seq(-0.3, 0.4, length.out = m$dim)
