@@ -45,7 +45,8 @@ test_that("diagnostics match the posterior package", {
   set.seed(3)
   y <- matrix(stats::rnorm(2000), 500)
   expect_equal(bayescomp_rhat(y * 1e-20), bayescomp_rhat(y))
-  skip_if_not_installed("posterior")
+  # posterior 1.8.0 takes the upper tail indicator above the median
+  skip_if_not_installed("posterior", "1.8.0")
   x <- y + matrix(rep(cumsum(stats::rnorm(500)) * 0.05, 4), 500)
   z <- matrix(stats::rbinom(2000, 1, 0.3), 500)
   a <- matrix(rep(c(-1, 1), 1000), 500)

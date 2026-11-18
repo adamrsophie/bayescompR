@@ -146,10 +146,12 @@ bayescomp_ess_basic <- function(x) ess_raw(split_chains(as_draws_matrix_chains(x
 #' @export
 bayescomp_ess_quantile <- function(x, probs = c(0.05, 0.95)) {
   x <- as_draws_matrix_chains(x)
-  # as posterior 1.7.1: the indicator x <= q for every quantile
+  # as posterior 1.8.0: the indicator of the tail beyond the quantile,
+  # x <= q below the median and x >= q above it
   vapply(probs, function(p) {
+    if (p == 1) p <- (length(x) - 0.5) / length(x)
     q <- stats::quantile(x, p, names = FALSE)
-    ind <- x <= q
+    ind <- if (p > 0.5) x >= q else x <= q
     if (na_diag(ind + 0)) return(NA_real_)
     ess_raw(split_chains(ind + 0))
   }, 0)

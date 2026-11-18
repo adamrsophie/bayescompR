@@ -2,6 +2,10 @@
 
 ## Bug fixes
 
+* `bayescomp_ess_quantile()` and `bayescomp_ess_tail()` use the indicator
+  of the upper tail (`x >= q`) for probabilities above one half, as
+  posterior 1.8.0 does.
+
 * Loops whose loop invariant expressions read `target()` or call `_lp`,
   `_rng` or `_jacobian` functions are no longer vectorized; the rewrite
   evaluated them once instead of once per iteration and changed the density.
