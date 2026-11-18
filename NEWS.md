@@ -111,8 +111,9 @@
   parameter.
 * A zero adjoint no longer turns an infinite elementwise derivative into
   NaN, so `sqrt()` of a matrix with zeros has a finite gradient.
-* `return .5;` parses, and sizes of top level variables that depend on
-  parameters through an integer are a semantic error.
+* `return .5;` parses, an integer division of a multi indexed value
+  (`x[idx][1] / 2`) compiles, and sizes of top level variables that depend
+  on parameters through an integer are a semantic error.
 * SG-MCMC, expectation propagation and nested sampling accept a model that
   declares `int<lower=1> N`; parallel SMC and EP workers draw from seeds
   per stage instead of overlapping streams, and a worker error is
