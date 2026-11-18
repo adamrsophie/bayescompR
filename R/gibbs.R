@@ -61,7 +61,7 @@ bayescomp_gibbs <- function(model, blocks = NULL, chains = 4L, iter_warmup = 100
   t0 <- proc.time()[["elapsed"]]
   res <- run_chains(model, chains, seed, cores, function(id) {
     lpf <- lp_value_fun(model, propto = TRUE)
-    lpg <- safe_lp(model, jacobian = TRUE, propto = FALSE)
+    lpg <- safe_lp(model, jacobian = TRUE, propto = TRUE)
     q <- find_init(model, init, id, gradient = any(vapply(bl, function(b) b$kernel %in% c("mala", "hmc"), TRUE)))
     bs <- lapply(bl, function(b) gibbs_block_init(b, q, lpf))
     lp <- lpf(q)

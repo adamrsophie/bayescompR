@@ -457,8 +457,13 @@ cg_keep_args <- function(codes, exprs) {
   if (!identical(.cg$block, "model")) return(codes)
   Map(function(code, e) {
     t <- e$type
-    if (isTRUE(e$data_only) || identical(t$base, "int") || is.null(t$base)) code else cl(rt_keep, code)
+    if (isTRUE(e$data_only) || identical(t$base, "int") || is.null(t$base) || reads_parameter(e)) code else cl(rt_keep, code)
   }, codes, exprs)
+}
+# a parameter, or an element of one, is differentiable already
+reads_parameter <- function(e) {
+  while (identical(e$kind, "index")) e <- e$x
+  identical(e$kind, "var") && identical(e$origin, "parameters")
 }
 
 cg_stmt <- function(st, ctx) {

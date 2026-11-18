@@ -1230,6 +1230,8 @@ test_that("checks and edge cases match Stan", {
   expect_equal(bayescomp_log_prob(bayescomp_model("functions { real h() { return .5; } } parameters { real x; } model { x ~ normal(h(), 1); }"), 0.5, propto = FALSE),
                dnorm(0, log = TRUE))
   expect_error(bayescomp_check("parameters { real<lower=1> s; } generated quantities { vector[to_int(floor(s))] v; }"), "only depend on data")
+  expect_warning(bayescomp_model("data { array[3] int x; array[2] int idx; } model { real z = x[idx][1] / 2; }",
+                                 data = list(x = 1:3, idx = 1:2)), "x\\[idx\\]\\[1\\] / 2")
   m <- bayescomp_model("functions { real my_lpdf(real y, real mu) { return normal_lupdf(y | mu, 1); } }
     parameters { real x; } model { 1.5 ~ my(floor(x)); }")
   expect_equal(bayescomp_log_prob(m, 1.2, propto = TRUE), -0.125)

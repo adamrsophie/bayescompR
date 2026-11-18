@@ -51,8 +51,8 @@
   error is not negligible against the scale.
 * Truncation of a density with a scalar outcome and vector parameters
   subtracts one normalizing term per element.
-* Metropolis, slice, ensemble and Gibbs samplers evaluate the density with
-  constants dropped, as HMC does. The two targets differ by more than a
+* Metropolis, slice, ensemble, Gibbs and reverse diffusion samplers use the
+  density with constants dropped, as HMC does. The two targets differ by more than a
   constant when a program reads `target()` or drops a data only statement
   in a parameter dependent branch. Evidence estimators and model
   probabilities keep the normalized density.

@@ -299,7 +299,7 @@ fmt_lastline <- function(s) sub("^.*\n", "", s)
 fmt_index <- function(i, st) {
   switch(i$kind,
     omni = " : ",
-    single = fmt_e(i$e, st),
+    single = , intarray = fmt_e(i$e, st),
     lower = paste0(fmt_e(i$lo, st), " : "),
     upper = paste0(" : ", fmt_e(i$hi, st)),
     range = paste0(fmt_e(i$lo, st), " : ", fmt_e(i$hi, st)))
