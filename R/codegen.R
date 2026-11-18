@@ -163,7 +163,7 @@ cg_call <- function(e) {
   if (isTRUE(sg$user)) {
     args <- Map(function(code, a, t) promote_to(code, a$type, t), args, e$args, sg$args)
     # a density inside the function keeps its terms for these arguments
-    args <- cg_keep_args(unname(args), e$args)
+    args <- cg_keep_args(unname(args), e$args, params = FALSE)
     call <- cl_list(as.name(sg$mangled), c(unname(args), list(CTX)))
     # a user density called by its normalized name runs with propto off
     if (grepl("_(lpdf|lpmf)$", e$name)) call <- cl(rt_normalized, call, CTX)
@@ -283,7 +283,7 @@ cg_tilde <- function(st, once = FALSE) {
   sg <- st$sig
   call <- if (isTRUE(sg$user)) {
     aa <- Map(function(code, a, t) promote_to(code, a$type, t), c(list(lhs), args), c(list(st$lhs), st$args), sg$args)
-    aa <- cg_keep_args(unname(aa), c(list(st$lhs), st$args))
+    aa <- cg_keep_args(unname(aa), c(list(st$lhs), st$args), params = FALSE)
     cl_list(as.name(sg$mangled), c(unname(aa), list(CTX)))
   } else {
     types <- c(list(st$lhs$type), lapply(st$args, `[[`, "type"))
@@ -453,14 +453,17 @@ lib_sig <- function(name, types) {
 # variable, which in the model block is every real valued expression that is
 # not data only, also after floor() or an assignment of a constant. Such
 # arguments are wrapped so the density sees them as differentiable.
-cg_keep_args <- function(codes, exprs) {
+# `params = FALSE` leaves parameters unwrapped: right for arguments of user
+# functions, which are only evaluated with parameters that are "bcad"
+# (propto_value_fun does not use marks for programs with user functions)
+cg_keep_args <- function(codes, exprs, params = TRUE) {
   if (!identical(.cg$block, "model")) return(codes)
   Map(function(code, e) {
     t <- e$type
-    if (isTRUE(e$data_only) || identical(t$base, "int") || is.null(t$base) || reads_parameter(e)) code else cl(rt_keep, code)
+    if (isTRUE(e$data_only) || identical(t$base, "int") || is.null(t$base) || (!params && reads_parameter(e))) code
+    else cl(rt_keep, code)
   }, codes, exprs)
 }
-# a parameter, or an element of one, is differentiable already
 reads_parameter <- function(e) {
   while (identical(e$kind, "index")) e <- e$x
   identical(e$kind, "var") && identical(e$origin, "parameters")

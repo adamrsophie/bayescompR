@@ -1240,3 +1240,27 @@ test_that("checks and edge cases match Stan", {
   m <- bayescomp_model("data { int<lower=1> N; vector[N] y; } parameters { real mu; } model { y ~ normal(mu, 1); }", data = list(N = 4, y = 1:4))
   expect_no_error(bayescomp_sgmcmc(m, batch_size = 2, chains = 1, iter_warmup = 3, iter_sampling = 3, seed = 1))
 })
+
+test_that("proportional values without a tape equal the taped value", {
+  ns <- asNamespace("bayescompR")
+  progs <- list(
+    list("parameters { real x; } model { x ~ normal(0, 1); if (x > 0) 0 ~ normal(0, 1); else 0 ~ normal(0, 5); }", list()),
+    list("parameters { real x; } model { x ~ std_normal(); target += 8 * log1p_exp(target()); }", list()),
+    list("data { int N; array[N] int y; vector[N] x; } parameters { real a; real b; real<lower=0> phi; } model { y ~ neg_binomial_2_log(a + b * x, phi); }",
+         list(N = 3, y = c(0L, 3L, 1L), x = c(-1, 0.5, 2))),
+    list("functions { real my_lpdf(real y, real mu) { return normal_lupdf(y | mu, 1); } } parameters { real x; } model { 1.5 ~ my(floor(x)); }", list()),
+    list("data { int N; vector[N] y; matrix[N, 2] X; } parameters { real a; vector[2] b; real<lower=0> s; } transformed parameters { real c = 2; }
+          model { y ~ normal_id_glm(X, a, b, s); for (n in 1:N) y[n] ~ normal(a + c, s); c ~ normal(a, 1); }",
+         list(N = 3, y = c(0.1, -0.4, 1.2), X = matrix(c(1, 0, 2, -1, 0.5, 1), 3))),
+    list("data { real y; } parameters { real mu; real<lower=0> s; } model { real k = 3; y ~ normal(mu, s) T[0, ]; k ~ normal(floor(mu), 1);
+          target += normal_lupdf(1 | mu, s) + normal_lupdf(1 | 0, 1); }", list(y = 0.4)),
+    list("functions { vector f(real t, vector y, real k) { return -k * y; } } data { array[2] real ts; } parameters { real<lower=0> k; }
+          model { array[2] vector[1] y = ode_rk45(f, [1]', 0, ts, k); target += normal_lupdf(0.5 | y[2, 1], 0.1); }", list(ts = c(0.5, 1))))
+  for (pr in progs) {
+    m <- bayescomp_model(pr[[1]], data = pr[[2]])
+    u <- seq(-0.3, 0.4, length.out = m$dim)
+    ref <- ns$model_lpg(m, TRUE, TRUE)(u)$value
+    expect_equal(ns$model_lp(m, TRUE, TRUE)(u), ref)
+    expect_equal(ns$lp_value_fun(m, propto = TRUE)(u), ref)
+  }
+})

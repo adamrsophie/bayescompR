@@ -433,7 +433,11 @@ profile_table <- function() {
 # a parameter dependent value that lost its derivative node (floor(), an
 # assigned constant) as a constant node, so propto keeps its density terms
 rt_keep <- function(x) {
-  if (inherits(x, "bcad") || !is.numeric(x) || is.null(.ad$tape)) return(x)
+  if (inherits(x, "bcad") || !is.numeric(x)) return(x)
+  # proportional values without a tape (see propto_value_fun): the
+  # argument is marked as differentiable for the density only
+  if (.ad$vmark) return(structure(list(v = x, id = 0L), class = "bcad"))
+  if (is.null(.ad$tape)) return(x)
   ad_leaf(x)
 }
 

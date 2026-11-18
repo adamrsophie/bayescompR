@@ -188,14 +188,9 @@ model_lp <- function(model, jacobian, propto, print = FALSE) {
   }
   f <- model_fun(model, "log_prob")
   # with propto, which terms are kept depends on which arguments are
-  # parameters, so the tape still records (only the backward sweep is
-  # skipped); without it the code runs with no tape at all
-  if (propto) return(function(u) {
-    ctx <- new_ctx(jacobian = jacobian, print = print, propto = TRUE)
-    old <- tape_start()
-    on.exit(tape_restore(old))
-    as.numeric(val(f(ad_leaf(as.numeric(u)), ctx)))
-  })
+  # parameters, so values keep their "bcad" class without being recorded;
+  # without it the code runs with no tape at all
+  if (propto) return(propto_value_fun(model, f, jacobian, print))
   function(u) {
     ctx <- new_ctx(jacobian = jacobian, print = print, propto = FALSE)
     old <- .ad$tape
@@ -203,6 +198,36 @@ model_lp <- function(model, jacobian, propto, print = FALSE) {
     on.exit(.ad$tape <- old)
     as.numeric(val(f(as.numeric(u), ctx)))
   }
+}
+
+# Proportional value of the log density without recording a tape. Stan
+# keeps a density term when an argument is a parameter dependent value, and
+# in the model block codegen wraps every such argument in rt_keep(): with no
+# tape and .ad$vmark set, the program runs on plain numbers and only those
+# arguments are marked, so each density drops what Stan drops. User
+# functions (whose arguments are not wrapped inside) and solvers (whose
+# value without sensitivities uses other steps) run instead with values
+# that keep their class but are not recorded.
+propto_value_fun <- function(model, f, jacobian, print) {
+  marks <- !length(model$compiled$funs) && !length(model$ir$externals) && !ir_has_hof(model$ir$blocks)
+  function(u) {
+    ctx <- new_ctx(jacobian = jacobian, print = print, propto = TRUE)
+    if (marks) {
+      old <- .ad$tape; om <- .ad$vmark
+      .ad$tape <- NULL; .ad$vmark <- TRUE
+      on.exit({ .ad$tape <- old; .ad$vmark <- om })
+      return(as.numeric(val(f(as.numeric(u), ctx))))
+    }
+    old <- tape_start(values_only = TRUE)
+    on.exit(tape_restore(old))
+    as.numeric(val(f(ad_leaf(as.numeric(u)), ctx)))
+  }
+}
+ir_has_hof <- function(e) {
+  if (!is.list(e)) return(FALSE)
+  if (identical(e$kind, "call") && (!is.null(e$hof) || !is.null(e$laplace))) return(TRUE)
+  for (k in names(e) %||% seq_along(e)) if (!k %in% c("loc", "type", "sig") && is.list(e[[k]]) && ir_has_hof(e[[k]])) return(TRUE)
+  FALSE
 }
 
 model_lpg <- function(model, jacobian, propto, print = FALSE) {

@@ -23,8 +23,8 @@
 # constant so that lp__ matches the propto value used by HMC. Samplers pass
 # propto = TRUE: the two conventions differ by more than a constant when a
 # program reads target() or drops a data only statement in a parameter
-# dependent branch, so samplers use Stan's (constants dropped, with a tape to
-# know which terms are constant). Evidence and model probability code needs
+# dependent branch, so samplers use Stan's (constants dropped; values that
+# depend on parameters keep their class, but nothing is recorded). Evidence and model probability code needs
 # the normalized density and keeps the default.
 lp_value_fun <- function(model, print = FALSE, jacobian = TRUE, propto = FALSE) {
   if (!is.null(model$native)) {
@@ -40,20 +40,14 @@ lp_value_fun <- function(model, print = FALSE, jacobian = TRUE, propto = FALSE) 
     })
   }
   f <- model_fun(model, "log_prob")
+  g <- if (propto) propto_value_fun(model, f, jacobian, print) else function(q) {
+    old <- .ad$tape
+    .ad$tape <- NULL
+    on.exit(.ad$tape <- old)
+    as.numeric(val(f(q, new_ctx(jacobian = jacobian, print = print, propto = FALSE))))
+  }
   function(q) {
-    if (propto) {
-      old <- tape_start()
-      on.exit(tape_restore(old))
-      q <- ad_leaf(as.numeric(q))
-    } else {
-      old <- .ad$tape
-      .ad$tape <- NULL
-      on.exit(.ad$tape <- old)
-    }
-    r <- tryCatch({
-      ctx <- new_ctx(jacobian = jacobian, print = print, propto = propto)
-      as.numeric(val(f(q, ctx)))
-    }, bayescomp_fatal_error = function(e) stop(e),
+    r <- tryCatch(g(q), bayescomp_fatal_error = function(e) stop(e),
        bayescomp_domain_error = function(e) -Inf,
        bayescomp_reject_error = function(e) -Inf)
     if (length(r) != 1L || is.nan(r)) -Inf else r

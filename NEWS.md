@@ -149,6 +149,14 @@
 
 ## Performance
 
+* Proportional log density values (Metropolis, slice, ensemble and Gibbs
+  sampling, ADVI, Pathfinder, optimization) no longer record a tape. The
+  program runs on plain numbers and only the parameter dependent arguments
+  of densities are marked, so each density drops the terms Stan drops
+  (about 1.4 times faster on a hierarchical regression). Programs with
+  user defined functions or solvers keep the class of parameter dependent
+  values without recording them.
+
 * The factorizations of Gaussian GLMs with fixed data are kept within a
   memory budget instead of 64 per model, so models with many such
   statements do not factor them again on every evaluation.
