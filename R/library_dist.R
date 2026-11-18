@@ -1648,12 +1648,28 @@ mvn_factor <- function(S) {
 }
 lp_multi_normal <- function(y, mu, Sigma, propto) {
   sym_check("multi_normal_lpdf", Sigma)
+  if (inherits(Sigma, "bcad")) return(lp_multi_normal_ad(y, mu, Sigma, propto))
   fc <- mvn_factor(Sigma)
   L <- fc$L
   ldh <- fc$ldh
   mvn_core("multi_normal_lpdf", y, mu, ldh, function(d) {
     z <- ad_tri_solve(L, d, "multi_normal_lpdf")
     ad_sum(z * z)
+  }, propto, Sigma)
+}
+# A covariance that depends on parameters: the half log determinant and the
+# quadratic form are each one node with partials in Sigma (as Stan's
+# multi_normal), instead of the chain through the Cholesky adjoint.
+lp_multi_normal_ad <- function(y, mu, Sigma, propto) {
+  R <- tryCatch(chol(val(Sigma)), error = function(e) NULL)
+  if (is.null(R)) stop_domain("cholesky_decompose: matrix is not positive definite")
+  ldh <- ad_node(sum(log(diag(R))), list(Sigma), function(g) list(g * 0.5 * chol2inv(R)))
+  mvn_core("multi_normal_lpdf", y, mu, ldh, function(d) {
+    vd <- val(d)
+    z <- backsolve(R, if (is.null(dim(vd))) matrix(vd, ncol = 1L) else vd, transpose = TRUE)
+    alpha <- backsolve(R, z)
+    ad_node(sum(z * z), list(d, Sigma), function(g) list(2 * g * (if (is.null(dim(vd))) as.vector(alpha) else alpha),
+                                                          -g * (alpha %*% t(alpha))))
   }, propto, Sigma)
 }
 # Stan's check_cholesky_factor: square, lower triangular, positive diagonal

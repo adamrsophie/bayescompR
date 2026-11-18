@@ -31,11 +31,12 @@ ad_cholesky <- function(A) {
   if (!is_ad(A)) return(L)
   ad_node(L, list(A), function(Lbar) {
     Lbar[upper.tri(Lbar)] <- 0
-    P <- crossprod(L, Lbar)
+    # R %*% Lbar is t(L) %*% Lbar; crossprod() is slower on the reference BLAS
+    P <- R %*% Lbar
     P[upper.tri(P)] <- 0
     diag(P) <- diag(P) / 2
-    Linv <- backsolve(R, diag(nrow(L)))  # R^{-1} = L^{-T}
-    S <- Linv %*% P %*% t(Linv)
+    # S = L^{-T} P L^{-1} by two triangular solves instead of an inverse
+    S <- t(backsolve(R, t(backsolve(R, P))))
     list(0.5 * (S + t(S)))
   })
 }

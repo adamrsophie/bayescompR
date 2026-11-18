@@ -149,6 +149,13 @@
 
 ## Performance
 
+* `multi_normal()` with a covariance that depends on parameters (a
+  marginal Gaussian process) computes its partials in the covariance
+  directly, as Stan does, instead of differentiating through the Cholesky
+  factor: about 4 times faster gradients with 200 observations. The
+  adjoint of `cholesky_decompose()` uses triangular solves instead of an
+  explicit inverse (about 1.6 times faster for latent Gaussian processes).
+
 * A truncated density with one bound and vector parameters computes its
   normalizer with one vectorized `_lccdf` or `_lcdf` call instead of one
   call per element (about 200 times faster over 1000 observations), and

@@ -1283,3 +1283,23 @@ test_that("one sided truncation with vector parameters uses one normalizer call"
     expect_equal(as.numeric(g), fd, tolerance = 1e-5)
   }
 })
+
+test_that("multi_normal with a parameter covariance has finite difference gradients", {
+  set.seed(2); N <- 6; x <- sort(runif(N, 0, 5)); Y <- matrix(rnorm(3 * N), 3)
+  progs <- list(
+    list("data { int N; array[N] real x; vector[N] y; } parameters { real<lower=0> rho; real<lower=0> a; real<lower=0> s; real m; }
+          model { y ~ multi_normal(rep_vector(m, N), add_diag(gp_exp_quad_cov(x, a, rho), square(s))); }", list(N = N, x = x, y = Y[1, ])),
+    list("data { int N; array[N] real x; array[3] vector[N] y; } parameters { real<lower=0> rho; real<lower=0> a; real<lower=0> s; vector[N] m; }
+          model { y ~ multi_normal(m, add_diag(gp_exp_quad_cov(x, a, rho), square(s))); }", list(N = N, x = x, y = Y)),
+    list("parameters { vector[3] y; cov_matrix[3] S; } model { S ~ wishart(5, diag_matrix(rep_vector(1, 3))); y ~ multi_normal([1, 0, -1]', S); }", list()))
+  for (pr in progs) {
+    m <- bayescomp_model(pr[[1]], data = pr[[2]])
+    u <- seq(-0.3, 0.4, length.out = m$dim)
+    for (pt in c(FALSE, TRUE)) {
+      g <- bayescomp_grad_log_prob(m, u, propto = pt)
+      fd <- vapply(seq_along(u), function(j) { e <- 0 * u; e[j] <- 1e-5
+        (bayescomp_log_prob(m, u + e, propto = pt) - bayescomp_log_prob(m, u - e, propto = pt)) / 2e-5 }, 0)
+      expect_equal(as.numeric(g), fd, tolerance = 1e-6)
+    }
+  }
+})
