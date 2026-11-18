@@ -37,6 +37,50 @@
 * Two sided truncation of a distribution with an upper tail function
   (`T[40, 41]` on a standard normal) uses upper tail probabilities for
   intervals above the median; the density was infinite.
+* Loop vectorization no longer rewrites a loop over a user defined density
+  (whose scalar and vector overloads can differ), evaluates nothing for a
+  loop with no iterations, and leaves loops whose bounds read `target()`
+  or have effects as loops.
+* The prepared `normal_id_glm()` factorization centers the data and
+  standardizes the residuals, so data far from the origin and very small
+  or large scales give the same value and gradient as the unfused
+  density; it falls back to the observation level sum when its rounding
+  error is not negligible against the scale.
+* Truncation of a density with a scalar outcome and vector parameters
+  subtracts one normalizing term per element.
+* Metropolis, slice and the other samplers that use only density values
+  evaluate a program that reads `target()` with constants dropped, as HMC
+  does; with constants kept the two targets differ in shape.
+* ARD covariance functions of fixed inputs (`gp_exp_quad_cov`, Matern and
+  exponential with one length scale per dimension) take differences
+  before scaling, so the covariance does not depend on the origin.
+* `cholesky_factor_corr` and `corr_matrix` parameters compute
+  `1 - tanh(u)^2` from `u`, so the factor stays valid (with a positive
+  diagonal) far in the tails.
+* `neg_binomial_2` and `neg_binomial_2_log` are one node with stable
+  partials: finite gradients for very small and very large precision and
+  log means up to the largest finite values.
+* SG-MCMC and expectation propagation build the data subsets with the seed
+  of the full model, so random numbers drawn in transformed data are the
+  same in every subset (a model without a seed whose transformed data
+  draws random numbers is an error).
+* Pointwise `poisson_log` and `neg_binomial_2_log` terms broadcast a scalar
+  outcome over vector parameters; pointwise replay binds each chain's
+  `CHAIN_ID`; observations keep the name of an indexed variable; draws that
+  record different observations are an error; truncated terms of
+  observations outside their bounds are `-Inf`.
+* `bayescomp_sample(resume = )` reports an exact continuation only when
+  every chain finished and kept its state and random number stream, and
+  transformed data random numbers are the same; `fixed_param` chains keep
+  their thinning phase.
+* Expectation propagation warns about sites whose update never succeeded
+  and does not report convergence while one is missing.
+* Adaptation windows of one draw keep the metric; `bayescomp_hessian_vector()`
+  scales its step by the coordinates the direction moves; the ODE
+  `max_num_steps` applies between output times, as in Stan;
+  `multi_normal_cholesky` checks its Cholesky factor and `multi_student_t`
+  the sizes of its arguments; SG-MCMC rejects a nonpositive step size;
+  Laplace fits record the seed they drew.
 * `wishart_cholesky_lpdf()` and `inv_wishart_cholesky_lpdf()` reject
   matrices that are not Cholesky factors (lower triangular with a positive
   diagonal), as Stan does, instead of evaluating them through the

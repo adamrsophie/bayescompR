@@ -98,8 +98,9 @@ ode_dopri <- function(Fn, t0, y0, ts, rtol, atol, maxsteps, name) {
   d0 <- sqrt(mean((y / (atol + rtol * abs(y)))^2)); d1 <- sqrt(mean((k1 / (atol + rtol * abs(y)))^2))
   h <- if (d0 < 1e-5 || d1 < 1e-5) 1e-6 else 0.01 * d0 / d1
   h <- min(h, abs(tend - t0))
-  steps <- 0L
   for (j in seq_along(ts)) {
+    # as Stan, max_num_steps limits the steps between consecutive output times
+    steps <- 0L
     while (t < ts[j]) {
       steps <- steps + 1L
       if (steps > maxsteps)
@@ -167,10 +168,10 @@ ode_ros <- function(Fn, t0, y0, ts, rtol, atol, maxsteps, name, jacfn) {
   tend <- ts[length(ts)]
   sc <- atol + rtol * abs(y)
   h <- min(abs(tend - t0), 0.01 * max(1e-6, sqrt(mean((y / sc)^2))) / max(1e-6, sqrt(mean((F0 / sc)^2))))
-  steps <- 0L
   JT <- jacfn(t, y, F0)
   K <- matrix(0, n, 4L)
   for (j in seq_along(ts)) {
+    steps <- 0L
     while (t < ts[j]) {
       steps <- steps + 1L
       if (steps > maxsteps)
@@ -627,8 +628,8 @@ dae_solve <- function(callf, yy0, yp0, t0, ts, args, rtol, atol, maxsteps, name)
   if (sens_y0) S[, seq_len(N)] <- diag(N)
   t <- t0v
   h <- min(tv[length(tv)] - t0v, 0.01 * max(1, abs(t0v)))
-  steps <- 0L
   for (k in seq_along(tv)) {
+    steps <- 0L
     while (t < tv[k]) {
       steps <- steps + 1L
       if (steps > maxsteps)

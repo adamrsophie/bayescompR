@@ -371,7 +371,7 @@ tf_cholesky_corr <- list(
     ij <- which(lower.tri(diag(K)), arr.ind = TRUE)
     ij <- ij[order(ij[, 1L], ij[, 2L]), , drop = FALSE]
     w <- 1 + (ij[, 1L] - 1 - ij[, 2L]) / 2
-    list(x = corr_L_from_cpcs(tanh(u), K, rowwise = TRUE), lj = ad_wsum_log1m_tanh2(u, w))
+    list(x = corr_L_from_cpcs(u, K, rowwise = TRUE, from_u = TRUE), lj = ad_wsum_log1m_tanh2(u, w))
   },
   unconstrain = function(x, shape, a) {
     L <- as.matrix(x)
@@ -406,11 +406,22 @@ tf_cholesky_corr <- list(
 
 # Correlation matrix through column wise canonical partial correlations
 # (Stan's read_corr_L with the Lewandowski, Kurowicka and Joe Jacobian).
-corr_L_from_cpcs <- function(z, K, rowwise = FALSE) {
+corr_L_from_cpcs <- function(z, K, rowwise = FALSE, from_u = FALSE) {
   # each row i is its own recurrence over the partial correlations c_j of
   # (i, j), j < i: L[i, j] = c_j sqrt(a_j), a_{j+1} = a_j (1 - c_j^2),
-  # L[i, i] = sqrt(a_i), a_1 = 1; one node with the reverse recurrence
-  zv <- as.numeric(val(z))
+  # L[i, i] = sqrt(a_i), a_1 = 1; one node with the reverse recurrence.
+  # With `from_u`, z holds unconstrained values and c = tanh(z); then
+  # 1 - c^2 = sech(z)^2 is computed directly, so it stays positive where
+  # tanh(z) rounds to +-1, and the node is a function of z.
+  if (from_u) {
+    uv <- as.numeric(val(z))
+    zv <- tanh(uv)
+    eu <- exp(-2 * abs(uv))
+    om <- 4 * eu / (1 + eu)^2
+  } else {
+    zv <- as.numeric(val(z))
+    om <- 1 - zv * zv
+  }
   # z fills the lower triangle by columns, or with `rowwise` by rows
   P <- matrix(0L, K, K)
   if (rowwise) {
@@ -427,7 +438,7 @@ corr_L_from_cpcs <- function(z, K, rowwise = FALSE) {
       c <- zv[P[i, j]]
       A[i, j] <- a
       L[i, j] <- c * sqrt(a)
-      a <- a * (1 - c * c)
+      a <- a * om[P[i, j]]
     }
     A[i, i] <- a
     L[i, i] <- sqrt(a)
@@ -444,10 +455,11 @@ corr_L_from_cpcs <- function(z, K, rowwise = FALSE) {
         a <- A[i, j]
         s <- sqrt(a)
         gz[P[i, j]] <- g[i, j] * s - 2 * c * a * ga
-        ga <- (if (s > 0) g[i, j] * c * 0.5 / s else 0) + (1 - c * c) * ga
+        ga <- (if (s > 0) g[i, j] * c * 0.5 / s else 0) + om[P[i, j]] * ga
       }
     }
-    list(gz)
+    # d tanh(u) / du = sech(u)^2
+    list(if (from_u) gz * om else gz)
   })
 }
 
@@ -471,7 +483,7 @@ tf_corr_matrix <- list(
     # column k contributes log(1 - z^2) with weight 1 + (K - k - 1) / 2
     cols <- which(lower.tri(diag(K)), arr.ind = TRUE)[, 2L]
     lj <- ad_wsum_log1m_tanh2(u, 1 + (K - cols - 1) / 2)
-    L <- corr_L_from_cpcs(tanh(u), K)
+    L <- corr_L_from_cpcs(u, K, from_u = TRUE)
     list(x = ad_matmul(L, ad_transpose(L)), lj = lj)
   },
   unconstrain = function(x, shape, a) {

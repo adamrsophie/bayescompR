@@ -361,7 +361,9 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
         if (win_in_window(w)) est_add(est, q)
         if (win_end_window(w)) {
           win_compute_next(w)
-          st$metric <- make_metric(cfg$metric, est_value(est))
+          # a window of one draw has no variance estimate (as Stan, which
+          # needs more than one sample): the metric stays as it is
+          if (est$n > 1) st$metric <- make_metric(cfg$metric, est_value(est))
           st$center <- est$mean
           est <- est_new(n, dense)
           w$counter <- w$counter + 1L

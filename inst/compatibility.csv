@@ -33,7 +33,7 @@ inference,parallel tempering,implemented,test-advanced-mcmc.R,
 inference,ensemble samplers,implemented,test-advanced-mcmc.R,walkers are dependent so R-hat over walkers is optimistic
 inference,Gibbs with conjugacy detection,implemented,test-advanced-mcmc.R;test-regressions.R,numerical detection with Metropolis correction
 inference,Riemannian MALA and RMHMC,implemented,test-advanced-mcmc.R,steps whose implicit equations do not converge are rejected
-inference,MCLMC,implemented,test-advanced-mcmc.R,L is not tuned from the draws
+inference,MCLMC,implemented,test-advanced-mcmc.R,L is tuned from the effective sample size of the second half of warmup when it has at least 20 draws
 inference,Zig-Zag and BPS,partial,test-advanced-mcmc.R,event times by numerical rate quadrature
 inference,SMC with evidence,implemented,test-evidence.R,
 inference,nested sampling,implemented,test-evidence.R,

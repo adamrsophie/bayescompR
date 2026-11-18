@@ -344,12 +344,18 @@ pw_value_sym <- function() {
 # statement and the recorder read, so that the recorder sees the values the
 # statement used even when an argument reads target() or has effects.
 # Ordinary evaluation runs the statement unchanged.
+pw_label <- function(e) {
+  while (identical(e$kind, "index") || identical(e$kind, "paren")) e <- e$x %||% e$a
+  if (identical(e$kind, "var")) e$name else "y"
+}
 cg_pw_once <- function(st, gen, fields) {
   r <- gen(st)
   if (is.null(r$pw)) return(r$main)
   assigns <- list()
-  tmp <- function(e) {
+  tmp <- function(e, keep_label = FALSE) {
     if (is.null(e) || e$kind %in% c("int", "real", "var", "code")) return(e)
+    # the observation keeps the name of the variable it indexes
+    if (keep_label) e$pw_label <- pw_label(e)
     .unpack_n$n <- .unpack_n$n + 1L
     sym <- as.name(paste0(".pwa", .unpack_n$n))
     assigns[[length(assigns) + 1L]] <<- cl(as.name("<-"), sym, cg_expr(e))
@@ -360,7 +366,7 @@ cg_pw_once <- function(st, gen, fields) {
   st2 <- st
   if ("value" %in% fields) st2$value$args <- lapply(st$value$args, tmp)
   else {
-    st2$lhs <- tmp(st$lhs)
+    st2$lhs <- tmp(st$lhs, keep_label = TRUE)
     st2$args <- lapply(st$args, tmp)
     if (!is.null(st$trunc)) {
       if (!is.null(st$trunc$lo)) st2$trunc$lo <- tmp(st$trunc$lo)
@@ -387,9 +393,7 @@ cg_pw_once <- function(st, gen, fields) {
 # row of x is one observation as in the equivalent unfused model.
 cg_pointwise <- function(fname, lhs_e, arg_es, lhs, args, sg, trunc, uv = NULL) {
   if (!identical(.cg$block, "model") || !isTRUE(lhs_e$data_only)) return(NULL)
-  root <- lhs_e
-  while (identical(root$kind, "index") || identical(root$kind, "paren")) root <- root$x %||% root$a
-  label <- if (identical(root$kind, "var")) root$name else "y"
+  label <- lhs_e$pw_label %||% pw_label(lhs_e)
   pw_call <- function(spec, uf = NULL, a = c(list(lhs), unname(args)))
     cl(as.name("if"), cl(as.name("!"), cl(as.name("is.null"), cl(as.name("$"), CTX, as.name("pw")))),
        cl_list(rt_pointwise, c(list(CTX, label, spec, uf, trunc), a)))
@@ -607,7 +611,7 @@ hoist_ir <- function(ir) {
     if (hoistable(e)) {
       nm <- sprintf(".H%d", length(hoisted) + 1L)
       hoisted[[length(hoisted) + 1L]] <<- list(name = nm, expr = e)
-      return(list(kind = "code", code = as.name(nm), type = e$type, data_only = TRUE, loc = e$loc))
+      return(list(kind = "code", code = as.name(nm), type = e$type, data_only = TRUE, loc = e$loc, pw_label = pw_label(e)))
     }
     node(e)
   }

@@ -6,13 +6,19 @@
 # subset, which covers the usual `int N; vector[N] y; matrix[N, K] X;`
 # layout. Supply `subset` for anything else.
 
+# The subset model uses the seed of the full model, so random numbers drawn
+# in transformed data (that do not depend on the subset) are the same in
+# every subset and in the full model.
 model_with_data <- function(model, data) {
+  if (is.null(model$compiled$seed) && ir_calls_rng(model$ir$blocks[["transformed data"]]))
+    stop("transformed data draws random numbers; give the model a seed (bayescomp_model(seed = )) so that every data subset uses the same draws",
+         call. = FALSE)
   if (!identical(model$backend, "r")) {
     # recompile through the same backend so implementations never mix
-    out <- bayescomp_model(model$code, data = data, backend = model$backend,
+    out <- bayescomp_model(model$code, data = data, backend = model$backend, seed = model$compiled$seed,
                            allow_fallback = any(unlist(model$provenance) == "r"))
   } else {
-    inst <- instantiate(model$compiled, data)
+    inst <- with_seed(model$compiled$seed, instantiate(model$compiled, data))
     out <- model
     out$env <- inst$env; out$decls <- inst$decls; out$data <- data; out$params <- inst$params; out$dim <- inst$dim
   }
@@ -20,6 +26,13 @@ model_with_data <- function(model, data) {
     stop("the parameter dimension changes with the data subset; supply 'subset' or use a model whose parameter sizes do not depend on N",
          call. = FALSE)
   out
+}
+
+ir_calls_rng <- function(e) {
+  if (!is.list(e)) return(FALSE)
+  if (identical(e$kind, "call") && is.character(e$name) && grepl("_rng$", e$name)) return(TRUE)
+  for (k in names(e) %||% seq_along(e)) if (!k %in% c("loc", "type", "sig") && is.list(e[[k]]) && ir_calls_rng(e[[k]])) return(TRUE)
+  FALSE
 }
 
 default_subset <- function(n_name) {
@@ -93,6 +106,8 @@ bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32
   check_model(model)
   method <- match.arg(method)
   lp_every <- as_count(lp_every, "lp_every")
+  if (!is.null(step_size) && !(is.numeric(step_size) && length(step_size) == 1L && is.finite(step_size) && step_size > 0))
+    stop("'step_size' must be a positive number", call. = FALSE)
   n <- model$dim
   sp <- split_setup(model, n_name, subset)
   b <- min(as_count(batch_size, "batch_size", 1L), sp$N)
@@ -228,6 +243,7 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
       H <- num_hessian_V(function(x) -f(x)$grad, o$par)
       list(m = o$par, P = H)
     }
+    site_ok <- logical(K)
     for (sweep in seq_len(iter)) {
       it_done <- sweep
       upd <- par_lapply(seq_len(K), function(k) {
@@ -241,6 +257,7 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
         rn <- (1 - damping) * rs[[k]] + damping * upd[[k]]$r
         if (!inherits(tryCatch(chol(Q - Qs[[k]] + Qn), error = function(e) e), "error")) {
           Qs[[k]] <- Qn; rs[[k]] <- rn; n_updates <- n_updates + 1L
+          site_ok[k] <- TRUE
         }
       }
       # without a single accepted site update the "fit" would be the initial guess
@@ -250,7 +267,9 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
       m <- solve(Q, r)
       dQ <- max(abs(Q - Q_old)) / max(abs(Q))
       Q_old <- Q
-      if (max(abs(m - m_old)) < tol && dQ < tol) { m_old <- m; converged <- TRUE; break }
+      # a site that never updated is not in the approximation, so the
+      # iteration has not converged however small the change
+      if (all(site_ok) && max(abs(m - m_old)) < tol && dQ < tol) { m_old <- m; converged <- TRUE; break }
       m_old <- m
     }
     Sig <- solve(Q); Sig <- 0.5 * (Sig + t(Sig))
@@ -258,8 +277,12 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
     qs <- sweep(matrix(stats::rnorm(S * n), S, n) %*% t(L), 2L, m_old, "+")
     full <- lp_value_fun(model)
     lp <- apply(qs, 1L, full)
-    if (!converged) warning(sprintf("expectation propagation did not converge in %d sweeps", it_done), call. = FALSE)
-    info <<- list(mean = m_old, cov = Sig, iterations = it_done, converged = converged, site_updates = n_updates)
+    if (!all(site_ok))
+      warning(sprintf("expectation propagation: the update of site%s %s never succeeded, so %s not in the approximation",
+                      if (sum(!site_ok) > 1L) "s" else "", paste(which(!site_ok), collapse = ", "),
+                      if (sum(!site_ok) > 1L) "they are" else "it is"), call. = FALSE)
+    else if (!converged) warning(sprintf("expectation propagation did not converge in %d sweeps", it_done), call. = FALSE)
+    info <<- list(mean = m_old, cov = Sig, iterations = it_done, converged = converged, site_updates = n_updates, sites_updated = site_ok)
     dg <- matrix(0, S, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
     dg[, "lp__"] <- lp
     list(q = qs, gq = chain_write_draws(model, qs, FALSE), diag = dg, step_size = NA_real_, inv_metric = Sig,
@@ -267,6 +290,7 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
   })
   fit <- make_fit_extra(model, res, list(sites = K), "ep", seed, proc.time()[["elapsed"]] - t0)
   fit$mean <- info$mean; fit$cov <- info$cov; fit$iterations <- info$iterations
+  fit$converged <- info$converged; fit$sites_updated <- info$sites_updated
   fit
 }
 

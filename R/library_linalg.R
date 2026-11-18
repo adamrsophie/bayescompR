@@ -542,14 +542,28 @@ gp_kernel_ard <- function(name, kfun) {
   def(name, c("vector[]", "real", "real[]"), "matrix", function(x, s, l) {
     chk_positive(name, "magnitude", s)
     if (sqexp && !is_ad(x) && any_ad(s, l)) return(gp_sqexp_ard_fixed(name, x, x, s, l))
+    if (!is_ad(x)) return(kfun(gp_ard_fixed_d2(name, x, x, l), as_dbl(s), 1))
     xs <- gp_ard_scale(name, x, l)
     kfun(gp_sqdist(xs, xs), as_dbl(s), 1)
   })
   def(name, c("vector[]", "vector[]", "real", "real[]"), "matrix", function(x1, x2, s, l) {
     chk_positive(name, "magnitude", s)
     if (sqexp && !any_ad(x1, x2) && any_ad(s, l)) return(gp_sqexp_ard_fixed(name, x1, x2, s, l))
+    if (!any_ad(x1, x2)) return(kfun(gp_ard_fixed_d2(name, x1, x2, l), as_dbl(s), 1))
     kfun(gp_sqdist(gp_ard_scale(name, x1, l), gp_ard_scale(name, x2, l)), as_dbl(s), 1)
   })
+}
+# scaled squared distances of fixed inputs, sum_k (x1[i,k] - x2[j,k])^2 / l_k^2,
+# from the differences of the inputs (scaling first would lose the
+# separation of points far from the origin)
+gp_ard_fixed_d2 <- function(name, x1, x2, l) {
+  v1 <- val(x1); v2 <- val(x2)
+  chk_positive(name, "length scale", l)
+  if (ncol(v1) != nelem(l) || ncol(v2) != nelem(l)) stop_shape(sprintf("%s: the number of length scales must equal the dimension of the inputs", name))
+  il2 <- 1 / (as_dbl(l) * as_dbl(l))
+  d2 <- 0
+  for (k in seq_len(ncol(v1))) d2 <- d2 + outer(v1[, k], v2[, k], `-`)^2 * ad_select(flat(il2), k)
+  d2
 }
 # Squared exponential ARD covariance of fixed inputs as one node: the
 # forward pass is the one the general path computes; the reverse pass
@@ -561,9 +575,9 @@ gp_sqexp_ard_fixed <- function(name, x1, x2, s, l) {
   chk_positive(name, "length scale", l)
   vl <- as.numeric(val(l))
   if (ncol(v1) != length(vl) || ncol(v2) != length(vl)) stop_shape(sprintf("%s: the number of length scales must equal the dimension of the inputs", name))
-  Z1 <- v1 / rep(vl, each = nrow(v1))
-  Z2 <- v2 / rep(vl, each = nrow(v2))
-  dd <- function(k) outer(Z1[, k], Z2[, k], `-`)
+  # differences before scaling, so points far from the origin keep their
+  # separation
+  dd <- function(k) outer(v1[, k], v2[, k], `-`) / vl[k]
   d2 <- 0
   for (k in seq_along(vl)) d2 <- d2 + dd(k)^2
   vs <- val(s)

@@ -131,6 +131,9 @@ vec_for <- function(a, t) {
   n <- a$var
   if (!identical(t$iter, NULL) || is.null(a$lo) || is.null(a$hi)) return(NULL)
   if (vec_mentions(a$lo, n) || vec_mentions(a$hi, n)) return(NULL)
+  # the bounds are evaluated once (and again by the guard below), which is
+  # only the same as the loop when they cannot change between evaluations
+  if (vec_effectful(a$lo) || vec_effectful(a$hi)) return(NULL)
   abody <- vec_as_list(a$body); tbody <- vec_as_list(t$body)
   if (!length(abody) || length(abody) != length(tbody)) return(NULL)
   # variables written in the loop
@@ -160,7 +163,10 @@ vec_for <- function(a, t) {
     if (is.null(s)) return(NULL)
     out[[k]] <- s
   }
-  out
+  # a loop with no iterations evaluates nothing, not even expressions that do
+  # not use the loop variable
+  cond <- list(kind = "binop", op = "<=", a = a$lo, b = a$hi, loc = a$loc)
+  list(list(kind = "if", cond = cond, then = vec_block(out, a$loc), els = NULL, loc = a$loc))
 }
 
 vec_range <- function(ctx) list(kind = "range", lo = ctx$lo, hi = ctx$hi, loc = ctx$loc)
@@ -175,7 +181,8 @@ vec_size <- function(ctx) {
 vec_stmt <- function(a, t, ctx) {
   switch(a$kind,
     tilde = {
-      if (!is.null(a$trunc) || !vec_scalar(t$lhs$type)) return(NULL)
+      # a user defined density may have unrelated scalar and vector overloads
+      if (!is.null(a$trunc) || isTRUE(t$sig$user) || !vec_scalar(t$lhs$type)) return(NULL)
       if (!all(vapply(t$args, function(x) vec_scalar(x$type), TRUE))) return(NULL)
       lhs <- vec_expr(a$lhs, t$lhs, ctx)
       if (is.null(lhs)) return(NULL)

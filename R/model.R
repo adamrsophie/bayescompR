@@ -160,7 +160,7 @@ bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL
   prov <- stats::setNames(as.list(ifelse(caps %in% used, be$name, "r")), caps)
   out <- structure(list(code = src, ir = ir, compiled = m, env = inst$env, decls = inst$decls,
                         params = inst$params, dim = inst$dim, data = data, backend = be$name,
-                        provenance = prov, native = NULL),
+                        provenance = prov, native = NULL, reads_target = ir_reads_target(ir)),
                    class = "bayescomp_model")
   if (be$name == "r") return(out)
   core <- setdiff(c("log_density", "gradient"), be$capabilities)
@@ -175,6 +175,20 @@ bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL
     stop(sprintf("backend '%s' did not return a log_density_gradient function", be$name), call. = FALSE)
   out$native <- native
   out
+}
+
+# does the program read target() (in any block or function)? Its value then
+# depends on whether constants are dropped, so a nonlinear use of it makes
+# the normalized and the proportional densities differ by more than a
+# constant
+ir_reads_target <- function(e) {
+  if (!is.list(e)) return(FALSE)
+  if (identical(e$builtin, "target")) return(TRUE)
+  for (k in names(e) %||% seq_along(e)) {
+    if (k %in% c("loc", "type", "sig")) next
+    if (is.list(e[[k]]) && ir_reads_target(e[[k]])) return(TRUE)
+  }
+  FALSE
 }
 
 # log density and gradient on the unconstrained scale from the model's
@@ -612,13 +626,15 @@ bayescomp_hessian_vector <- function(model, upars, v, jacobian = TRUE, propto = 
   lp <- bayescomp_log_prob(model, u, jacobian = jacobian, propto = propto)
   # the norm of v scaled by its largest entry, so that it neither overflows
   # nor underflows
-  sc <- max(abs(v))
+  sc <- if (length(v)) max(abs(v)) else 0
   if (sc == 0) return(structure(numeric(length(u)), log_prob = lp))
   w <- v / sc
   nw <- sqrt(sum(w * w))
   d <- w / nw
   lpg <- model_lpg(model, jacobian, propto, TRUE)
-  st <- fd_points(u, h * max(1, max(abs(u))) * d)
+  # the step is scaled by the coordinates the direction moves, not by an
+  # unrelated large one
+  st <- fd_points(u, h * max(1, max(abs(u[d != 0]))) * d)
   # the difference along d over the length of the represented step
   len <- sqrt(sum(((st$up - st$down) / 2)^2))
   structure((lpg(st$up)$grad - lpg(st$down)$grad) / (2 * len) * nw * sc, log_prob = lp)

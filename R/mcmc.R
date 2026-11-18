@@ -20,8 +20,11 @@
 # log density without the gradient: the tape is disabled. Without a tape
 # every value is a constant, so propto would drop every sampling statement;
 # the full density is evaluated and, in the chain driver, shifted by a
-# constant so that lp__ matches the propto value used by HMC.
-lp_value_fun <- function(model, print = FALSE, jacobian = TRUE, propto = FALSE) {
+# constant so that lp__ matches the propto value used by HMC. A program that
+# reads target() is the exception: there the two conventions differ by more
+# than a constant, so it is evaluated with constants dropped, as for HMC
+# (recording a tape to know which terms are constant).
+lp_value_fun <- function(model, print = FALSE, jacobian = TRUE, propto = isTRUE(model$reads_target)) {
   if (!is.null(model$native)) {
     nat <- model$native
     fv <- nat[["log_density"]] %||% function(u, jacobian, propto) nat$log_density_gradient(u, jacobian, propto)$value
@@ -36,9 +39,15 @@ lp_value_fun <- function(model, print = FALSE, jacobian = TRUE, propto = FALSE) 
   }
   f <- model_fun(model, "log_prob")
   function(q) {
-    old <- .ad$tape
-    .ad$tape <- NULL
-    on.exit(.ad$tape <- old)
+    if (propto) {
+      old <- tape_start()
+      on.exit(tape_restore(old))
+      q <- ad_leaf(as.numeric(q))
+    } else {
+      old <- .ad$tape
+      .ad$tape <- NULL
+      on.exit(.ad$tape <- old)
+    }
     r <- tryCatch({
       ctx <- new_ctx(jacobian = jacobian, print = print, propto = propto)
       as.numeric(val(f(q, ctx)))

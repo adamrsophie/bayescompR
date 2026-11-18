@@ -990,3 +990,157 @@ test_that("Gaussian GLM factorizations are kept for many statements of one model
   expect_identical(bayescomp_grad_log_prob(m, u), g1)
   expect_length(m$env$.glm_store$entries, K)
 })
+
+lp_and_grad <- function(m, u) c(bayescomp_log_prob(m, u, propto = FALSE), as.numeric(bayescomp_grad_log_prob(m, u)))
+
+test_that("loop vectorization keeps user overloads, empty loops and effectful bounds", {
+  ov <- "functions { real obs_lpdf(real y, real m) { return normal_lpdf(y | m, 1); }
+    real obs_lpdf(vector y, real m) { return normal_lpdf(y | m, 2); } }
+    data { vector[3] y; } parameters { real x; } model { for (i in 1:3) y[i] ~ obs(x); }"
+  m <- bayescomp_model(ov, data = list(y = c(1, 2, 3)))
+  expect_equal(lp_and_grad(m, 0.1), c(sum(dnorm(1:3, 0.1, 1, log = TRUE)), sum(1:3 - 0.1)))
+  m <- bayescomp_model("data { int N; array[N] real y; } parameters { real x; }
+    model { x ~ std_normal(); for (i in 1:N) y[i] ~ normal(0, -1); }", data = list(N = 0, y = numeric(0)))
+  expect_equal(bayescomp_log_prob(m, -1, propto = FALSE), dnorm(-1, log = TRUE))
+})
+
+test_that("the prepared Gaussian GLM is accurate far from the origin and at extreme scales", {
+  gl <- "data { int N; matrix[N,1] X; vector[N] y; } parameters { real a; real b; real ls; } model { y ~ normal_id_glm(X, a, [b]', exp(ls)); }"
+  gd <- "data { int N; matrix[N,1] X; vector[N] y; } parameters { real a; real b; real ls; } model { y ~ normal(a + X[,1] * b, exp(ls)); }"
+  both <- function(d, u) lapply(list(gl, gd), function(cd) lp_and_grad(bayescomp_model(cd, data = d), u))
+  X <- matrix(0:8)
+  r <- both(list(N = 9, X = X, y = 1e16 + 2 * c(X)), c(1e16, 2, 0))
+  expect_equal(r[[1]], r[[2]], tolerance = 1e-10)
+  expect_equal(r[[1]][1], -9 * 0.5 * log(2 * pi))
+  X4 <- matrix(0:3)
+  r <- both(list(N = 4, X = X4, y = 1 + c(X4)), c(1, 1, -400))
+  expect_equal(r[[1]], r[[2]])
+  set.seed(3); X <- matrix(rnorm(40)); y <- 1 + 2 * c(X) + rnorm(40)
+  r <- both(list(N = 40, X = X, y = y), c(0.7, 1.6, -0.2))
+  expect_equal(r[[1]], r[[2]], tolerance = 1e-10)
+})
+
+test_that("truncation normalizes every term of a broadcast density", {
+  m <- bayescomp_model("data { real y; vector[3] off; } parameters { real x; } model { y ~ normal(off + x, 1) T[0, ]; }",
+                       data = list(y = 1, off = c(-1, 0, 1)))
+  mu <- c(-1, 0, 1) + 0.2
+  expect_equal(bayescomp_log_prob(m, 0.2, propto = FALSE),
+               sum(dnorm(1, mu, 1, log = TRUE) - pnorm(0, mu, lower.tail = FALSE, log.p = TRUE)))
+})
+
+test_that("value only samplers use the proportional target of programs that read target()", {
+  m <- bayescomp_model("parameters { real x; } model { x ~ std_normal(); target += 8 * log1p_exp(target()); }")
+  expect_true(m$reads_target)
+  f <- bayescompR:::lp_value_fun(m)
+  expect_equal(f(2) - f(0), bayescomp_log_prob(m, 2, propto = TRUE) - bayescomp_log_prob(m, 0, propto = TRUE))
+  expect_false(bayescomp_model("parameters { real x; } model { x ~ std_normal(); }")$reads_target)
+})
+
+test_that("ARD covariances of fixed inputs do not depend on the origin", {
+  for (k in c("gp_exp_quad_cov", "gp_matern32_cov")) {
+    code <- sprintf("data { array[2] vector[1] x; } parameters { real<lower=0> l; } model { target += sum(%s(x, 1.0, {l})); }", k)
+    r <- lapply(list(c(0, 2), c(1e16, 1e16 + 2)), function(xx)
+      lp_and_grad(bayescomp_model(code, data = list(x = matrix(xx, 2, 1))), log(3)))
+    expect_equal(r[[1]], r[[2]])
+  }
+})
+
+test_that("cholesky_factor_corr stays a valid factor far in the tails", {
+  m <- bayescomp_model("parameters { cholesky_factor_corr[2] L; } model { target += log(L[2,2]); }")
+  for (u in c(20, 300)) expect_equal(lp_and_grad(m, u), c(3 * log(1 / cosh(u)), -3 * tanh(u)))
+  m3 <- bayescomp_model("parameters { cholesky_factor_corr[3] L; corr_matrix[3] R; } model { L ~ lkj_corr_cholesky(2); R ~ lkj_corr(2); }")
+  u <- c(.3, -.4, .5, .2, -.1, .7)
+  expect_equal(as.numeric(bayescomp_grad_log_prob(m3, u)), num_grad(function(v) bayescomp_log_prob(m3, v), u), tolerance = 1e-5)
+})
+
+test_that("negative binomial values and gradients at extreme precision and mean", {
+  for (fam in c("neg_binomial_2_log(e, exp(lp))", "neg_binomial_2(exp(e), exp(lp))")) {
+    m <- bayescomp_model(sprintf("data { array[3] int y; } parameters { real e; real lp; } model { y ~ %s; }", fam),
+                         data = list(y = c(0L, 2L, 101L)))
+    for (u in list(c(0.3, 1.2), c(0, -40), c(4, 2), c(700, 0))) {
+      expect_equal(bayescomp_log_prob(m, u, propto = FALSE), sum(dnbinom(c(0, 2, 101), size = exp(u[2]), mu = exp(u[1]), log = TRUE)))
+      expect_true(all(is.finite(bayescomp_grad_log_prob(m, u))))
+    }
+    expect_equal(as.numeric(bayescomp_grad_log_prob(m, c(0.3, 1.2))), num_grad(function(v) bayescomp_log_prob(m, v), c(0.3, 1.2)), tolerance = 1e-5)
+  }
+  m <- bayescomp_model("parameters { real x; } model { 1 ~ neg_binomial_2_log(0, exp(x)); }")
+  expect_equal(as.numeric(bayescomp_grad_log_prob(m, -40)), 1, tolerance = 1e-8)
+  m <- bayescomp_model("parameters { real x; } model { 2 ~ neg_binomial_2_log(x, 1); }")
+  expect_equal(lp_and_grad(m, 710), c(-710, -1))
+})
+
+test_that("data subsets keep the transformed data draws of the full model", {
+  code <- "data { int N; vector[N] y; } transformed data { real bias = normal_rng(0, 1); } parameters { real q; } model { y ~ normal(q + bias, 1); }"
+  d <- list(N = 4, y = c(-1, 0, .25, 2))
+  m <- bayescomp_model(code, data = d, seed = 7)
+  sp <- bayescompR:::default_subset("N")
+  gb <- sum(vapply(list(1:2, 3:4), function(ix) as.numeric(bayescomp_grad_log_prob(bayescompR:::model_with_data(m, sp(d, ix)), 0)), 0))
+  expect_equal(gb, as.numeric(bayescomp_grad_log_prob(m, 0)))
+  expect_error(bayescompR:::model_with_data(bayescomp_model(code, data = d), sp(d, 1:2)), "give the model a seed")
+})
+
+test_that("pointwise count terms broadcast a scalar outcome", {
+  k <- bayescompR:::pw_kernels
+  expect_equal(k$poisson_log(2, c(0, 1, 2)), dpois(2, exp(0:2), log = TRUE))
+  expect_equal(k$neg_binomial_2_log(2, c(0, 1, 2), 2), dnbinom(2, size = 2, mu = exp(0:2), log = TRUE))
+  expect_equal(k$neg_binomial_2_log(2, 0, 1e16), dnbinom(2, size = 1e16, mu = 1, log = TRUE))
+})
+
+test_that("pointwise replay uses each chain's CHAIN_ID and keeps indexed names", {
+  m <- bayescomp_model("data { int CHAIN_ID; real y; } parameters { real a; } model { y ~ normal(CHAIN_ID + a, 1); }", data = list(y = 0))
+  fit <- bayescomp_sample(m, algorithm = "fixed_param", chains = 2, iter_warmup = 0, iter_sampling = 2,
+                          init = list(a = 0), seed = 42, refresh = 0)
+  ll <- bayescomp_log_lik(fit, format = "array")
+  expect_equal(ll[1, , 1], dnorm(0, 1:2, 1, log = TRUE))
+  fit <- pw_fixed_fit("data { int N; vector[N] obs; } parameters { real a; } model { for (j in 1:N) obs[j] ~ normal(a + 0, 1); }",
+                      list(N = 2, obs = c(1, 2)))
+  expect_equal(colnames(bayescomp_log_lik(fit)), c("obs[1]", "obs[2]"))
+})
+
+test_that("truncated pointwise terms are -Inf outside parameter bounds", {
+  fit <- pw_fixed_fit("data { real y; } parameters { real a; } model { y ~ normal(a, 1) T[a, ]; }", list(y = 0), init = list(a = -1))
+  expect_true(is.finite(bayescomp_log_lik(fit)[1, 1]))
+  # a draw with the bound above the observation (as from an approximation)
+  fit$unconstrained[[1]][] <- 1
+  expect_equal(unname(bayescomp_log_lik(fit)[, 1]), c(-Inf, -Inf))
+})
+
+test_that("resume of fixed_param keeps the thinning phase and exactness is checked", {
+  m <- bayescomp_model("parameters { real a; } model { a ~ normal(0, 1); }")
+  f1 <- bayescomp_sample(m, algorithm = "fixed_param", chains = 1, iter_warmup = 0, iter_sampling = 1, thin = 3,
+                         init = list(a = 0), seed = 1, refresh = 0)
+  f2 <- bayescomp_sample(m, algorithm = "fixed_param", iter_sampling = 1, resume = f1, refresh = 0)
+  expect_equal(nrow(f1$unconstrained[[1]]) + nrow(f2$unconstrained[[1]]), 1L)
+  expect_true(f2$config$resume$exact)
+  f1$final[[1]]$rng <- NULL
+  expect_false(bayescomp_sample(m, algorithm = "fixed_param", iter_sampling = 1, resume = f1, refresh = 0)$config$resume$exact)
+})
+
+test_that("multivariate densities check sizes and Cholesky factors", {
+  expect_error(lib_fun("multi_student_t_lpdf")(c(.1, .2), 3, 0, diag(2)), "size mismatch")
+  expect_error(lib_fun("multi_normal_cholesky_lpdf")(c(1, 2), c(0, 0), matrix(c(1, 0, 8, 1), 2)), "lower triangular")
+})
+
+test_that("an adaptation window of one draw keeps the metric", {
+  m <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 1); }")
+  expect_no_error(bayescomp_sample(m, chains = 1, iter_warmup = 12, iter_sampling = 5, adapt_init_buffer = 5,
+                                   adapt_term_buffer = 5, adapt_window = 1, seed = 19, refresh = 0))
+})
+
+test_that("Hessian vector products scale the step by the moved coordinates", {
+  m <- bayescomp_model("parameters { vector[2] x; } model { x[1] ~ normal(0, 1); target += -log1p_exp(-x[2]) - log1p_exp(x[2]); }")
+  expect_equal(as.numeric(bayescomp_hessian_vector(m, c(1e12, 0), c(0, 1))), c(0, -0.5), tolerance = 1e-6)
+})
+
+test_that("the ODE step limit applies between output times", {
+  m <- bayescomp_model("functions { vector f(real t, vector y) { return rep_vector(0, 1); } }
+    data { array[24] real ts; } parameters { real x; }
+    model { array[24] vector[1] y = ode_rk45_tol(f, [1]', 0, ts, 1e-6, 1e-6, 12); target += x * y[24, 1]; }",
+    data = list(ts = (1:24) / 24))
+  expect_equal(bayescomp_log_prob(m, 0.4), 0.4)
+})
+
+test_that("SG-MCMC rejects a nonpositive step size", {
+  m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; } model { y ~ normal(mu, 1); }", data = list(N = 4, y = 1:4))
+  expect_error(bayescomp_sgmcmc(m, step_size = -0.01, chains = 1, iter_warmup = 2, iter_sampling = 2), "positive number")
+})

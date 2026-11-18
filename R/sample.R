@@ -146,7 +146,9 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
     changed <- c(changed, if (given_step) "step_size", if (given_metric) "inv_metric")
     # an exact continuation needs the same model and data; anything else is
     # a warm start from the last state
-    same_model <- identical(model$code, resume$model$code) && identical(model$data, resume$model$data)
+    # (random numbers drawn in transformed data must also be the same)
+    same_model <- identical(model$code, resume$model$code) && identical(model$data, resume$model$data) &&
+      (!ir_calls_rng(model$ir$blocks[["transformed data"]]) || identical(model$compiled$seed, resume$model$compiled$seed))
     if (!same_model)
       warning("the model or data differ from those of the fit in 'resume': its chains start from their last state, ",
               "but without their random number streams, so this is not an exact continuation", call. = FALSE)
@@ -218,7 +220,13 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
     out
   })
   res <- interrupted_chains(res)
-  if (!is.null(resume)) cfg$resume <- list(exact = same_model && !length(changed), changed = changed)
+  if (!is.null(resume)) {
+    # exact only when every chain finished (was not interrupted) and kept
+    # its state and random number stream
+    complete <- length(resume$final) == chains && !isTRUE(resume$interrupted) &&
+      all(vapply(resume$final, function(f) isTRUE(f$exact) && !is.null(f$rng) && !is.null(f$q), TRUE))
+    cfg$resume <- list(exact = same_model && complete && !length(changed), changed = changed)
+  }
   fit <- make_fit(model, res, cfg, method = "sample", seed = seed, elapsed = proc.time()[["elapsed"]] - t0)
   fit$interrupted <- isTRUE(attr(res, "interrupted"))
   fit
@@ -272,10 +280,14 @@ check_model <- function(model) {
 # fixed_param (and models without parameters): the parameters stay at q0
 # and only generated quantities are produced; lp__ is 0 as in Stan
 fixed_param_chain <- function(cfg, q0 = numeric(0)) {
-  ns <- length(seq_len(cfg$iter_sampling)[(seq_len(cfg$iter_sampling) - 1L) %% cfg$thin == 0L])
+  # the thinning phase continues across resumed runs
+  off <- cfg$sampling_offset %||% 0L
+  ns <- sum((off + seq_len(cfg$iter_sampling) - 1L) %% cfg$thin == 0L)
   dg <- matrix(0, ns, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
+  rng <- if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) get(".Random.seed", envir = globalenv())
   list(q = matrix(q0, ns, length(q0), byrow = TRUE), diag = dg, step_size = NA_real_, inv_metric = numeric(0), n_warmup_saved = 0L,
-       time = c(warmup = 0, sampling = 0))
+       time = c(warmup = 0, sampling = 0),
+       final = list(q = q0, rng = rng, exact = TRUE, n_sampling = off + cfg$iter_sampling))
 }
 
 # Run `f(chain_id)` for every chain with independent RNG streams.

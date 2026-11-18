@@ -214,7 +214,8 @@ lp_normal_id_glm <- function(y, x, alpha, beta, sigma, propto) {
 
 # With fixed data y and x, a scalar intercept and a scalar scale, the sum of
 # squares is ||R theta[piv] - c||^2 + r2 for the pivoted QR factorization of
-# A = [1 | x] and c, r2 from Q'y. Each evaluation is then O(P^2) instead of
+# A = [1 | x - xbar] and c, r2 from Q'(y - ybar), where theta holds the
+# intercept of the centered model, alpha - ybar + xbar' beta, and beta. Each evaluation is then O(P^2) instead of
 # O(N P). The path depends only on the data, never on what was evaluated
 # before, so results do not change with call history.
 # The factorizations are owned by the model instance (see model_fun()), so
@@ -245,10 +246,15 @@ normal_glm_prep <- function(y, x) {
   N <- nrow(x); P1 <- ncol(x) + 1L
   prep <- NULL
   if (N > P1 && all(is.finite(x)) && all(is.finite(y))) {
-    q <- qr(cbind(1, x))
+    # centering y and the columns of x keeps the factorization and the
+    # projected residual at the scale of the deviations, not of the data
+    # (data far from the origin would otherwise cancel)
+    xbar <- colMeans(x); ybar <- mean(y)
+    q <- qr(cbind(1, sweep(x, 2L, xbar)))
     if (q$rank == P1) {
-      qty <- qr.qty(q, as.numeric(y))
-      prep <- list(R = qr.R(q), piv = q$pivot, c = qty[seq_len(P1)], r2 = sum(qty[-seq_len(P1)]^2), N = N)
+      qty <- qr.qty(q, as.numeric(y) - ybar)
+      prep <- list(R = qr.R(q), piv = q$pivot, c = qty[seq_len(P1)], rr = sqrt(sum(qty[-seq_len(P1)]^2)),
+                   ynorm = sqrt(sum(qty^2)), xbar = xbar, ybar = ybar, N = N)
     }
   }
   size <- length(x) + length(y) + P1 * P1
@@ -273,17 +279,27 @@ normal_glm_prepared <- function(y, x, alpha, beta, sigma, propto) {
   if (is.null(pr)) return(NULL)
   chk_positive_finite("normal_lpdf", "Scale parameter", sigma)
   N <- pr$N
-  th <- c(va, as.vector(vb))[pr$piv]
-  r <- as.vector(pr$R %*% th) - pr$c
-  sse <- sum(r * r) + pr$r2
+  vbv <- as.vector(vb)
+  # intercept of the centered model
+  th <- c(va - pr$ybar + sum(pr$xbar * vbv), vbv)[pr$piv]
+  # standardized residuals, so tiny and huge scales neither underflow nor
+  # overflow when squared
+  fit <- as.vector(pr$R %*% th)
+  # the projection carries rounding error of order eps times the size of the
+  # fitted and observed values; when that is not negligible against the scale
+  # (an almost exact fit with a tiny scale), use the observation level sum
+  err <- 64 * .Machine$double.eps * (sqrt(sum(fit * fit)) + pr$ynorm)
+  if (!(err <= 1e-6 * vs)) return(NULL)
+  z <- (fit - pr$c) / vs
+  z2 <- sum(z * z) + (pr$rr / vs)^2
   lp <- 0
   if (!propto) lp <- lp - N * 0.9189385332046727
   if (inc(propto, sigma)) lp <- lp - N * log(vs)
-  if (inc(propto, alpha, beta, sigma)) lp <- lp - 0.5 * sse / vs^2
+  if (inc(propto, alpha, beta, sigma)) lp <- lp - 0.5 * z2
   ad_node(lp, list(alpha, beta, sigma), function(g) {
     gt <- numeric(length(th))
-    gt[pr$piv] <- -as.vector(crossprod(pr$R, r)) / vs^2
-    list(g * gt[1L], unbroadcast(g * gt[-1L], vb), g * (sse / vs^3 - N / vs))
+    gt[pr$piv] <- -as.vector(crossprod(pr$R, z)) / vs
+    list(g * gt[1L], unbroadcast(g * (gt[-1L] + pr$xbar * gt[1L]), vb), g * (z2 - N) / vs)
   })
 }
 glm_linpred <- function(f, x, alpha, beta) {
@@ -1213,36 +1229,71 @@ lp_neg_binomial <- function(n, alpha, beta, propto) {
 defdist("neg_binomial", c("ints", "reals", "reals"), lp_neg_binomial, discrete = TRUE,
   rng = function(a, b) vrng(function(n, a, b) as.integer(stats::rpois(n, stats::rgamma(n, a, b))), a, b))
 
-# lgamma(n + phi) - lgamma(phi) for counts n, accurate for large phi
-# (the direct difference cancels); the phi partial sums 1 / (phi + j)
-ad_lgamma_ratio <- function(nn, phi) {
-  vp <- rep_len(val(phi), length(nn))
-  v <- ifelse(nn == 0, 0, lgamma(pmax(nn, 1)) - lbeta(pmax(nn, 1), vp))
-  if (!is_ad(phi)) return(v)
-  # each formula only for its own counts: ifelse() would evaluate the sum
-  # for every count, a million terms for a count of a million
+# digamma(n + phi) - digamma(phi) = sum_{j < n} 1 / (phi + j): the sum for
+# small counts, a series in n / phi where phi is large against n (the
+# digamma difference cancels there), the digamma difference otherwise.
+# Each formula only for its own counts: ifelse() would evaluate the sum for
+# every count, a million terms for a count of a million.
+lgamma_ratio_dphi <- function(nn, vp) {
   d <- numeric(length(nn))
+  r <- nn / vp
   small <- which(nn <= 100)
-  large <- which(nn > 100)
-  d[small] <- vapply(small, function(i) sum(1 / (vp[i] + seq_len(nn[i]) - 1)), 0)
-  d[large] <- digamma(nn[large] + vp[large]) - digamma(vp[large])
-  ad_node(v, list(phi), function(g) list(unbroadcast(g * d, val(phi))))
+  ser <- which(nn > 100 & r < 1e-4)
+  big <- which(nn > 100 & r >= 1e-4)
+  d[small] <- vapply(small, function(i) sum(1 / (vp[i] + (seq_len(nn[i]) - 1))), 0)
+  if (length(ser)) {
+    n <- nn[ser]; p <- vp[ser]
+    d[ser] <- (n / p) * (1 - (n - 1) / (2 * p) + (n - 1) * (2 * n - 1) / (6 * p * p))
+  }
+  d[big] <- digamma(nn[big] + vp[big]) - digamma(vp[big])
+  d
+}
+
+# negative binomial with log mean eta and precision phi as one node:
+#   lgamma(n + phi) - lgamma(phi) - lgamma(n + 1) + n eta
+#     - (n + phi) log(exp(eta) + phi) + phi log(phi)
+# with the partials written so they stay finite for tiny and huge phi and
+# large eta: d/deta = (n - mu) phi / (mu + phi) and d/dphi = the digamma
+# ratio - log1p(mu / phi) + (mu - n) / (mu + phi). With `mean_scale` the
+# location is the mean mu (d/dmu = d/deta / mu).
+nb2_lpmf <- function(f, n, loc, phi, propto, mean_scale) {
+  loc <- flat(as_dbl(loc)); phi <- flat(as_dbl(phi))
+  N <- vlen_check(f, n, loc, phi)
+  if (N == 0L) return(0)
+  nn <- rep_len(as.numeric(n), N)
+  vl <- rep_len(as.numeric(val(loc)), N); vp <- rep_len(as.numeric(val(phi)), N)
+  eta <- if (mean_scale) log(vl) else vl
+  lphi <- log(vp)
+  # log1p(mu / phi) and log(mu + phi), stable for any eta and phi
+  sp <- pmax(eta - lphi, 0) + log1p(exp(-abs(eta - lphi)))
+  lse <- lphi + sp
+  # mu / (mu + phi) and phi / (mu + phi)
+  wm <- stats::plogis(eta - lphi); wp <- stats::plogis(lphi - eta)
+  use_phi <- inc(propto, phi); use_both <- inc(propto, loc, phi)
+  v <- 0
+  if (use_phi) v <- v + sum(ifelse(nn == 0, 0, lgamma(pmax(nn, 1)) - lbeta(pmax(nn, 1), vp)))
+  if (!propto) v <- v - sum(lgamma(nn + 1))
+  if (use_both) v <- v + sum(nn * (eta - lse) - vp * sp)
+  if (!any_ad(loc, phi) || (!use_phi && !use_both)) return(v)
+  ad_node(v, list(loc, phi), function(g) {
+    gl <- if (is_ad(loc) && use_both) {
+      d <- nn * wp - vp * wm
+      if (mean_scale) d <- d / vl
+      unbroadcast(g * d, val(loc))
+    }
+    gp <- if (is_ad(phi)) {
+      d <- if (use_phi) lgamma_ratio_dphi(nn, vp) else numeric(N)
+      if (use_both) d <- d - sp + wm - nn * exp(-lse)
+      unbroadcast(g * d, val(phi))
+    }
+    list(gl, gp)
+  })
 }
 
 lp_neg_binomial_2 <- function(n, mu, phi, propto) {
   f <- "neg_binomial_2_lpmf"
   chk_int_range(f, "Failures variable", n, 0L); chk_positive_finite(f, "Location parameter", mu); chk_positive_finite(f, "Precision parameter", phi)
-  mu <- flat(as_dbl(mu)); phi <- flat(as_dbl(phi))
-  N <- vlen_check(f, n, mu, phi)
-  nn <- rep_len(as.numeric(n), N)
-  lp <- 0
-  if (inc(propto, phi)) lp <- lp + ad_sum(ad_lgamma_ratio(nn, phi))
-  if (!propto) lp <- lp - sum(lgamma(nn + 1))
-  if (inc(propto, mu, phi)) {
-    lmp <- log(mu + phi)
-    lp <- lp + ad_sum(flat(ad_mult_log(nn, mu) - nn * lmp - phi * log1p(mu / phi) + 0 * nn))
-  }
-  lp
+  nb2_lpmf(f, n, mu, phi, propto, mean_scale = TRUE)
 }
 nb2_cdf_ad <- function(n, mu, phi, lower) {
   mu <- flat(as_dbl(mu)); phi <- flat(as_dbl(phi))
@@ -1264,18 +1315,7 @@ defdist("neg_binomial_2", c("ints", "reals", "reals"), lp_neg_binomial_2, discre
 lp_neg_binomial_2_log <- function(n, eta, phi, propto) {
   f <- "neg_binomial_2_log_lpmf"
   chk_int_range(f, "Failures variable", n, 0L); chk_finite(f, "Log location parameter", eta); chk_positive_finite(f, "Precision parameter", phi)
-  eta <- flat(as_dbl(eta)); phi <- flat(as_dbl(phi))
-  N <- vlen_check(f, n, eta, phi)
-  nn <- rep_len(as.numeric(n), N)
-  lp <- 0
-  if (inc(propto, phi)) lp <- lp + ad_sum(ad_lgamma_ratio(nn, phi))
-  if (!propto) lp <- lp - sum(lgamma(nn + 1))
-  if (inc(propto, eta, phi)) {
-    lphi <- log(phi)
-    lse <- ad_log_sum_exp2(eta, lphi)
-    lp <- lp + ad_sum(flat(nn * (eta - lse) - phi * log1p(exp(eta - lphi)) + 0 * nn))
-  }
-  lp
+  nb2_lpmf(f, n, eta, phi, propto, mean_scale = FALSE)
 }
 defdist("neg_binomial_2_log", c("ints", "reals", "reals"), lp_neg_binomial_2_log, discrete = TRUE,
   rng = function(eta, phi) vrng(function(n, e, p) as.integer(stats::rnbinom(n, size = p, mu = exp(e))), eta, phi))
@@ -1599,7 +1639,15 @@ lp_multi_normal <- function(y, mu, Sigma, propto) {
     ad_sum(z * z)
   }, propto, Sigma)
 }
+# Stan's check_cholesky_factor: square, lower triangular, positive diagonal
+chk_cholesky_factor <- function(f, what, v) {
+  v <- val(v)
+  if (!is.matrix(v) || nrow(v) != ncol(v)) stop_shape(sprintf("%s: %s must be a square matrix", f, what))
+  if (!isTRUE(all(v[upper.tri(v)] == 0))) stop_domain(sprintf("%s: %s is not lower triangular", f, what))
+  if (!isTRUE(all(diag(v) > 0))) stop_domain(sprintf("%s: %s is not a valid Cholesky factor: its diagonal must be positive", f, what))
+}
 lp_multi_normal_cholesky <- function(y, mu, L, propto) {
+  chk_cholesky_factor("multi_normal_cholesky_lpdf", "Cholesky decomposition of a variance matrix", L)
   ldh <- ad_sum(log(.lib$diagonal[[1L]]$impl(L)))
   mvn_core("multi_normal_cholesky_lpdf", y, mu, ldh, function(d) {
     z <- ad_tri_solve(L, d, "multi_normal_cholesky_lpdf")
@@ -1634,7 +1682,10 @@ for (pair in list(c("multi_normal", "lp_multi_normal"), c("multi_normal_cholesky
   })
 }
 def("multi_normal_rng", c("vectors", "matrix"), mv_rng_ret, function(mu, S) mvn_rng(mu, t(chol(val(S)))), rng = TRUE)
-def("multi_normal_cholesky_rng", c("vectors", "matrix"), mv_rng_ret, function(mu, L) mvn_rng(mu, val(L)), rng = TRUE)
+def("multi_normal_cholesky_rng", c("vectors", "matrix"), mv_rng_ret, function(mu, L) {
+  chk_cholesky_factor("multi_normal_cholesky_rng", "Cholesky factor of covariance matrix", L)
+  mvn_rng(mu, val(L))
+}, rng = TRUE)
 
 mvt_core <- function(f, y, nu, mu, L, propto) {
   yc <- vec_cols(y)
@@ -1643,6 +1694,7 @@ mvt_core <- function(f, y, nu, mu, L, propto) {
   if (!(yc$n %in% c(1L, N) && mc$n %in% c(1L, N)))
     stop_shape(sprintf("%s: %d random variables and %d locations", f, yc$n, mc$n))
   K <- yc$K
+  if (mc$K != K || nrow(val(L)) != K) stop_shape(sprintf("%s: size mismatch", f))
   chk_positive(f, "Degrees of freedom parameter", nu)
   nu <- as_dbl(nu)
   lp <- 0
@@ -1795,11 +1847,7 @@ chol_jac <- function(L) {
 # triangles.
 wishart_chol_direct <- function(f, LW, nu, LS, propto, inverse) {
   vW <- val(LW); vS <- val(LS)
-  chk <- function(v, what) {
-    if (!is.matrix(v) || nrow(v) != ncol(v)) stop_shape(sprintf("%s: %s must be a square matrix", f, what))
-    if (!isTRUE(all(v[upper.tri(v)] == 0))) stop_domain(sprintf("%s: %s is not lower triangular", f, what))
-    if (!isTRUE(all(diag(v) > 0))) stop_domain(sprintf("%s: %s is not a valid Cholesky factor: its diagonal must be positive", f, what))
-  }
+  chk <- function(v, what) chk_cholesky_factor(f, what, v)
   chk(vW, "Cholesky random variable"); chk(vS, "Cholesky scale matrix")
   if (nrow(vW) != nrow(vS)) stop_shape(sprintf("%s: size mismatch", f))
   K <- nrow(vW)

@@ -357,7 +357,9 @@ trunc_norm <- function(a, lo, hi, lcdf, lccdf, discrete, fam) {
 
 rt_truncate <- function(ctx, y, lo, hi, lcdf, lccdf, args, discrete, fam) {
   vy <- as.vector(val(y))
-  N <- length(vy)
+  # one normalizer per term of the vectorized density: a scalar outcome with
+  # vector parameters is broadcast
+  N <- max(length(vy), vapply(args, function(a) length(val(a)), 1L))
   vlo <- if (is.null(lo)) NULL else val(lo)
   vhi <- if (is.null(hi)) NULL else val(hi)
   if ((!is.null(vlo) && any(vy < vlo)) || (!is.null(vhi) && any(vy > vhi))) {

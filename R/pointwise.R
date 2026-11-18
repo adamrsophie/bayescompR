@@ -85,14 +85,24 @@ pointwise_eval <- function(fit, rng) {
     f(as.numeric(u), ctx)
     list(out = unlist(pw$out), names = unlist(pw$names))
   }
+  if (isTRUE(model$compiled$chain_id_auto)) bind_chain_id(model, 1L)
   first <- one(qs[[1L]][1L, ])
   if (!length(first$names))
     stop("the model block has no sampling statement on data to take pointwise terms from", call. = FALSE)
   nm <- make.unique(first$names)
   n <- nrow(qs[[1L]])
   out <- array(NA_real_, c(n, length(qs), length(nm)), dimnames = list(NULL, NULL, nm))
+  # each chain saw its own CHAIN_ID (and the transformed data built from it)
+  rebind <- isTRUE(model$compiled$chain_id_auto) && length(qs) > 1L
+  if (rebind) on.exit(bind_chain_id(model, 1L), add = TRUE)
   for (c in seq_along(qs)) for (i in seq_len(n)) {
+    if (rebind && i == 1L) bind_chain_id(model, c)
     r <- if (c == 1L && i == 1L) first else one(qs[[c]][i, ])
+    # a statement in a branch can record different observations in
+    # different draws, which have no common columns
+    if (!identical(r$names, first$names))
+      stop("the draws record different observations (a sampling statement on data in a conditional or in a loop whose length depends on parameters); pointwise terms need the same observations in every draw",
+           call. = FALSE)
     out[i, c, ] <- r$out
   }
   out
@@ -153,8 +163,16 @@ rt_pointwise <- function(ctx, label, spec, uf, tr, y, ...) {
           else each(full, vals, el, rows)
     # a truncated density is renormalized over [lo, hi] for each observation
     # (data outside the bounds make the log density -Inf, so no draw has them)
-    if (!is.null(tr)) ll <- ll - vapply(seq_len(n), function(i)
-      as.numeric(val(trunc_norm(args_i(vals[-1L], el[-1L], rows[-1L], i), tr$lo, tr$hi, tr$lcdf, tr$lccdf, tr$discrete, tr$fam))), 0)
+    if (!is.null(tr)) {
+      ll <- ll - vapply(seq_len(n), function(i)
+        as.numeric(val(trunc_norm(args_i(vals[-1L], el[-1L], rows[-1L], i), tr$lo, tr$hi, tr$lcdf, tr$lccdf, tr$discrete, tr$fam))), 0)
+      # an observation outside the bounds (possible when the bounds are
+      # parameters) has probability zero
+      yv <- rep_len(as.numeric(unlist(vals[[1L]])), n)
+      lo <- if (is.null(tr$lo)) -Inf else as.numeric(val(tr$lo))
+      hi <- if (is.null(tr$hi)) Inf else as.numeric(val(tr$hi))
+      ll[yv < lo | yv > hi] <- -Inf
+    }
     ll
   }
   invisible()
@@ -243,7 +261,9 @@ pw_kernels <- list(
   # log link families stay on the log scale, as their densities do, so that
   # a mean that underflows keeps a finite log likelihood
   poisson_log = function(y, eta) {
-    y <- as.numeric(y)
+    # recycle first: ifelse() takes the shape of its condition
+    n <- max(length(y), length(eta))
+    y <- rep_len(as.numeric(y), n); eta <- rep_len(eta, n)
     r <- ifelse(y == 0, 0, y * eta) - exp(eta) - lgamma(y + 1)
     r[eta == Inf | (eta == -Inf & y != 0)] <- -Inf
     r
@@ -254,8 +274,11 @@ pw_kernels <- list(
   binomial_logit = function(y, N, eta) lchoose(N, y) + y * stats::plogis(eta, log.p = TRUE) + (N - y) * stats::plogis(-eta, log.p = TRUE),
   neg_binomial_2 = function(y, mu, phi) stats::dnbinom(y, size = phi, mu = mu, log = TRUE),
   neg_binomial_2_log = function(y, eta, phi) {
-    y <- as.numeric(y)
+    n <- max(length(y), length(eta), length(phi))
+    y <- rep_len(as.numeric(y), n); eta <- rep_len(eta, n); phi <- rep_len(phi, n)
     x <- eta - log(phi)
     sp <- pmax(x, 0) + log1p(exp(-abs(x)))
-    lgamma(y + phi) - lgamma(phi) - lgamma(y + 1) + ifelse(y == 0, 0, y * (x - sp)) - phi * sp
+    # lgamma(y + phi) - lgamma(phi) without the cancellation for large phi
+    lr <- ifelse(y == 0, 0, lgamma(pmax(y, 1)) - lbeta(pmax(y, 1), phi))
+    lr - lgamma(y + 1) + ifelse(y == 0, 0, y * (x - sp)) - phi * sp
   })
