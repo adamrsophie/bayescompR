@@ -74,3 +74,29 @@ test_that("data files cannot run code", {
   expect_error(bugs_parse_values("list(x = system('echo hi'))"), "not allowed", class = "bayescomp_data_error")
   expect_error(bugs_parse_values("list(x = y)"), "unknown name", class = "bayescomp_data_error")
 })
+
+test_that("models written as R code convert to the same statements", {
+  f <- function() {
+    for (i in 1:N) {
+      y[i] ~ dnorm(mu[i], tau) %_% I(0, )
+      logit(p[i]) <- a + b * x[i, ] %*% w
+      z[i] ~ T(dnorm(0, sd = s), , 3)
+    }
+    tau ~ dgamma(0.001, 0.001)
+  }
+  b <- bugs_from_r(f)$model[[1L]]$body
+  expect_equal(b[[1L]]$bound$type, "I")
+  expect_equal(b[[1L]]$bound$lo$value, 0)
+  expect_null(b[[1L]]$bound$hi)
+  expect_equal(b[[2L]]$link, "logit")
+  expect_equal(b[[2L]]$expr$b$b$op, "%*%")
+  expect_equal(b[[2L]]$expr$b$b$a$index[[2L]]$kind, "all")
+  expect_equal(b[[3L]]$argnames, c("", "sd"))
+  expect_null(b[[3L]]$bound$lo)
+  expect_equal(b[[3L]]$bound$hi$value, 3)
+  # the same model as text
+  t <- bugs_parse("model { for (i in 1:N) { y[i] ~ dnorm(mu[i], tau) } }")$model[[1L]]$body[[1L]]
+  r <- bugs_from_r(quote({ for (i in 1:N) { y[i] ~ dnorm(mu[i], tau) } }))$model[[1L]]$body[[1L]]
+  strip <- function(x) { if (is.list(x)) { x$loc <- NULL; x$argnames <- NULL; lapply(x, strip) } else x }
+  expect_equal(strip(r), strip(t))
+})

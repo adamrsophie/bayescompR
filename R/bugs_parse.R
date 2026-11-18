@@ -331,3 +331,102 @@ bugs_primary <- function(st) {
   }
   bugs_err(st, sprintf("unexpected '%s' in an expression", tk$text))
 }
+
+# ---- models written as R code -----------------------------------------------------------
+# R2jags, R2OpenBUGS and R2WinBUGS accept a model as an R function whose
+# body is BUGS code, and NIMBLE writes models with nimbleCode({ ... }).
+# Bounds appear as `dnorm(0, 1) %_% T(0, )` (R2WinBUGS, since R cannot
+# parse `dnorm(0, 1)T(0, )`) or `T(dnorm(0, 1), 0, )` (NIMBLE), and NIMBLE
+# names alternative parameters (`dnorm(mu, sd = s)`), kept as `argnames`.
+
+bugs_from_r <- function(x) {
+  if (is.function(x)) x <- body(x)
+  if (is.expression(x)) x <- x[[1L]]
+  if (is.call(x) && identical(x[[1L]], as.name("quote"))) x <- x[[2L]]
+  body <- if (is.call(x) && identical(x[[1L]], as.name("{"))) as.list(x)[-1L] else list(x)
+  structure(list(var = list(), data = list(), model = lapply(body, bugs_r_stmt)), class = "bugs_program")
+}
+
+bugs_r_err <- function(msg, e) stop_syntax(sprintf("%s in '%s'", msg, paste(deparse(e, width.cutoff = 60L), collapse = " ")))
+
+bugs_r_stmt <- function(e) {
+  if (!is.call(e)) bugs_r_err("expected a statement", e)
+  f <- as.character(e[[1L]])[1L]
+  if (f == "{") bugs_r_err("unexpected block", e)
+  if (f == "for") {
+    rng <- e[[3L]]
+    if (!is.call(rng) || !identical(rng[[1L]], as.name(":"))) bugs_r_err("a loop range must be a:b", e)
+    b <- e[[4L]]
+    stmts <- if (is.call(b) && identical(b[[1L]], as.name("{"))) as.list(b)[-1L] else list(b)
+    return(list(kind = "for", var = as.character(e[[2L]]), lo = bugs_r_expr(rng[[2L]]), hi = bugs_r_expr(rng[[3L]]),
+                body = lapply(stmts, bugs_r_stmt), loc = NULL))
+  }
+  if (f == "~") {
+    rhs <- e[[3L]]
+    bound <- NULL
+    if (is.call(rhs) && identical(rhs[[1L]], as.name("%_%"))) {
+      b <- rhs[[3L]]
+      if (!is.call(b) || !as.character(b[[1L]]) %in% c("T", "I", "C")) bugs_r_err("expected T(), I() or C() after %_%", e)
+      bound <- bugs_r_bound(as.character(b[[1L]]), as.list(b)[-1L])
+      rhs <- rhs[[2L]]
+    } else if (is.call(rhs) && as.character(rhs[[1L]]) %in% c("T", "I") && length(rhs) >= 2L && is.call(rhs[[2L]])) {
+      bound <- bugs_r_bound(as.character(rhs[[1L]]), as.list(rhs)[-(1:2)])
+      rhs <- rhs[[2L]]
+    }
+    if (!is.call(rhs)) bugs_r_err("expected a distribution", e)
+    a <- as.list(rhs)[-1L]
+    an <- names(a) %||% rep("", length(a))
+    return(list(kind = "stochastic", lhs = bugs_r_lhs(e[[2L]]), dist = as.character(rhs[[1L]]),
+                args = lapply(a, bugs_r_expr), argnames = if (any(nzchar(an))) an, bound = bound, loc = NULL))
+  }
+  if (f %in% c("<-", "=")) {
+    lhs <- e[[2L]]
+    if (is.call(lhs) && as.character(lhs[[1L]]) %in% bugs_links)
+      return(list(kind = "logical", lhs = bugs_r_lhs(lhs[[2L]]), link = as.character(lhs[[1L]]), expr = bugs_r_expr(e[[3L]]), loc = NULL))
+    return(list(kind = "logical", lhs = bugs_r_lhs(lhs), link = NULL, expr = bugs_r_expr(e[[3L]]), loc = NULL))
+  }
+  bugs_r_err("expected '~', '<-' or a for loop", e)
+}
+
+bugs_r_missing <- function(a) is.name(a) && identical(as.character(a), "")
+bugs_r_bound <- function(type, a) {
+  a <- c(a, list(quote(expr = ), quote(expr = )))[1:2]
+  list(type = type, lo = if (!bugs_r_missing(a[[1L]])) bugs_r_expr(a[[1L]]), hi = if (!bugs_r_missing(a[[2L]])) bugs_r_expr(a[[2L]]))
+}
+
+bugs_r_lhs <- function(e) {
+  x <- bugs_r_expr(e)
+  if (!identical(x$kind, "var")) bugs_r_err("expected a variable on the left side", e)
+  x
+}
+
+bugs_r_index <- function(a) {
+  if (bugs_r_missing(a)) return(list(kind = "all"))
+  if (is.call(a) && identical(a[[1L]], as.name(":"))) return(list(kind = "range", lo = bugs_r_expr(a[[2L]]), hi = bugs_r_expr(a[[3L]])))
+  list(kind = "single", e = bugs_r_expr(a))
+}
+
+bugs_r_expr <- function(e) {
+  if (is.numeric(e) || is.logical(e)) return(list(kind = "num", value = as.numeric(e), loc = NULL))
+  if (is.name(e)) return(list(kind = "var", name = as.character(e), index = NULL, loc = NULL))
+  if (!is.call(e)) bugs_r_err("unsupported expression", e)
+  f <- as.character(e[[1L]])[1L]
+  a <- as.list(e)[-1L]
+  if (f == "(") return(bugs_r_expr(a[[1L]]))
+  if (f == "[") {
+    x <- bugs_r_expr(a[[1L]])
+    if (!identical(x$kind, "var") || !is.null(x$index)) bugs_r_err("only variables can be indexed", e)
+    x$index <- lapply(a[-1L], bugs_r_index)
+    return(x)
+  }
+  if (f %in% c("-", "+", "!") && length(a) == 1L) {
+    x <- bugs_r_expr(a[[1L]])
+    if (f == "+") return(x)
+    if (f == "-" && identical(x$kind, "num")) { x$value <- -x$value; return(x) }
+    return(list(kind = "unop", op = f, a = x, loc = NULL))
+  }
+  if (length(a) == 2L && (f %in% c("+", "-", "*", "/", "^", "<", "<=", ">", ">=", "==", "!=", "&&", "||", "&", "|") || grepl("^%.*%$", f)))
+    return(list(kind = "binop", op = f, a = bugs_r_expr(a[[1L]]), b = bugs_r_expr(a[[2L]]), loc = NULL))
+  an <- names(a) %||% rep("", length(a))
+  list(kind = "call", name = f, args = lapply(a, bugs_r_expr), argnames = if (any(nzchar(an))) an, loc = NULL)
+}
