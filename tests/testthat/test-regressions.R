@@ -1264,3 +1264,22 @@ test_that("proportional values without a tape equal the taped value", {
     expect_equal(ns$lp_value_fun(m, propto = TRUE)(u), ref)
   }
 })
+
+test_that("one sided truncation with vector parameters uses one normalizer call", {
+  set.seed(3); N <- 25
+  d <- list(N = N, y = abs(rnorm(N)) + 0.1, x = rnorm(N), k = rpois(N, 3) + 1L)
+  hdr <- "data { int N; vector[N] y; vector[N] x; array[N] int k; } parameters { real a; real<lower=0> s; } model { %s }"
+  u <- c(0.2, -0.1); mu <- 0.2 + d$x; s <- exp(-0.1); l <- exp(0.2 + 0.1 * d$x)
+  cases <- list(
+    list("y ~ normal(a + x, s) T[0, ];", sum(dnorm(d$y, mu, s, log = TRUE) - pnorm(0, mu, s, lower.tail = FALSE, log.p = TRUE))),
+    list("y ~ normal(a + x, s) T[, 5];", sum(dnorm(d$y, mu, s, log = TRUE) - pnorm(5, mu, s, log.p = TRUE))),
+    list("k ~ poisson(exp(a + 0.1 * x)) T[1, ];", sum(dpois(d$k, l, log = TRUE) - ppois(0, l, lower.tail = FALSE, log.p = TRUE))))
+  for (cs in cases) {
+    m <- bayescomp_model(sprintf(hdr, cs[[1]]), data = d)
+    expect_equal(bayescomp_log_prob(m, u, propto = FALSE), cs[[2]] - 0.1, tolerance = 1e-10)
+    g <- bayescomp_grad_log_prob(m, u)
+    fd <- vapply(1:2, function(j) { e <- c(0, 0); e[j] <- 1e-6
+      (bayescomp_log_prob(m, u + e, propto = FALSE) - bayescomp_log_prob(m, u - e, propto = FALSE)) / 2e-6 }, 0)
+    expect_equal(as.numeric(g), fd, tolerance = 1e-5)
+  }
+})

@@ -42,6 +42,11 @@ test_that("scalar locals, dot products, scalar target increments and profile blo
                  "profile(\"lik\") { for (n in 1:N) y[n] ~ normal(a + X[n] * b, s); }",
                  "for (n in 1:0) { real mu = a; y[n] ~ normal(mu, s); }"))
     same_as_loop(paste(dd, body, "}"), d, u, 1L)
+  # truncation with bounds that do not depend on the loop
+  for (body in c("for (n in 1:N) y[n] ~ normal(a + x[n], s) T[-3, ];", "for (n in 1:N) y[n] ~ normal(a + x[n], s) T[, 4];",
+                 "for (n in 1:N) y[n] ~ normal(a + x[n], s) T[-3, 4];", "for (n in 1:N) y[n] ~ normal(0, s) T[-5, ];"))
+    same_as_loop(paste(dd, body, "}"), d, u, 1L)
+  same_as_loop(paste(dd, "for (n in 1:N) y[n] ~ normal(a, s) T[x[n] - 5, ]; }"), d, u, 0L)
   # a local the body assigns again, or one without a value, stays a loop
   same_as_loop(paste(dd, "for (n in 1:N) { real mu = a; mu += x[n]; y[n] ~ normal(mu, s); } }"), d, u, 0L)
   same_as_loop(paste(dd, "for (n in 1:N) { real mu; mu = a; y[n] ~ normal(mu, s); } }"), d, u, 0L)
@@ -51,7 +56,6 @@ test_that("loops that are not independent stay loops", {
   d <- list(N = 4L, y = c(1, 2, 3, 4), k = c(1L, 2L, 3L, 4L))
   dd <- "data { int N; vector[N] y; array[N] int k; }"
   same_as_loop(paste(dd, "parameters { real a; } model { vector[N] mu; mu[1] = a; for (n in 2:N) mu[n] = mu[n - 1] * 0.5 + a; y ~ normal(mu, 1); }"), d, 0.2, 0L)
-  same_as_loop(paste(dd, "parameters { real<lower=0> s; } model { for (n in 1:N) y[n] ~ normal(0, s) T[-5, ]; }"), d, 0.2, 0L)
   same_as_loop(paste(dd, "parameters { real a; } model { for (n in 1:N) k[n] ~ poisson(exp(a + k[n] / 2)); }"), d, 0.2, 0L) |> suppressWarnings()
   same_as_loop(paste(dd, "parameters { real a; } model { for (n in 1:N) y[n] ~ normal(a * n, 1); }"), d, 0.2, 0L)
 })

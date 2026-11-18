@@ -236,7 +236,10 @@ vec_stmt <- function(a, t, ctx) {
   switch(a$kind,
     tilde = {
       # a user defined density may have unrelated scalar and vector overloads
-      if (!is.null(a$trunc) || isTRUE(t$sig$user) || !vec_scalar(t$lhs$type)) return(NULL)
+      if (isTRUE(t$sig$user) || !vec_scalar(t$lhs$type)) return(NULL)
+      # truncation bounds are scalars evaluated once
+      if (!is.null(a$trunc) && any(vapply(list(a$trunc$lo, a$trunc$hi), function(b) vec_mentions(b, ctx$n) || vec_effectful(b), TRUE)))
+        return(NULL)
       if (!all(vapply(t$args, function(x) vec_scalar(x$type), TRUE))) return(NULL)
       lhs <- vec_expr(a$lhs, t$lhs, ctx)
       if (is.null(lhs)) return(NULL)

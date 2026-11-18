@@ -149,6 +149,12 @@
 
 ## Performance
 
+* A truncated density with one bound and vector parameters computes its
+  normalizer with one vectorized `_lccdf` or `_lcdf` call instead of one
+  call per element (about 200 times faster over 1000 observations), and
+  loop vectorization now also rewrites truncated statements whose bounds
+  do not depend on the loop.
+
 * Loop vectorization also rewrites loops whose body declares scalar
   locals (`real mu = ...;`, replaced by their values), uses
   `dot_product(X[n], b)`, adds any scalar to `target` (including `_lcdf`
