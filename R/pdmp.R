@@ -24,6 +24,16 @@
 #'   horizon; each costs one gradient.
 #' @param dt Deprecated and ignored; event times no longer use a fixed
 #'   integration step.
+#' @details The bouncy particle sampler mixes slowly on heavy tailed
+#'   targets: in the tails the gradient is weak, so the process drifts back
+#'   slowly and single excursions can last hundreds of time units. On a 2-d
+#'   Student t target with 3 degrees of freedom, one chain of 3000 draws
+#'   spent a quarter of its time beyond radius 10, where the target has
+#'   0.4% of its mass; averaged over 10 seeds the tail probabilities still
+#'   matched the target within their Monte Carlo error, so the output is
+#'   unbiased but needs long runs. Zig-Zag estimates varied about a third
+#'   as much across seeds there; prefer it, or [bayescomp_sample()], for such
+#'   targets, and compare chains before trusting tail quantiles.
 #' @return A `bayescomp_fit` with method `"pdmp"` and elements `events`
 #'   (mean events per unit time per chain) and `bound_violations` (proposals
 #'   whose rate exceeded the grid bound, per chain; each makes that event

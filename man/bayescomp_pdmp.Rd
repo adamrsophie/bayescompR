@@ -46,6 +46,18 @@ inexact, so a large count calls for a larger \code{grid_size}).
 \description{
 Piecewise deterministic samplers
 }
+\details{
+The bouncy particle sampler mixes slowly on heavy tailed
+targets: in the tails the gradient is weak, so the process drifts back
+slowly and single excursions can last hundreds of time units. On a 2-d
+Student t target with 3 degrees of freedom, one chain of 3000 draws
+spent a quarter of its time beyond radius 10, where the target has
+0.4\% of its mass; averaged over 10 seeds the tail probabilities still
+matched the target within their Monte Carlo error, so the output is
+unbiased but needs long runs. Zig-Zag estimates varied about a third
+as much across seeds there; prefer it, or \code{\link[=bayescomp_sample]{bayescomp_sample()}}, for such
+targets, and compare chains before trusting tail quantiles.
+}
 \examples{
 m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
 fit <- bayescomp_pdmp(m, chains = 1, iter_warmup = 100, iter_sampling = 200, seed = 1)
