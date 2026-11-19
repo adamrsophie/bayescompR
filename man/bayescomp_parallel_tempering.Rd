@@ -15,7 +15,7 @@ bayescomp_parallel_tempering(
   adapt_schedule = TRUE,
   reference = c("pathfinder", "standard"),
   reference_scale = 1.5,
-  adapt_reference = TRUE,
+  adapt_reference = FALSE,
   init = 2,
   seed = NULL,
   cores = getOption("mc.cores", 1L),
@@ -42,8 +42,10 @@ bayescomp_parallel_tempering(
 \code{\link[=bayescomp_smc]{bayescomp_smc()}}.}
 
 \item{adapt_reference}{Refit the Gaussian reference to the draws of the
-posterior replica at the end of each warmup round (variational
-reference). The reference stays fixed during sampling.}
+posterior replica at the end of each full warmup round (variational
+reference). The reference stays fixed during sampling. A moment matched
+reference can settle on one mode when the posterior replica has not yet
+visited the others, so it is off by default.}
 }
 \value{
 A \code{bayescomp_fit} with draws from the \code{beta = 1} replica and

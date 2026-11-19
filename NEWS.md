@@ -15,6 +15,20 @@
   values can be R lists, R dump files, or OpenBUGS list and rectangular
   files. `vignette("bugs")` lists what is supported.
 
+* `bayescomp_ensemble()` gains `method = "side"` (a Gaussian step along the
+  difference of two walkers, tuned toward acceptance 0.5) and
+  `method = "slice"` (ensemble slice sampling with a scale tuned during
+  warmup). The stretch move warns above 50 parameters, where it mixes poorly.
+
+* `bayescomp_parallel_tempering()` gains `adapt_reference`, which refits the
+  Gaussian reference to the posterior replica after each full warmup round,
+  and reports `suggested_num_temps` from the estimated barrier.
+
+* Finite discrete BUGS nodes use metropolized Gibbs, which proposes a value
+  other than the current one and so moves more often than plain Gibbs while
+  keeping the same conditional. Slice widths adapt to four times the mean
+  jump, near the width that minimizes stepping out cost.
+
 ## Bug fixes
 
 * `bayescomp_ess_quantile()` and `bayescomp_ess_tail()` use the indicator

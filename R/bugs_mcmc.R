@@ -343,11 +343,11 @@ bugs_slice_coord <- function(M, b, cells, sel, w, discrete = FALSE) {
 
 # Slice widths adapt during adaptation. For a uniform draw on a slice of
 # length l the mean jump is l / 3, and stepping out costs least at a width of
-# about 1.36 l (Campbell 2026; Yallup et al. 2026), so the width tracks
-# 3.6 times the mean jump.
+# about 1.358 l (Campbell 2026, arXiv:2609.08172), so the width tracks four
+# times the mean jump.
 bugs_adapt_w <- function(w, jump, adapting) {
   if (!adapting) return(w)
-  pmax(0.95 * w + 0.05 * 3.6 * pmax(jump, 1e-10), 1e-8)
+  pmax(0.95 * w + 0.05 * 4 * pmax(jump, 1e-10), 1e-8)
 }
 
 # ---- other samplers ---------------------------------------------------------------------

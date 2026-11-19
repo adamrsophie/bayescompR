@@ -75,6 +75,6 @@ Computational Science} 5, 65 to 80. ter Braak, C. J. F. (2006). A Markov
 chain Monte Carlo version of the genetic algorithm differential
 evolution. \emph{Statistics and Computing} 16, 239 to 249. Karamanis, M. and
 Beutler, F. (2021). Ensemble slice sampling. \emph{Statistics and Computing}
-31, 61. Chen, Y. et al. (2025). New affine invariant ensemble samplers
+31, 61. Chen, Y. (2025). New affine invariant ensemble samplers
 and their dimensional scaling. arXiv:2505.02987.
 }

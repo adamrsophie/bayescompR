@@ -1,5 +1,5 @@
 # Ensemble samplers: the affine invariant stretch move (Goodman and Weare
-# 2010), the side move (Chen et al. 2025), ensemble slice sampling
+# 2010), the side move (Chen 2025), ensemble slice sampling
 # (Karamanis and Beutler 2021) and differential evolution Markov chain Monte
 # Carlo (ter Braak 2006). All move a population of walkers using the
 # positions of the others, so they adapt to linear correlations without
@@ -43,7 +43,7 @@
 #'   chain Monte Carlo version of the genetic algorithm differential
 #'   evolution. *Statistics and Computing* 16, 239 to 249. Karamanis, M. and
 #'   Beutler, F. (2021). Ensemble slice sampling. *Statistics and Computing*
-#'   31, 61. Chen, Y. et al. (2025). New affine invariant ensemble samplers
+#'   31, 61. Chen, Y. (2025). New affine invariant ensemble samplers
 #'   and their dimensional scaling. arXiv:2505.02987.
 #' @examples
 #' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
@@ -117,8 +117,8 @@ bayescomp_ensemble <- function(model, method = c("stretch", "side", "slice", "de
             y0 <- lp[j] - stats::rexp(1)
             L <- -stats::runif(1); R <- L + 1
             J <- floor(1e4 * stats::runif(1)); K <- 1e4 - 1 - J
-            while (J > 0 && f(L) > y0) { L <- L - 1; J <- J - 1; nexp <- nexp + 1L; evals <- evals + 1 }
-            while (K > 0 && f(R) > y0) { R <- R + 1; K <- K - 1; nexp <- nexp + 1L; evals <- evals + 1 }
+            while (J > 0 && isTRUE(f(L) > y0)) { L <- L - 1; J <- J - 1; nexp <- nexp + 1L; evals <- evals + 1 }
+            while (K > 0 && isTRUE(f(R) > y0)) { R <- R + 1; K <- K - 1; nexp <- nexp + 1L; evals <- evals + 1 }
             evals <- evals + 2
             repeat {
               t <- L + stats::runif(1) * (R - L)

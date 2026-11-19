@@ -27,8 +27,10 @@
 #' @param reference,reference_scale Gaussian reference, as in
 #'   [bayescomp_smc()].
 #' @param adapt_reference Refit the Gaussian reference to the draws of the
-#'   posterior replica at the end of each warmup round (variational
-#'   reference). The reference stays fixed during sampling.
+#'   posterior replica at the end of each full warmup round (variational
+#'   reference). The reference stays fixed during sampling. A moment matched
+#'   reference can settle on one mode when the posterior replica has not yet
+#'   visited the others, so it is off by default.
 #' @return A `bayescomp_fit` with draws from the `beta = 1` replica and
 #'   elements `betas` (final schedule per chain), `swap_rate` (acceptance per
 #'   adjacent pair, per chain), `barrier` (estimated global communication
@@ -54,7 +56,7 @@ bayescomp_parallel_tempering <- function(model, num_temps = 10L, chains = 2L, it
                                          iter_sampling = 1000L, explore_steps = 3L,
                                          swap = c("nonreversible", "reversible"), adapt_schedule = TRUE,
                                          reference = c("pathfinder", "standard"), reference_scale = 1.5,
-                                         adapt_reference = TRUE,
+                                         adapt_reference = FALSE,
                                          init = 2, seed = NULL, cores = getOption("mc.cores", 1L), refresh = 0L) {
   check_model(model)
   swap <- match.arg(swap)
@@ -130,7 +132,9 @@ bayescomp_parallel_tempering <- function(model, num_temps = 10L, chains = 2L, it
       }
       # schedule and proposal adaptation at the end of each warmup round
       if (warm && (it == round_end || it == nw)) {
-        if (adapt_reference && est[[K]]$n > 2 * n) {
+        # only after a full round, so the reference used for sampling does
+        # not come from the few draws of a truncated last round
+        if (adapt_reference && it == round_end && est[[K]]$n > 2 * n) {
           Lr <- tryCatch(t(chol(est_value(est[[K]]))), error = function(e) NULL)
           if (!is.null(Lr)) {
             ref <- gaussian_reference_from(est[[K]]$mean, reference_scale * Lr)
