@@ -185,3 +185,15 @@ test_that("mixture parameters chosen by latent indices get conjugate updates", {
   s <- run_jags("model { Y[1] <- 1  Y[2] <- 0  Y[1:2] ~ dmulti(p[], 1)  p[1:2] ~ ddirch(a[]) }", list(a = c(1, 1)), "p")
   expect_equal(mean(s$p[, 1]), 2 / 3, tolerance = 0.03)
 })
+
+test_that("a mixture reaches Dirichlet nodes that fill part of a row", {
+  # error[2, 1:2] is the node; error[2, ] is read whole through error[z[i], ]
+  code <- "model {
+    for (i in 1:4) { z[i] ~ dcat(w[])  y[i, 1:3] ~ dmulti(error[z[i], ], 5) }
+    error[2, 1:2] ~ ddirch(a[])
+  }"
+  d <- list(y = rbind(c(1, 4, 0), c(2, 3, 0), c(0, 5, 0), c(1, 4, 0)), w = c(0, 1), a = c(1, 1),
+            error = rbind(c(1, 0, 0), c(NA, NA, 0)))
+  s <- run_jags(code, d, "error")
+  expect_equal(mean(s$error[, 2, 2]), 17 / 22, tolerance = 0.02)
+})

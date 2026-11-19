@@ -53,7 +53,7 @@ run <- function(nm) {
   saveRDS(out, cached(nm))
 }
 todo <- models[!file.exists(vapply(models, cached, ""))]
-if (cores > 1L) parallel::mclapply(todo, run, mc.cores = cores, mc.preschedule = FALSE) else lapply(todo, run)
+invisible(if (cores > 1L) parallel::mclapply(todo, run, mc.cores = cores, mc.preschedule = FALSE) else lapply(todo, run))
 res <- do.call(rbind, lapply(models, function(nm) if (file.exists(cached(nm))) readRDS(cached(nm))
                              else data.frame(model = nm, node = NA, ref = NA, mean = NA, z = NA, pass = FALSE,
                                              note = "no result", secs = NA)))

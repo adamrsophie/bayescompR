@@ -412,27 +412,40 @@ bugs_dyn_owner_fun <- function(M, b, g) {
   own <- M$owner[[e$name]]
   d <- dim(own) %||% length(own)
   ids <- b$ids
-  function() vapply(envs, function(env) {
-    lin <- 1; stride <- 1
-    for (k in seq_along(e$index)) {
-      ii <- e$index[[k]]
-      i <- switch(ii$kind, single = bugs_const(ii$e, env, M$S), all = seq_len(d[k]),
-                  range = bugs_const(ii$lo, env, M$S):bugs_const(ii$hi, env, M$S))
-      if (any(i < 1 | i > d[k])) return(NA_integer_)
-      lin <- rep.int(lin, length(i)) + rep((i - 1) * stride, each = length(lin))
-      stride <- stride * d[k]
-    }
-    o <- own[lin]; id <- o[1L]
-    if (id > 0L && all(o == id) && length(o) == length(M$cells[[id]])) match(id, ids) else NA_integer_
-  }, 1L)
+  # Returns, per child, the index of the node in b$ids that the slot reads
+  # (NA when none) and the slot positions holding its cells. A node may fill
+  # part of the slot when the other cells are fixed at zero, as in
+  # error[2, 1:2] ~ ddirich() read through error[true[i], ].
+  none <- list(NA_integer_, NULL)
+  function() {
+    out <- lapply(envs, function(env) {
+      lin <- 1; stride <- 1
+      for (k in seq_along(e$index)) {
+        ii <- e$index[[k]]
+        i <- switch(ii$kind, single = bugs_const(ii$e, env, M$S), all = seq_len(d[k]),
+                    range = bugs_const(ii$lo, env, M$S):bugs_const(ii$hi, env, M$S))
+        if (any(i < 1 | i > d[k])) return(none)
+        lin <- rep.int(lin, length(i)) + rep((i - 1) * stride, each = length(lin))
+        stride <- stride * d[k]
+      }
+      o <- own[lin]; id <- max(o)
+      if (id <= 0L || is.na(j <- match(id, ids))) return(none)
+      pos <- which(o == id)
+      if (length(pos) != length(M$cells[[id]])) return(none)
+      if (length(pos) < length(o) && (any(o[-pos] != 0L) || any(get(e$name, envir = M$S)[lin[-pos]] != 0))) return(none)
+      list(j, if (length(pos) < length(o)) pos)
+    })
+    list(owner = vapply(out, `[[`, 1L, 1L), pos = lapply(out, `[[`, 2L))
+  }
 }
 
 bugs_dyn_groups <- function(M, b) {
   out <- lapply(seq_along(b$cgroups), function(k) {
     g <- b$cgroups[[k]]
-    o <- b$dyn_owner[[k]]()
+    r <- b$dyn_owner[[k]](); o <- r$owner
     keep <- !is.na(o)
     g$rows <- g$rows[keep]; g$ids <- g$ids[keep]; g$owner <- o[keep]; g$uowner <- sort(unique(o[keep]))
+    g$pos <- if (!all(vapply(r$pos[keep], is.null, NA))) r$pos[keep]
     g
   })
   Filter(function(g) length(g$rows) > 0L, out)
@@ -472,8 +485,11 @@ bugs_conjugate <- function(M, b) {
     for (g in b$cgroups) {
       cd <- bugs_child_data(M, g); cs <- M$stmts[[g$stmt]]
       for (j in seq_along(g$rows)) {
-        o <- g$owner[j]
-        if (cs$dist == "dcat") A[o, cd$x[[j]]] <- A[o, cd$x[[j]]] + 1 else A[o, ] <- A[o, ] + cd$x[[j]]
+        o <- g$owner[j]; x <- cd$x[[j]]; pos <- g$pos[[j]]
+        if (cs$dist == "dcat") {
+          if (!is.null(pos)) x <- match(x, pos)
+          A[o, x] <- A[o, x] + 1
+        } else A[o, ] <- A[o, ] + (if (is.null(pos)) x else x[pos])
       }
     }
     G <- matrix(stats::rgamma(length(A), A), nrow(A))
