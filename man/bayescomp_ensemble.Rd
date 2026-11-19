@@ -6,7 +6,7 @@
 \usage{
 bayescomp_ensemble(
   model,
-  method = c("stretch", "de"),
+  method = c("stretch", "side", "slice", "de"),
   walkers = NULL,
   iter_warmup = 1000L,
   iter_sampling = 1000L,
@@ -23,8 +23,12 @@ bayescomp_ensemble(
 \arguments{
 \item{model}{A \code{bayescomp_model}.}
 
-\item{method}{\code{"stretch"} (affine invariant ensemble sampler) or \code{"de"}
-(differential evolution MCMC with occasional mode jumping steps).}
+\item{method}{\code{"stretch"} (affine invariant ensemble sampler), \code{"side"}
+(side move: a Gaussian step along the difference of two walkers of the
+other half, which scales better with dimension than the stretch move),
+\code{"slice"} (ensemble slice sampling along such differences; no rejections
+and a scale tuned during warmup) or \code{"de"} (differential evolution MCMC
+with occasional mode jumping steps).}
 
 \item{walkers}{Number of walkers (default \code{2 * dim + 2}).}
 
@@ -32,7 +36,9 @@ bayescomp_ensemble(
 
 \item{thin}{Keep every \code{thin}th iteration.}
 
-\item{a}{Stretch scale for \code{"stretch"}.}
+\item{a}{Stretch scale for \code{"stretch"}. The step scale of \code{"side"} starts at
+\code{1.6869 / sqrt(dim)} and the slice scale of \code{"slice"} at 1; both are tuned
+during warmup.}
 
 \item{gamma}{Jump scale for \code{"de"}, default \code{2.38 / sqrt(2 * dim)}; every
 tenth iteration uses 1 to jump between modes.}
@@ -46,7 +52,9 @@ proposals.}
 }
 \value{
 A \code{bayescomp_fit} with one chain per walker (the walkers of
-ensemble 1 first) and element \code{acceptance} (mean acceptance per walker).
+ensemble 1 first) and element \code{acceptance} (mean acceptance per walker;
+1 for \code{"slice"}, which reports \code{evals}, the mean log density evaluations
+per walker update, instead).
 Its summary reports R-hat computed from the per iteration walker means of
 the ensembles (split R-hat when \code{chains = 1}) and effective sample sizes
 computed over all walkers, as in emcee; run several ensembles for a
@@ -65,5 +73,8 @@ Goodman, J. and Weare, J. (2010). Ensemble samplers with
 affine invariance. \emph{Communications in Applied Mathematics and
 Computational Science} 5, 65 to 80. ter Braak, C. J. F. (2006). A Markov
 chain Monte Carlo version of the genetic algorithm differential
-evolution. \emph{Statistics and Computing} 16, 239 to 249.
+evolution. \emph{Statistics and Computing} 16, 239 to 249. Karamanis, M. and
+Beutler, F. (2021). Ensemble slice sampling. \emph{Statistics and Computing}
+31, 61. Chen, Y. et al. (2025). New affine invariant ensemble samplers
+and their dimensional scaling. arXiv:2505.02987.
 }
