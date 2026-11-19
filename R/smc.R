@@ -10,9 +10,10 @@
 # size of the incremental weights is `ess_threshold` times the number of
 # particles, resamples systematically, and moves the particles with random
 # walk Metropolis (or MALA or HMC) targeting pi_beta, preconditioned by the
-# particle covariance. By default the moves are waste-free (Dau and Chopin
-# 2022): only N / P particles are resampled and each runs a chain of P - 1
-# steps whose every state is kept, so no MCMC output is discarded. Because g is normalized and
+# particle covariance. With `waste_free = TRUE` the moves are waste-free
+# (Dau and Chopin 2022): only N / P particles are resampled and each runs a
+# chain of P - 1 steps whose every state is kept, so no MCMC output is
+# discarded. Because g is normalized and
 # p is evaluated with all constants, the product of the mean incremental
 # weights estimates the normalizing constant of the model's density on the
 # unconstrained scale, which is the marginal likelihood when the program
@@ -65,7 +66,7 @@
 #' @export
 bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinder", "standard"),
                           reference_scale = 1.5, ess_threshold = 0.5, num_mcmc_steps = 10L,
-                          waste_free = TRUE, chain_length = 10L,
+                          waste_free = FALSE, chain_length = 10L,
                           kernel = c("metropolis", "mala", "hmc"), hmc_steps = 5L,
                           resampling = c("systematic", "stratified", "residual", "multinomial"),
                           max_stages = 200L, seed = NULL, cores = getOption("mc.cores", 1L)) {

@@ -105,9 +105,13 @@ Each unobserved node is updated in turn, given the others:
 * conjugate updates for gamma (precisions, rates), beta, Dirichlet and
   Wishart nodes, and for normal nodes whose children are linear in them
   (regression coefficients and random effects), drawn as one block;
-* enumeration for discrete nodes with a small support;
-* slice sampling for the other nodes, with step sizes adapted during the
-  burn-in; and
+* metropolized Gibbs for discrete nodes with a small support: the
+  conditional probabilities are enumerated and a value other than the
+  current one is proposed, which moves more often than plain Gibbs;
+* elliptical slice sampling for multivariate normal nodes that are not
+  partly observed, moving the whole vector at once;
+* slice sampling for the other nodes, with widths adapted during the
+  burn-in to four times the mean jump; and
 * special updates for latent multinomial counts.
 
 Nodes that do not depend on each other are updated together, which keeps

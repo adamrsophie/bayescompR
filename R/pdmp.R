@@ -141,7 +141,7 @@ bayescomp_pdmp <- function(model, method = c("zigzag", "bps"), chains = 4L, iter
       } else {
         i <- it - nw
         qs[i, ] <- x
-        dg[i, c("lp__", "accept_stat__", "n_leapfrog__")] <- c(-r$V, 1, evals)
+        dg[i, c("lp__", "accept_stat__", "stepsize__", "n_leapfrog__")] <- c(-r$V, 1, H, evals)
       }
       if (refresh > 0L && it %% refresh == 0L) chain_message(sprintf("Chain %d: Iteration %d / %d", id, it, nw + ns))
     }
@@ -160,7 +160,8 @@ bayescomp_pdmp <- function(model, method = c("zigzag", "bps"), chains = 4L, iter
 # larger end value, and where the rate bends down, the meeting point of the
 # lines through each end with the slope of the neighboring interval
 # (Andral and Kamatani 2024 use tangents; secants of the neighbors bound a
-# concave stretch the same way without second derivatives).
+# concave stretch the same way without second derivatives). The first and
+# last intervals have one neighbor and use its line alone.
 pdmp_grid_bound <- function(tg, Lam) {
   K <- nrow(Lam)
   a <- Lam[-K, , drop = FALSE]; b <- Lam[-1L, , drop = FALSE]; d <- diff(tg)
@@ -176,6 +177,11 @@ pdmp_grid_bound <- function(tg, Lam) {
     Bi <- B[i, , drop = FALSE]
     Bi[use] <- pmax(Bi[use], val[use])
     B[i, ] <- Bi
+  }
+  if (K >= 3L) {
+    k1 <- 1L; kl <- K - 1L
+    B[k1, ] <- pmax(B[k1, ], b[k1, ] - ((b - a) / d)[2L, ] * d[k1])
+    B[kl, ] <- pmax(B[kl, ], a[kl, ] + ((b - a) / d)[kl - 1L, ] * d[kl])
   }
   pmax(B, 0)
 }

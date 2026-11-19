@@ -8,8 +8,8 @@
 
 * `bayescomp_sample(adapt_metric = "fisher")` adapts a diagonal metric from
   the variances of the draws and of the gradients,
-  `sqrt(var(draws) / var(gradients))`, as nutpie does; it settles faster in
-  warmup than the variance of the draws alone.
+  `sqrt(var(draws) / var(gradients))`, which minimizes a Fisher divergence,
+  as nutpie does.
 
 * `bayescomp_ess_multi()` computes the multivariate effective sample size
   of Vats, Flegal and Jones (2019) with replicated batch means and their
@@ -59,11 +59,12 @@
   along whitened random directions instead of random walk Metropolis, and
   `mcmc_steps` now defaults to three times the number of parameters.
 
-* `bayescomp_smc()` is waste-free by default (`waste_free = TRUE`,
-  `chain_length = 10`): it resamples one particle in ten and keeps every
-  state of their MCMC chains, which on test models gives the same accuracy
-  in about a quarter of the time. `waste_free = FALSE` restores the previous
-  moves.
+* `bayescomp_smc()` gains `waste_free = TRUE` with `chain_length`: each
+  stage resamples one particle in `chain_length` and keeps every state of
+  their MCMC chains (Dau and Chopin 2022). It needs about a quarter of the
+  density evaluations of the default moves; on a test model its evidence
+  estimates were as accurate but its posterior means varied more across
+  seeds, so it is not the default.
 
 ## Bug fixes
 

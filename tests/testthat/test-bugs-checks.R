@@ -211,6 +211,6 @@ test_that("multivariate normal nodes get elliptical slice updates with the exact
   s <- run_jags("model { b[1:2] ~ dmnorm(m[], O[,])  for (i in 1:N) { y[i] ~ dnorm(b[1] + b[2] * t[i], 4) } }",
                 list(y = y, t = t, N = 20, m = c(0, 0), O = diag(0.1, 2)), "b")$b
   X <- cbind(1, t); V <- solve(diag(0.1, 2) + 4 * crossprod(X))
-  expect_equal(colMeans(s), as.vector(V %*% (4 * crossprod(X, y))), tolerance = 0.03)
-  expect_equal(apply(s, 2, sd), sqrt(diag(V)), tolerance = 0.1)
+  expect_equal(unname(colMeans(s)), as.vector(V %*% (4 * crossprod(X, y))), tolerance = 0.03)
+  expect_equal(unname(apply(s, 2, sd)), unname(sqrt(diag(V))), tolerance = 0.1)
 })

@@ -11,7 +11,7 @@ bayescomp_smc(
   reference_scale = 1.5,
   ess_threshold = 0.5,
   num_mcmc_steps = 10L,
-  waste_free = TRUE,
+  waste_free = FALSE,
   chain_length = 10L,
   kernel = c("metropolis", "mala", "hmc"),
   hmc_steps = 5L,

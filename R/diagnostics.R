@@ -266,6 +266,7 @@ bayescomp_ess_multi <- function(x, variables = NULL, alpha = 0.05, epsilon = 0.0
   if (p == 0L || n < 10L) stop("too few draws or no varying variable", call. = FALSE)
   b <- max(1L, floor(sqrt(n)))
   a <- n %/% b
+  if (a * m <= p) stop(sprintf("%d batch means for %d variables: the batch means covariance is singular; use more draws or fewer variables", a * m, p), call. = FALSE)
   X <- matrix(x[seq_len(a * b), , , drop = FALSE], ncol = p)
   mu <- colMeans(X)
   # batch means of every chain, centered at the overall mean
