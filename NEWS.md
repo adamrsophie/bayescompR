@@ -29,6 +29,11 @@
   keeping the same conditional. Slice widths adapt to four times the mean
   jump, near the width that minimizes stepping out cost.
 
+* Multivariate normal BUGS nodes (`dmnorm`, `dmnorm.vcov`) that are not
+  partly observed are updated by elliptical slice sampling, which moves the
+  whole vector at once without rejections or tuning, in place of
+  coordinatewise slice sampling.
+
 ## Bug fixes
 
 * `bayescomp_ess_quantile()` and `bayescomp_ess_tail()` use the indicator

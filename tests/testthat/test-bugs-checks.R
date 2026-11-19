@@ -204,3 +204,13 @@ test_that("metropolized Gibbs keeps finite discrete conditionals and moves more 
   # plain Gibbs moves with probability 1 - sum(p^2) = 0.62
   expect_gt(mean(z[-1] != z[-length(z)]), 0.75)
 })
+
+test_that("multivariate normal nodes get elliptical slice updates with the exact posterior", {
+  set.seed(2)
+  t <- seq(-1, 1, length.out = 20); y <- 1 + 2 * t + rnorm(20, 0, 0.5)
+  s <- run_jags("model { b[1:2] ~ dmnorm(m[], O[,])  for (i in 1:N) { y[i] ~ dnorm(b[1] + b[2] * t[i], 4) } }",
+                list(y = y, t = t, N = 20, m = c(0, 0), O = diag(0.1, 2)), "b")$b
+  X <- cbind(1, t); V <- solve(diag(0.1, 2) + 4 * crossprod(X))
+  expect_equal(colMeans(s), as.vector(V %*% (4 * crossprod(X, y))), tolerance = 0.03)
+  expect_equal(apply(s, 2, sd), sqrt(diag(V)), tolerance = 0.1)
+})

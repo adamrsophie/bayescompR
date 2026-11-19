@@ -219,6 +219,9 @@ bugs_choose_sampler <- function(M, b) {
   if (d$name == "dnorm" && !bounded && length(b$children) && bugs_linear_normal(M, b)) return("conj_dnorm")
   if (d$support == "multi") return("multinomial")
   if (d$support == "simplex") return("dirichlet")
+  # a Gaussian prior lets elliptical slice sampling move the whole vector
+  # at once, without rejections or tuning (Murray, Adams and MacKay 2010)
+  if (d$name %in% c("dmnorm", "dmnorm.vcov") && !bounded && !any(b$fixed)) return("ess")
   if (d$support == "mvreal") return("mv_slice")
   if (d$dim %in% c("vector", "matrix")) stop_unsupported(sprintf("sampling %s nodes (%s)", d$name, b$var), s$loc)
   if (isTRUE(d$discrete)) return(if (d$support == "finite") "enumerate" else "discrete_slice")
@@ -549,6 +552,45 @@ bugs_conjugate <- function(M, b) {
 
 # elementwise slice sampling of multivariate normal and t nodes; observed
 # elements of partly observed nodes stay fixed
+# Elliptical slice sampling of the block members, all at once: each member
+# moves on its own ellipse through the current value and a draw from its
+# normal prior, and the slice is on the likelihood (the child terms).
+bugs_ess <- function(M, b) {
+  fn <- M$stmts[[b$stmt]]$fn
+  a <- bugs_args_list(fn, b$rows)
+  cells <- as.vector(b$cells)
+  mu <- matrix(t(vapply(a, function(x) as.numeric(x[[1L]]), numeric(b$K))), b$n, b$K)
+  nu <- matrix(t(vapply(a, function(x) do.call(b$dist$rng, c(list(1L), x)) - as.numeric(x[[1L]]), numeric(b$K))), b$n, b$K)
+  ll <- function(X) {
+    bugs_set(M, b$var, cells, as.vector(X))
+    bugs_cond(M, b) - fn$lp(b$rows)
+  }
+  X0 <- matrix(get(b$var, envir = M$S)[cells], b$n, b$K)
+  y <- ll(X0) - stats::rexp(b$n)
+  if (any(!is.finite(y))) stop_sampler(sprintf("the full conditional of %s is not finite at its current value", b$var))
+  D <- X0 - mu
+  th <- stats::runif(b$n, 0, 2 * pi); lo <- th - 2 * pi; hi <- th
+  X <- X0; todo <- rep(TRUE, b$n); it <- 0L
+  repeat {
+    it <- it + 1L
+    if (it > 500L) stop_sampler(sprintf("the elliptical slice sampler for %s did not find a new value", b$var))
+    P <- mu + D * cos(th) + nu * sin(th)
+    Xc <- X; Xc[todo, ] <- P[todo, ]
+    l <- ll(Xc)
+    ok <- todo & is.finite(l) & l > y
+    X[ok, ] <- P[ok, ]
+    todo <- todo & !ok
+    if (!any(todo)) break
+    neg <- todo & th < 0
+    lo[neg] <- th[neg]
+    pos <- todo & th >= 0
+    hi[pos] <- th[pos]
+    th[todo] <- stats::runif(sum(todo), lo[todo], hi[todo])
+  }
+  bugs_set(M, b$var, cells, as.vector(X))
+  bugs_write_desc(M, b)
+}
+
 bugs_mv_slice <- function(M, b) {
   for (j in seq_len(b$K)) {
     sel <- which(!b$fixed[, j])
@@ -626,6 +668,7 @@ bugs_update <- function(M, b) {
     discrete_slice = { jump <- bugs_slice_coord(M, b, b$cells[, 1L], seq_len(b$n), b$w, discrete = TRUE); b$w <- pmax(1, bugs_adapt_w(b$w, jump, b$adapting)) },
     enumerate = bugs_enumerate(M, b, b$cells[, 1L]),
     mv_slice = { b$w <- bugs_mv_slice(M, b) },
+    ess = bugs_ess(M, b),
     dirichlet = bugs_dirichlet(M, b),
     multinomial = bugs_multinomial(M, b),
     bugs_conjugate(M, b))
