@@ -11,8 +11,8 @@ bayescomp_sample(
   iter_sampling = 1000L,
   seed = NULL,
   init = 2,
-  algorithm = c("nuts", "hmc", "mala", "metropolis", "slice", "elliptical_slice",
-    "fixed_param"),
+  algorithm = c("nuts", "hmc", "mala", "barker", "metropolis", "slice",
+    "elliptical_slice", "fixed_param"),
   metric = c("diag_e", "dense_e", "unit_e"),
   inv_metric = NULL,
   step_size = NULL,
@@ -60,6 +60,8 @@ per chain, recycled). Parameters missing from a list or file are
 initialized at random.}
 
 \item{algorithm}{\code{"nuts"}, \code{"hmc"} (static integration time), \code{"mala"},
+\code{"barker"} (the Barker proposal, a gradient based random walk that is
+robust to the step size),
 \code{"metropolis"}, \code{"slice"}, \code{"elliptical_slice"} (generalized
 elliptical slice sampling around a Gaussian whose mean and covariance
 are estimated during warmup) or \code{"fixed_param"} (parameters stay at
@@ -94,7 +96,11 @@ transition, as a fraction in [0, 1] (Stan's \code{stepsize_jitter}).}
 \item{adapt_engaged}{Adapt during warmup.}
 
 \item{adapt_metric}{Adapt the metric during warmup (when
-\code{adapt_engaged}); \code{FALSE} adapts the step size only.}
+\code{adapt_engaged}); \code{FALSE} adapts the step size only. \code{TRUE} estimates
+the inverse metric from the variance of the draws, as Stan does;
+\code{"fisher"} (diagonal metric, NUTS and HMC) uses
+\code{sqrt(var(draws) / var(gradients))}, which minimizes a Fisher
+divergence and adapts faster (Seyboldt et al. 2026, as in nutpie).}
 
 \item{adapt_gamma, adapt_kappa, adapt_t0}{Dual averaging constants.}
 

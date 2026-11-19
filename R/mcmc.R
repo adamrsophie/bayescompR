@@ -9,6 +9,11 @@
 #   (default 0.234 for blocks, 0.44 componentwise).
 # * the Metropolis adjusted Langevin algorithm (Roberts and Tweedie 1996)
 #   with the same preconditioning (default target acceptance 0.574).
+# * the Barker proposal (Livingstone and Zanella 2022): a Gaussian step
+#   whose sign in each whitened direction is flipped toward the gradient
+#   with probability 1 / (1 + exp(-step * gradient)). It is far less
+#   sensitive to a badly tuned step size than MALA (default target
+#   acceptance 0.574, Vogrinc, Livingstone and Zanella 2023).
 # * slice sampling with stepping out and shrinkage (Neal 2003), one update
 #   per direction of the Cholesky factor of the inverse metric. Slice
 #   sampling has no acceptance statistic; the bracket width is step_size
@@ -94,6 +99,33 @@ metropolis_transition <- function(st, q) {
   mh_out(q, lp0, mean(accs), n)
 }
 
+barker_transition <- function(st, q) {
+  m <- st$metric
+  e <- st$eps
+  cached <- identical(st$last_q, q)
+  r0 <- if (cached) st$last_r else st$pot(q)
+  # gradient of the log density in whitened coordinates (x = L w)
+  wg <- function(r) if (m$type == "diag_e") -sqrt(m$inv) * r$g else -as.vector(m$U %*% r$g)
+  g0 <- wg(r0)
+  z <- e * stats::rnorm(length(q))
+  b <- ifelse(stats::runif(length(q)) < stats::plogis(z * g0), 1, -1)
+  dw <- b * z
+  qn <- q + metric_chol_mult(m, dw)
+  r1 <- st$pot(qn)
+  acc <- 0
+  if (is.finite(r1$V)) {
+    g1 <- wg(r1)
+    # the step dw from q has density proportional to phi(dw) plogis(dw g0),
+    # the step back from qn to phi(dw) plogis(-dw g1)
+    la <- (r0$V - r1$V) + sum(stats::plogis(-dw * g1, log.p = TRUE) - stats::plogis(dw * g0, log.p = TRUE))
+    acc <- if (is.nan(la)) 0 else min(1, exp(la))
+  }
+  if (stats::runif(1) < acc) { q <- qn; r0 <- r1 }
+  st$last_q <- q
+  st$last_r <- r0
+  mh_out(q, -r0$V, acc, if (cached) 1L else 2L)
+}
+
 mala_transition <- function(st, q) {
   m <- st$metric
   e <- st$eps
@@ -158,7 +190,7 @@ lp_cache_fun <- function(st) {
 }
 
 default_adapt_delta <- function(algorithm, block) {
-  switch(algorithm, nuts = 0.8, hmc = 0.8, mala = 0.574, metropolis = if (block) 0.234 else 0.44, NA_real_)
+  switch(algorithm, nuts = 0.8, hmc = 0.8, mala = 0.574, barker = 0.574, metropolis = if (block) 0.234 else 0.44, NA_real_)
 }
 
 # Generalized elliptical slice sampling (Murray, Adams and MacKay 2010;

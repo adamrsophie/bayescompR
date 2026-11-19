@@ -33,6 +33,8 @@
 #'   per chain, recycled). Parameters missing from a list or file are
 #'   initialized at random.
 #' @param algorithm `"nuts"`, `"hmc"` (static integration time), `"mala"`,
+#'   `"barker"` (the Barker proposal, a gradient based random walk that is
+#'   robust to the step size),
 #'   `"metropolis"`, `"slice"`, `"elliptical_slice"` (generalized
 #'   elliptical slice sampling around a Gaussian whose mean and covariance
 #'   are estimated during warmup) or `"fixed_param"` (parameters stay at
@@ -60,7 +62,11 @@
 #'   transition, as a fraction in \[0, 1\] (Stan's `stepsize_jitter`).
 #' @param adapt_engaged Adapt during warmup.
 #' @param adapt_metric Adapt the metric during warmup (when
-#'   `adapt_engaged`); `FALSE` adapts the step size only.
+#'   `adapt_engaged`); `FALSE` adapts the step size only. `TRUE` estimates
+#'   the inverse metric from the variance of the draws, as Stan does;
+#'   `"fisher"` (diagonal metric, NUTS and HMC) uses
+#'   `sqrt(var(draws) / var(gradients))`, which minimizes a Fisher
+#'   divergence and adapts faster (Seyboldt et al. 2026, as in nutpie).
 #' @param adapt_gamma,adapt_kappa,adapt_t0 Dual averaging constants.
 #' @param adapt_init_buffer,adapt_term_buffer,adapt_window Warmup windows.
 #' @param thin Keep every `thin`th draw.
@@ -109,7 +115,7 @@
 #' fit
 #' @export
 bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampling = 1000L,
-                             seed = NULL, init = 2, algorithm = c("nuts", "hmc", "mala", "metropolis", "slice", "elliptical_slice", "fixed_param"),
+                             seed = NULL, init = 2, algorithm = c("nuts", "hmc", "mala", "barker", "metropolis", "slice", "elliptical_slice", "fixed_param"),
                              metric = c("diag_e", "dense_e", "unit_e"), inv_metric = NULL,
                              step_size = NULL, adapt_delta = NULL, block = TRUE, max_treedepth = 10L,
                              int_time = 2 * pi, step_size_jitter = 0, adapt_engaged = TRUE, adapt_metric = TRUE, adapt_gamma = 0.05,
@@ -173,7 +179,7 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   if (is.null(adapt_delta)) adapt_delta <- default_adapt_delta(algorithm, block)
   if (!(algorithm %in% c("slice", "elliptical_slice", "fixed_param")) && !(adapt_delta > 0 && adapt_delta < 1)) stop("'adapt_delta' must be in (0, 1)", call. = FALSE)
   if (is.null(step_size)) {
-    step_size <- switch(algorithm, nuts = 1, hmc = 1, slice = 2, elliptical_slice = 1, fixed_param = 1, mala = 1 / max(1, n)^(1 / 6),
+    step_size <- switch(algorithm, nuts = 1, hmc = 1, slice = 2, elliptical_slice = 1, fixed_param = 1, mala = 1 / max(1, n)^(1 / 6), barker = 1 / max(1, n)^(1 / 6),
                         metropolis = if (block) 2.38 / sqrt(max(1, n)) else 2.4)
   }
   if (!(is.numeric(step_size) && length(step_size) == 1L && step_size > 0)) stop("'step_size' must be positive", call. = FALSE)
@@ -192,7 +198,8 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   }
   cfg <- list(algorithm = algorithm, block = block, metric = metric, inv_metric = inv_metric, step_size = step_size,
               adapt_delta = adapt_delta, max_treedepth = as_count(max_treedepth, "max_treedepth", 1L),
-              int_time = int_time, step_size_jitter = step_size_jitter, adapt_engaged = adapt_engaged, adapt_metric = isTRUE(adapt_metric),
+              int_time = int_time, step_size_jitter = step_size_jitter, adapt_engaged = adapt_engaged, adapt_metric = isTRUE(adapt_metric) || identical(adapt_metric, "fisher"),
+              fisher = identical(adapt_metric, "fisher") && metric == "diag_e" && algorithm %in% c("nuts", "hmc"),
               adapt_gamma = adapt_gamma, adapt_kappa = adapt_kappa, adapt_t0 = adapt_t0,
               adapt_init_buffer = as.integer(adapt_init_buffer), adapt_term_buffer = as.integer(adapt_term_buffer),
               adapt_window = as.integer(adapt_window), iter_warmup = iter_warmup, iter_sampling = iter_sampling,

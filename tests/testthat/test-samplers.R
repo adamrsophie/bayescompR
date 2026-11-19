@@ -17,7 +17,7 @@ test_that("MALA, Metropolis and slice sampling target the posterior", {
   skip_on_cran()
   m <- bayescomp_model(target_code)
   n <- if (long_tests()) 1000L else 300L
-  for (a in c("mala", "metropolis", "slice")) {
+  for (a in c("mala", "barker", "metropolis", "slice")) {
     k <- if (a == "metropolis") 4L * n else n  # Metropolis steps are cheap and mix slowly
     fit <- bayescomp_sample(m, chains = 2, iter_warmup = k, iter_sampling = k, algorithm = a, seed = 7, refresh = 0)
     check_moments(fit)

@@ -2,6 +2,15 @@
 
 ## New features
 
+* `bayescomp_sample(algorithm = "barker")` adds the Barker proposal, a
+  gradient based random walk that flips a Gaussian step toward the gradient
+  and is far less sensitive to the step size than MALA.
+
+* `bayescomp_sample(adapt_metric = "fisher")` adapts a diagonal metric from
+  the variances of the draws and of the gradients,
+  `sqrt(var(draws) / var(gradients))`, as nutpie does; it settles faster in
+  warmup than the variance of the draws alone.
+
 * `bayescomp_ess_multi()` computes the multivariate effective sample size
   of Vats, Flegal and Jones (2019) with replicated batch means and their
   minimum ESS stopping rule; `bayescomp_rhat_nested()` computes nested

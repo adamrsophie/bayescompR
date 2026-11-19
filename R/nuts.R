@@ -278,6 +278,15 @@ est_add <- function(e, q) {
   e$mean <- e$mean + d / e$n
   if (e$dense) e$m2 <- e$m2 + outer(q - e$mean, d) else e$m2 <- e$m2 + (q - e$mean) * d
 }
+# diagonal inverse metric sqrt(var(q) / var(grad)), the minimizer of the
+# Fisher divergence between the draws and a Gaussian with that scale,
+# regularized as est_value()
+est_fisher <- function(e, eg) {
+  k <- e$n
+  vq <- e$m2 / (k - 1); vg <- eg$m2 / (k - 1)
+  v <- ifelse(vg > 0 & is.finite(vg), sqrt(vq / vg), vq)
+  (k / (k + 5)) * v + 1e-3 * (5 / (k + 5))
+}
 est_value <- function(e) {
   n <- e$n
   v <- e$m2 / (n - 1)
@@ -310,7 +319,7 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   st$lp_cache <- lp_cache_fun(st)
   st$block <- isTRUE(cfg$block)
   st$max_steps <- 32L
-  trans <- switch(cfg$algorithm, nuts = nuts_transition, hmc = hmc_transition, mala = mala_transition,
+  trans <- switch(cfg$algorithm, nuts = nuts_transition, hmc = hmc_transition, mala = mala_transition, barker = barker_transition,
                   metropolis = metropolis_transition, slice = slice_transition,
                   elliptical_slice = elliptical_transition)
   st$center <- cfg$center %||% q0
@@ -322,6 +331,8 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   da <- dual_avg_new(cfg$adapt_delta, cfg$adapt_gamma, cfg$adapt_kappa, cfg$adapt_t0, mu = log(10 * cfg$step_size))
   w <- windows_new(nw, cfg$adapt_init_buffer, cfg$adapt_term_buffer, cfg$adapt_window)
   est <- est_new(n, dense)
+  fisher <- isTRUE(cfg$fisher)
+  if (fisher) estg <- est_new(n, FALSE)
   if (adapt && hamiltonian) st$eps <- init_stepsize(st, q0)
   off <- as.integer(cfg$sampling_offset %||% 0L)
   keep_w <- if (cfg$save_warmup) seq_len(nw) else integer(0)
@@ -359,14 +370,15 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
     if (it <= nw && adapt) {
       if (tune_step) st$eps <- dual_avg_learn(da, s$accept_stat)
       if (cfg$adapt_metric) {
-        if (win_in_window(w)) est_add(est, q)
+        if (win_in_window(w)) { est_add(est, q); if (fisher) est_add(estg, s$g) }
         if (win_end_window(w)) {
           win_compute_next(w)
           # a window of one draw has no variance estimate (as Stan, which
           # needs more than one sample): the metric stays as it is
-          if (est$n > 1) st$metric <- make_metric(cfg$metric, est_value(est))
+          if (est$n > 1) st$metric <- make_metric(cfg$metric, if (fisher) est_fisher(est, estg) else est_value(est))
           st$center <- est$mean
           est <- est_new(n, dense)
+          if (fisher) estg <- est_new(n, FALSE)
           w$counter <- w$counter + 1L
           if (hamiltonian) st$eps <- init_stepsize(st, q)
           if (tune_step) {
