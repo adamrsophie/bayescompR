@@ -34,6 +34,10 @@
   whole vector at once without rejections or tuning, in place of
   coordinatewise slice sampling.
 
+* `bayescomp_nested()` draws new live points by hit-and-run slice sampling
+  along whitened random directions instead of random walk Metropolis, and
+  `mcmc_steps` now defaults to three times the number of parameters.
+
 ## Bug fixes
 
 * `bayescomp_ess_quantile()` and `bayescomp_ess_tail()` use the indicator
