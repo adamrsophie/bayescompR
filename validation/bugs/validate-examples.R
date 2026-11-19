@@ -5,6 +5,9 @@
 # reference posterior sd. The example files are not part of the package:
 # point BAYESCOMPR_BUGS_EXAMPLES at the doc/Examples folder of the OpenBUGS
 # sources.
+# Each model's rows are saved in BAYESCOMPR_BUGS_CACHE (default
+# validation/bugs/cache) as soon as it finishes, and a rerun skips the
+# models found there.
 #   Rscript validation/bugs/validate-examples.R [n.keep] [cores] [models...]
 suppressMessages(pkgload::load_all(quiet = TRUE))
 dir <- Sys.getenv("BAYESCOMPR_BUGS_EXAMPLES")
@@ -14,6 +17,9 @@ n_keep <- if (length(args) >= 1L) as.integer(args[1L]) else 5000L
 cores <- if (length(args) >= 2L) as.integer(args[2L]) else 1L
 ref <- utils::read.csv("validation/bugs/reference.csv", stringsAsFactors = FALSE)
 models <- if (length(args) >= 3L) args[-(1:2)] else unique(ref$model)
+cache <- Sys.getenv("BAYESCOMPR_BUGS_CACHE", "validation/bugs/cache")
+dir.create(cache, showWarnings = FALSE, recursive = TRUE)
+cached <- function(nm) file.path(cache, paste0(nm, ".rds"))
 
 check <- function(nm) {
   r <- ref[ref$model == nm, ]
@@ -40,8 +46,17 @@ check <- function(nm) {
   do.call(rbind, out)
 }
 
-res <- if (cores > 1L) parallel::mclapply(models, check, mc.cores = cores, mc.preschedule = FALSE) else lapply(models, check)
-res <- do.call(rbind, res)
+run <- function(nm) {
+  if (file.exists(cached(nm))) return(invisible())
+  out <- tryCatch(check(nm), error = function(e) data.frame(model = nm, node = NA, ref = NA, mean = NA, z = NA,
+                                                            pass = FALSE, note = conditionMessage(e), secs = NA))
+  saveRDS(out, cached(nm))
+}
+todo <- models[!file.exists(vapply(models, cached, ""))]
+if (cores > 1L) parallel::mclapply(todo, run, mc.cores = cores, mc.preschedule = FALSE) else lapply(todo, run)
+res <- do.call(rbind, lapply(models, function(nm) if (file.exists(cached(nm))) readRDS(cached(nm))
+                             else data.frame(model = nm, node = NA, ref = NA, mean = NA, z = NA, pass = FALSE,
+                                             note = "no result", secs = NA)))
 utils::write.csv(res, "validation/bugs/validation-results.csv", row.names = FALSE)
 for (nm in models) {
   x <- res[res$model == nm, ]
