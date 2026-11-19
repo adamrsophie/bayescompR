@@ -19,3 +19,20 @@ test_that("nested R-hat flags superchains that disagree", {
   expect_gt(bayescomp_rhat_nested(y, sc), 1.5)
   expect_error(bayescomp_rhat_nested(matrix(0, 1, 3), 1:3 > 1), "equal size")
 })
+
+test_that("local R-hat flags chains that differ only in shape", {
+  set.seed(1)
+  x <- cbind(rnorm(2000), runif(2000, -sqrt(3), sqrt(3)))
+  # Moins et al. (2023): about 1.018 in the limit for this pair
+  expect_gt(bayescomp_rhat_local(x), 1.01)
+  expect_lt(bayescomp_rhat_local(matrix(rnorm(4000), 2000)), 1.01)
+})
+
+test_that("kernel Stein discrepancy grows when the draws are biased", {
+  skip_on_cran()
+  m <- bayescomp_model("parameters { vector[2] mu; } model { mu ~ normal(0, 1); }")
+  f <- bayescomp_sample(m, chains = 1, iter_sampling = 500, seed = 1, refresh = 0)
+  a <- bayescomp_ksd(f)
+  f$unconstrained[[1L]] <- f$unconstrained[[1L]] + 0.5
+  expect_gt(bayescomp_ksd(f), 3 * a)
+})

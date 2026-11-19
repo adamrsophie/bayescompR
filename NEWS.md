@@ -16,6 +16,11 @@
   minimum ESS stopping rule; `bayescomp_rhat_nested()` computes nested
   R-hat for many short chains grouped in superchains.
 
+* `bayescomp_rhat_local()` computes the local R-hat of Moins et al. (2023),
+  which catches chains that differ in shape or tails, and `bayescomp_ksd()`
+  the kernel Stein discrepancy of a fit's draws with the inverse
+  multiquadric kernel, which also detects bias.
+
 * `bayescomp_pdmp()` simulates event times exactly by thinning against a
   piecewise constant rate bound built on a grid along the path, with an
   adaptive horizon (Andral and Kamatani 2024), instead of integrating the

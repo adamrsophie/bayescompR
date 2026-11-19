@@ -323,3 +323,73 @@ bayescomp_rhat_nested <- function(x, superchain) {
   }, 0))
   sqrt(1 + B / W)
 }
+
+#' Local R-hat
+#'
+#' The local R-hat of Moins et al. (2023): the R-hat of the indicator
+#' `x <= z`, maximized over thresholds `z` taken at quantiles of the pooled
+#' draws (`R-hat_infinity`). It detects chains that agree in location and
+#' scale but differ in the shape or the tails of their distributions, which
+#' rank normalized R-hat can miss.
+#'
+#' @param x Matrix of draws, iterations by chains.
+#' @param n_grid Number of thresholds.
+#' @return A number, `R-hat_infinity`, with attribute `"local"`, a data frame
+#'   of thresholds `z` and their R-hat.
+#' @references Moins, T., Arbel, J., Dutfoy, A. and Girard, S. (2023). On the
+#'   use of a local R-hat to improve MCMC convergence diagnostic. *Bayesian
+#'   Analysis*.
+#' @examples
+#' set.seed(1)
+#' x <- cbind(rnorm(500), runif(500, -sqrt(3), sqrt(3)))
+#' bayescomp_rhat_local(x)
+#' @export
+bayescomp_rhat_local <- function(x, n_grid = 100L) {
+  x <- as_draws_matrix_chains(x)
+  if (ncol(x) < 2L) x <- split_chains(x)
+  z <- unique(stats::quantile(x, seq(0, 1, length.out = n_grid + 2L)[-c(1L, n_grid + 2L)], names = FALSE))
+  r <- vapply(z, function(zz) { ind <- (x <= zz) + 0; if (na_diag(ind)) NA_real_ else rhat_raw(ind) }, 0)
+  structure(max(r, na.rm = TRUE), local = data.frame(z = z, rhat = r))
+}
+
+#' Kernel Stein discrepancy
+#'
+#' The kernel Stein discrepancy of the draws of a fit with the inverse
+#' multiquadric kernel `(1 + |x - y|^2)^(-1/2)` on the unconstrained scale
+#' (Gorham and Mackey 2017). It needs only the gradient of the log density at
+#' the draws, is zero only for the target, and so measures sample quality
+#' including bias that convergence diagnostics cannot see. Compare values
+#' between samplers or runs of one model; the scale has no absolute meaning.
+#'
+#' @param fit A `bayescomp_fit` with unconstrained draws.
+#' @param max_draws Draws used (thinned evenly); the cost is quadratic.
+#' @return A number.
+#' @references Gorham, J. and Mackey, L. (2017). Measuring sample quality
+#'   with kernels. *Proceedings of the 34th International Conference on
+#'   Machine Learning*, 1292 to 1301.
+#' @examples
+#' \donttest{
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_sample(m, chains = 1, iter_sampling = 500, seed = 1, refresh = 0)
+#' bayescomp_ksd(fit)
+#' }
+#' @export
+bayescomp_ksd <- function(fit, max_draws = 1000L) {
+  if (!inherits(fit, "bayescomp_fit") || is.null(fit$unconstrained)) stop("'fit' must be a fit with unconstrained draws", call. = FALSE)
+  X <- do.call(rbind, fit$unconstrained)
+  if (nrow(X) > max_draws) X <- X[unique(round(seq(1, nrow(X), length.out = max_draws))), , drop = FALSE]
+  lpg <- model_lpg(fit$model, jacobian = TRUE, propto = FALSE)
+  B <- t(apply(X, 1L, function(u) lpg(u)$grad))
+  if (ncol(X) == 1L) B <- matrix(B, ncol = 1L)
+  d <- ncol(X); beta <- -0.5
+  sq <- rowSums(X^2)
+  R2 <- pmax(outer(sq, sq, "+") - 2 * tcrossprod(X), 0)
+  S <- 1 + R2
+  bx <- rowSums(B * X)
+  # b_j . (x_i - x_j) - b_i . (x_i - x_j)
+  cross <- (tcrossprod(X, B) - matrix(bx, nrow(X), nrow(X), byrow = TRUE)) -
+    (matrix(bx, nrow(X), nrow(X)) - tcrossprod(B, X))
+  K0 <- tcrossprod(B) * S^beta + 2 * beta * S^(beta - 1) * cross -
+    2 * beta * (d * S^(beta - 1) + 2 * (beta - 1) * S^(beta - 2) * R2)
+  sqrt(max(mean(K0), 0))
+}
