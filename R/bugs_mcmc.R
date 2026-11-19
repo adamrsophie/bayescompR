@@ -117,6 +117,11 @@ bugs_make_block <- function(M, ids, desc) {
   b$fixed <- matrix(FALSE, b$n, K)
   for (j in seq_along(ids)) { m <- M$fixed[[as.character(ids[j])]]; if (!is.null(m)) b$fixed[j, ] <- m }
   b$sampler <- bugs_choose_sampler(M, b)
+  b$dyn <- startsWith(b$sampler, "conj_dyn_")
+  if (b$dyn) {
+    b$sampler <- sub("conj_dyn_", "conj_", b$sampler, fixed = TRUE)
+    b$dyn_owner <- lapply(b$cgroups, bugs_dyn_owner_fun, M = M, b = b)
+  }
   b$w <- if (b$sampler == "mv_slice") matrix(1, b$n, K) else rep(if (b$sampler == "discrete_slice") 2 else 1, b$n)
   b$adapting <- TRUE
   b
@@ -174,6 +179,7 @@ bugs_choose_sampler <- function(M, b) {
   d <- b$dist; s <- b$s
   bounded <- !is.null(s$bound)
   conj <- .bugs_conj[[d$name]]
+  dyn <- FALSE
   if (!bounded && !any(b$fixed) && !is.null(conj) && length(b$children)) {
     # children may not depend on the node through logical nodes
     direct <- !any(unlist(M$parents[b$children]) %in% b$lids)
@@ -183,14 +189,25 @@ bugs_choose_sampler <- function(M, b) {
       slot <- conj[[cs$dist]]
       if (is.null(slot) || !is.null(cs$bound)) return(FALSE)
       tgt <- b$ids[b$child_owner[k]]
-      if (!bugs_child_ref(M, c, slot, tgt)) return(FALSE)
-      # the other parameters of the child do not involve the node
       env <- bugs_inst_env(cs, M$nodes$row[c])
+      if (!bugs_child_ref(M, c, slot, tgt)) {
+        # a mixture: the parameter is a node of the family chosen by a
+        # latent index, as in p[z[i], ]; which node it is is found at each
+        # update
+        e <- cs$args[[slot]]
+        if (!identical(e$kind, "var") || e$name != b$var || !length(e$index)) return(FALSE)
+        r <- bugs_refs(M, e, env)
+        if (!length(r$possible)) return(FALSE)
+        if (any(M$nodes$var[c(r$definite, r$possible)] == b$var & M$nodes$kind[c(r$definite, r$possible)] != "stochastic")) return(FALSE)
+        dyn <<- TRUE
+        tgt <- b$ids
+      }
+      # the other parameters of the child do not involve the node
       !any(vapply(setdiff(seq_along(cs$args), slot), function(o) {
-        r <- bugs_refs(M, cs$args[[o]], env); any(c(r$definite, r$possible) == tgt)
+        r <- bugs_refs(M, cs$args[[o]], env); any(c(r$definite, r$possible) %in% tgt)
       }, TRUE))
     }, TRUE))
-    if (ok) return(paste0("conj_", d$name))
+    if (ok) return(paste0(if (dyn) "conj_dyn_" else "conj_", d$name))
   }
   if (d$name == "dwish") {
     if (!length(b$children) && !bounded) return("conj_dwish")
@@ -383,7 +400,43 @@ bugs_child_data <- function(M, g) {
 }
 
 # conjugate updates: the posterior is in the prior's family
+# the block member each child of a mixture refers to now (NA for none):
+# the index expressions are evaluated with the current values
+bugs_dyn_owner_fun <- function(M, b, g) {
+  cs <- M$stmts[[g$stmt]]
+  e <- cs$args[[.bugs_conj[[b$dist$name]][[cs$dist]]]]
+  envs <- lapply(g$rows, bugs_inst_env, s = cs)
+  own <- M$owner[[e$name]]
+  d <- dim(own) %||% length(own)
+  ids <- b$ids
+  function() vapply(envs, function(env) {
+    lin <- 1; stride <- 1
+    for (k in seq_along(e$index)) {
+      ii <- e$index[[k]]
+      i <- switch(ii$kind, single = bugs_const(ii$e, env, M$S), all = seq_len(d[k]),
+                  range = bugs_const(ii$lo, env, M$S):bugs_const(ii$hi, env, M$S))
+      if (any(i < 1 | i > d[k])) return(NA_integer_)
+      lin <- rep.int(lin, length(i)) + rep((i - 1) * stride, each = length(lin))
+      stride <- stride * d[k]
+    }
+    o <- own[lin]; id <- o[1L]
+    if (id > 0L && all(o == id) && length(o) == length(M$cells[[id]])) match(id, ids) else NA_integer_
+  }, 1L)
+}
+
+bugs_dyn_groups <- function(M, b) {
+  out <- lapply(seq_along(b$cgroups), function(k) {
+    g <- b$cgroups[[k]]
+    o <- b$dyn_owner[[k]]()
+    keep <- !is.na(o)
+    g$rows <- g$rows[keep]; g$ids <- g$ids[keep]; g$owner <- o[keep]; g$uowner <- sort(unique(o[keep]))
+    g
+  })
+  Filter(function(g) length(g$rows) > 0L, out)
+}
+
 bugs_conjugate <- function(M, b) {
+  if (isTRUE(b$dyn)) b$cgroups <- bugs_dyn_groups(M, b)
   fn <- M$stmts[[b$stmt]]$fn
   a <- bugs_args_list(fn, b$rows)
   nm <- b$dist$name

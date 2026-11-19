@@ -168,3 +168,20 @@ test_that("the NIMBLE functions run nimbleCode models", {
   s <- runMCMC(compileNimble(buildMCMC(configureMCMC(m))), niter = 500, setSeed = 2)
   expect_equal(dim(s), c(500L, 1L))
 })
+
+test_that("mixture parameters chosen by latent indices get conjugate updates", {
+  code <- "model {
+    for (i in 1:4) { z[i] ~ dcat(w[])  y[i] ~ dbin(theta[z[i]], 10) }
+    for (k in 1:2) { theta[k] ~ dbeta(1, 1) }
+  }"
+  y <- c(3, 5, 4, 6)
+  M <- bugs_compile(bugs_parse(code), list(y = y, w = c(1, 0)))
+  st <- bugs_chain_init(M, NULL, "typical")
+  expect_true(any(vapply(st$blocks, function(b) b$sampler == "conj_dbeta" && isTRUE(b$dyn), TRUE)))
+  s <- run_jags(code, list(y = y, w = c(1, 0)), "theta")
+  expect_equal(mean(s$theta[, 1]), (1 + sum(y)) / (2 + 40), tolerance = 0.02)
+  expect_equal(mean(s$theta[, 2]), 0.5, tolerance = 0.04)
+  # cells of a stochastic node given by logical nodes
+  s <- run_jags("model { Y[1] <- 1  Y[2] <- 0  Y[1:2] ~ dmulti(p[], 1)  p[1:2] ~ ddirch(a[]) }", list(a = c(1, 1)), "p")
+  expect_equal(mean(s$p[, 1]), 2 / 3, tolerance = 0.03)
+})

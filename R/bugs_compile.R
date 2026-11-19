@@ -232,8 +232,12 @@ bugs_make_nodes <- function(M) {
       prev <- prev[prev != 0L]
       if (length(prev)) {
         # OpenBUGS: a logical node that is also stochastic transforms data
-        pk <- nodes$kind[prev[1L]]
-        if (length(prev) == 1L && pk != s$kind && setequal(cells[[prev]], cl)) {
+        # (logical nodes may define parts of the stochastic node, as in
+        # Y[i, 1] <- 1; Y[i, 2] <- 0; Y[i, 1:2] ~ dmulti(p[i, ], 1))
+        ok <- all(nodes$kind[prev] != s$kind) &&
+          if (s$kind == "stochastic") all(vapply(prev, function(p) all(cells[[p]] %in% cl), TRUE))
+          else length(prev) == 1L && all(cl %in% cells[[prev]])
+        if (ok) {
           transforms <- c(transforms, if (s$kind == "logical") n + 1L else prev)
         } else stop_semantic(sprintf("%s[%s] is defined more than once", nm, paste(arrayInd(cl[1L], d), collapse = ",")), s$loc)
       }
@@ -296,6 +300,9 @@ bugs_observed <- function(M) {
       stop_semantic(sprintf("%s is a logical node and cannot be given as data", bugs_node_label(M, i)), s$loc)
     }
   }
+  for (i in M$transforms) if (!M$nodes$folded[i])
+    stop_semantic(sprintf("%s gives values to a stochastic node and must be computable from the data", bugs_node_label(M, i)),
+                  M$stmts[[M$nodes$stmt[i]]]$loc)
   # values that never change: observed stochastic and folded logical nodes
   M$const <- M$nodes$obs | M$nodes$folded
 }
