@@ -274,6 +274,12 @@ gaussian_reference <- function(model, reference, scale) {
     }, error = function(e) NULL)
     if (!is.null(pf)) { mu <- pf$mu; L <- scale * pf$L }
   }
+  gaussian_reference_from(mu, L)
+}
+
+# a normalized Gaussian with mean mu and lower triangular scale L
+gaussian_reference_from <- function(mu, L) {
+  n <- length(mu)
   log_det_L <- sum(log(abs(diag(L))))
   log_g <- function(U) {
     U <- matrix(U, ncol = n)

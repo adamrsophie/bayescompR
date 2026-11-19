@@ -6,8 +6,12 @@
 # ones, which turns the index process into a lifted, persistent walk. The
 # temperature schedule is adapted during warmup in rounds of doubling length
 # so that every pair has the same rejection rate, from the estimated local
-# communication barrier. Each replica explores with adaptive random walk
-# Metropolis. Adaptation stops at the end of warmup.
+# communication barrier. With `adapt_reference`, the Gaussian reference is
+# refitted at the end of each round to the mean and covariance of the
+# posterior replica (variational parallel tempering, Surjanovic et al.
+# 2022), which shortens the path when prior and posterior are far apart.
+# Each replica explores with adaptive random walk Metropolis. Adaptation
+# stops at the end of warmup.
 
 #' Parallel tempering
 #'
@@ -22,14 +26,21 @@
 #' @param adapt_schedule Adapt the temperatures during warmup.
 #' @param reference,reference_scale Gaussian reference, as in
 #'   [bayescomp_smc()].
+#' @param adapt_reference Refit the Gaussian reference to the draws of the
+#'   posterior replica at the end of each warmup round (variational
+#'   reference). The reference stays fixed during sampling.
 #' @return A `bayescomp_fit` with draws from the `beta = 1` replica and
 #'   elements `betas` (final schedule per chain), `swap_rate` (acceptance per
 #'   adjacent pair, per chain), `barrier` (estimated global communication
-#'   barrier) and `log_evidence` (stepping stone estimate per chain).
+#'   barrier), `log_evidence` (stepping stone estimate per chain) and
+#'   `suggested_num_temps` (about twice the barrier plus one, the number of
+#'   temperatures beyond which more replicas no longer help).
 #' @references Syed, S., Bouchard-Cote, A., Deligiannidis, G. and Doucet, A.
 #'   (2022). Non-reversible parallel tempering: a scalable highly parallel
 #'   MCMC scheme. *Journal of the Royal Statistical Society B* 84, 321 to
-#'   350.
+#'   350. Surjanovic, N., Syed, S., Bouchard-Cote, A. and Campbell, T. (2022).
+#'   Parallel tempering with a variational reference. *Advances in Neural
+#'   Information Processing Systems* 35.
 #' @examples
 #' \donttest{
 #' m <- bayescomp_model("parameters { real x; }
@@ -43,6 +54,7 @@ bayescomp_parallel_tempering <- function(model, num_temps = 10L, chains = 2L, it
                                          iter_sampling = 1000L, explore_steps = 3L,
                                          swap = c("nonreversible", "reversible"), adapt_schedule = TRUE,
                                          reference = c("pathfinder", "standard"), reference_scale = 1.5,
+                                         adapt_reference = TRUE,
                                          init = 2, seed = NULL, cores = getOption("mc.cores", 1L), refresh = 0L) {
   check_model(model)
   swap <- match.arg(swap)
@@ -118,6 +130,13 @@ bayescomp_parallel_tempering <- function(model, num_temps = 10L, chains = 2L, it
       }
       # schedule and proposal adaptation at the end of each warmup round
       if (warm && (it == round_end || it == nw)) {
+        if (adapt_reference && est[[K]]$n > 2 * n) {
+          Lr <- tryCatch(t(chol(est_value(est[[K]]))), error = function(e) NULL)
+          if (!is.null(Lr)) {
+            ref <- gaussian_reference_from(est[[K]]$mean, reference_scale * Lr)
+            lg <- ref$log_g(X)
+          }
+        }
         r <- ifelse(tries > 0, rej / pmax(tries, 1), 0)
         if (adapt_schedule && sum(r) > 0) betas <- pt_update_schedule(betas, r)
         for (k in seq_len(K)) if (est[[k]]$n > 2 * n) {
@@ -149,6 +168,8 @@ bayescomp_parallel_tempering <- function(model, num_temps = 10L, chains = 2L, it
   fit$swap_rate <- lapply(res, `[[`, "swap_rate")
   fit$barrier <- vapply(res, `[[`, 0, "barrier")
   fit$log_evidence <- vapply(res, `[[`, 0, "log_evidence")
+  # the round trip rate stops improving at about 2 * barrier + 1 replicas
+  fit$suggested_num_temps <- as.integer(ceiling(2 * max(fit$barrier)) + 1L)
   fit
 }
 
