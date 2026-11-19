@@ -227,3 +227,98 @@ bayescomp_check_gradients <- function(model, init = 2, seed = NULL, epsilon = 1e
   out <- data.frame(param = seq_along(u) - 1L, value = u, model = r$grad, finite_diff = fd, error = r$grad - fd)
   structure(out, log_prob = r$value, passed = all(abs(out$error) <= error))
 }
+
+#' Multivariate effective sample size
+#'
+#' The multivariate effective sample size of Vats, Flegal and Jones (2019),
+#' `n (det(Lambda) / det(Sigma))^(1 / p)`, where `Lambda` is the sample
+#' covariance of the draws and `Sigma` the replicated batch means estimate of
+#' the asymptotic covariance of their mean (Vats and Knudson 2021), together
+#' with the number of effective draws that estimates every mean to relative
+#' precision `epsilon` with confidence `1 - alpha`.
+#'
+#' @param x A `bayescomp_fit`, or an array of draws (iterations by chains by
+#'   variables).
+#' @param variables Variables of a fit to use (default all parameters).
+#' @param alpha,epsilon Confidence level and relative precision of the
+#'   stopping rule.
+#' @return A list with `mess`, `min_ess` (the effective sample size the
+#'   stopping rule asks for), `enough` (`mess >= min_ess`) and `batch_size`.
+#' @references Vats, D., Flegal, J. M. and Jones, G. L. (2019). Multivariate
+#'   output analysis for Markov chain Monte Carlo. *Biometrika* 106, 321 to
+#'   337. Vats, D. and Knudson, C. (2021). Revisiting the Gelman-Rubin
+#'   diagnostic. *Statistical Science* 36, 518 to 529.
+#' @examples
+#' set.seed(1)
+#' x <- array(rnorm(4000), c(500, 4, 2))
+#' bayescomp_ess_multi(x)$mess
+#' @export
+bayescomp_ess_multi <- function(x, variables = NULL, alpha = 0.05, epsilon = 0.05) {
+  if (inherits(x, "bayescomp_fit")) {
+    x <- bayescomp_draws(x, variables, format = "array")
+    if (is.null(variables)) x <- x[, , !grepl("__$", dimnames(x)[[3L]]), drop = FALSE]
+  }
+  x <- as.array(x)
+  if (length(dim(x)) == 2L) x <- array(x, c(dim(x)[1L], 1L, dim(x)[2L]))
+  n <- dim(x)[1L]; m <- dim(x)[2L]; p <- dim(x)[3L]
+  keep <- vapply(seq_len(p), function(j) !na_diag(x[, , j]), TRUE)
+  x <- x[, , keep, drop = FALSE]; p <- sum(keep)
+  if (p == 0L || n < 10L) stop("too few draws or no varying variable", call. = FALSE)
+  b <- max(1L, floor(sqrt(n)))
+  a <- n %/% b
+  X <- matrix(x[seq_len(a * b), , , drop = FALSE], ncol = p)
+  mu <- colMeans(X)
+  # batch means of every chain, centered at the overall mean
+  bm <- do.call(rbind, lapply(seq_len(m), function(ch) {
+    xc <- matrix(x[seq_len(a * b), ch, , drop = FALSE], ncol = p)
+    rowsum(xc, rep(seq_len(a), each = b)) / b
+  }))
+  bm <- sweep(bm, 2L, mu)
+  Sigma <- b * crossprod(bm) / (a * m - 1)
+  Lambda <- stats::cov(X)
+  ld <- function(S) as.numeric(determinant(S, logarithm = TRUE)$modulus)
+  N <- a * b * m
+  mess <- N * exp((ld(Lambda) - ld(Sigma)) / p)
+  min_ess <- 2^(2 / p) * pi / (p * gamma(p / 2))^(2 / p) * stats::qchisq(1 - alpha, p) / epsilon^2
+  list(mess = mess, min_ess = min_ess, enough = mess >= min_ess, batch_size = b)
+}
+
+#' Nested R-hat
+#'
+#' The nested R-hat of Margossian et al. (2024) for many short chains
+#' started in groups (superchains) from the same point: it compares the
+#' variance between superchain means with the variance within superchains,
+#' and is reliable even with one draw per chain.
+#'
+#' @param x Matrix of draws, iterations by chains (a vector is one draw per
+#'   chain).
+#' @param superchain Superchain of each chain (a vector with one entry per
+#'   column); every superchain needs the same number of chains.
+#' @return A number; values near 1 (Margossian et al. suggest below about
+#'   1.01 with many chains) indicate the chains have forgotten their starts.
+#' @references Margossian, C. C., Hoffman, M. D., Sountsov, P., Riou-Durand,
+#'   L., Vehtari, A. and Gelman, A. (2024). Nested R-hat: assessing the
+#'   convergence of Markov chain Monte Carlo when running many short chains.
+#'   *Bayesian Analysis*.
+#' @examples
+#' set.seed(1)
+#' x <- matrix(rnorm(10 * 64), 10, 64)
+#' bayescomp_rhat_nested(x, rep(1:8, each = 8))
+#' @export
+bayescomp_rhat_nested <- function(x, superchain) {
+  x <- if (is.null(dim(x))) matrix(x, nrow = 1L) else as.matrix(x)
+  if (length(superchain) != ncol(x)) stop("'superchain' needs one entry per chain", call. = FALSE)
+  g <- split(seq_len(ncol(x)), superchain)
+  M <- unique(lengths(g))
+  if (length(g) < 2L || length(M) != 1L) stop("need at least two superchains of equal size", call. = FALSE)
+  N <- nrow(x)
+  cm <- colMeans(x)
+  sm <- vapply(g, function(i) mean(cm[i]), 0)
+  B <- stats::var(sm)
+  W <- mean(vapply(g, function(i) {
+    bk <- if (M > 1L) stats::var(cm[i]) else 0
+    wk <- if (N > 1L) mean(apply(x[, i, drop = FALSE], 2L, stats::var)) else 0
+    bk + wk
+  }, 0))
+  sqrt(1 + B / W)
+}

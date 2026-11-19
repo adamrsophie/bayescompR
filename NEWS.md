@@ -2,6 +2,11 @@
 
 ## New features
 
+* `bayescomp_ess_multi()` computes the multivariate effective sample size
+  of Vats, Flegal and Jones (2019) with replicated batch means and their
+  minimum ESS stopping rule; `bayescomp_rhat_nested()` computes nested
+  R-hat for many short chains grouped in superchains.
+
 * `bayescomp_pdmp()` simulates event times exactly by thinning against a
   piecewise constant rate bound built on a grid along the path, with an
   adaptive horizon (Andral and Kamatani 2024), instead of integrating the
