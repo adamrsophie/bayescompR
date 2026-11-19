@@ -47,6 +47,10 @@ variable. \code{"deviance"} monitors the deviance.}
 \item{model.file}{The model: a file name, a character vector of BUGS code,
 or an R function whose body is the model (as in R2jags).}
 
+\item{n.chains}{Number of chains.}
+
+\item{n.burnin}{Burn-in iterations per chain, discarded.}
+
 \item{n.thin}{Thinning: as in OpenBUGS, every iteration after the burn-in
 runs \code{n.thin} updates and keeps the last, so \code{n.iter - n.burnin} draws
 are kept per chain.}

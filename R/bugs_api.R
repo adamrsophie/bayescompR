@@ -226,6 +226,8 @@ jags <- function(data, inits = NULL, parameters.to.save = NULL, model.file = "mo
 #' @inheritParams jags
 #' @param inits Initial values as in [jags()]; `NULL` draws them from the
 #'   priors (OpenBUGS's gen inits).
+#' @param n.chains Number of chains.
+#' @param n.burnin Burn-in iterations per chain, discarded.
 #' @param n.iter Iterations per chain, including the burn-in.
 #' @param n.thin Thinning: as in OpenBUGS, every iteration after the burn-in
 #'   runs `n.thin` updates and keeps the last, so `n.iter - n.burnin` draws
