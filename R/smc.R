@@ -8,9 +8,11 @@
 #
 # Each step picks the next beta by bisection so that the effective sample
 # size of the incremental weights is `ess_threshold` times the number of
-# particles, resamples systematically, and moves every particle with
-# `num_mcmc_steps` random walk Metropolis steps targeting pi_beta, whose
-# covariance is the scaled particle covariance. Because g is normalized and
+# particles, resamples systematically, and moves the particles with random
+# walk Metropolis (or MALA or HMC) targeting pi_beta, preconditioned by the
+# particle covariance. By default the moves are waste-free (Dau and Chopin
+# 2022): only N / P particles are resampled and each runs a chain of P - 1
+# steps whose every state is kept, so no MCMC output is discarded. Because g is normalized and
 # p is evaluated with all constants, the product of the mean incremental
 # weights estimates the normalizing constant of the model's density on the
 # unconstrained scale, which is the marginal likelihood when the program
@@ -27,7 +29,13 @@
 #' @param reference_scale Scale factor for the reference.
 #' @param ess_threshold Target relative effective sample size used to pick
 #'   each temperature.
-#' @param num_mcmc_steps MCMC steps per particle and temperature.
+#' @param num_mcmc_steps MCMC steps per particle and temperature when
+#'   `waste_free = FALSE`.
+#' @param waste_free Resample `num_particles / chain_length` particles and
+#'   keep every state of their chains of length `chain_length` (Dau and
+#'   Chopin 2022) instead of moving every particle `num_mcmc_steps` times
+#'   and keeping only the last state.
+#' @param chain_length Length of each waste-free chain, including its start.
 #' @param kernel Rejuvenation kernel: `"metropolis"` (random walk, no
 #'   gradients), `"mala"` or `"hmc"` (`hmc_steps` leapfrog steps), all
 #'   preconditioned by the particle covariance and tuned toward their
@@ -44,7 +52,9 @@
 #'   (temperatures) and `acceptance` (mean Metropolis acceptance per stage).
 #' @references Del Moral, P., Doucet, A. and Jasra, A. (2006). Sequential
 #'   Monte Carlo samplers. *Journal of the Royal Statistical Society B* 68,
-#'   411 to 436.
+#'   411 to 436. Dau, H.-D. and Chopin, N. (2022). Waste-free sequential
+#'   Monte Carlo. *Journal of the Royal Statistical Society B* 84, 114 to
+#'   148.
 #' @examples
 #' \donttest{
 #' m <- bayescomp_model("data { real y; } parameters { real mu; }
@@ -55,6 +65,7 @@
 #' @export
 bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinder", "standard"),
                           reference_scale = 1.5, ess_threshold = 0.5, num_mcmc_steps = 10L,
+                          waste_free = TRUE, chain_length = 10L,
                           kernel = c("metropolis", "mala", "hmc"), hmc_steps = 5L,
                           resampling = c("systematic", "stratified", "residual", "multinomial"),
                           max_stages = 200L, seed = NULL, cores = getOption("mc.cores", 1L)) {
@@ -68,6 +79,8 @@ bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinde
   n <- model$dim
   if (n == 0L) stop("the model has no parameters", call. = FALSE)
   if (!(ess_threshold > 0 && ess_threshold < 1)) stop("'ess_threshold' must be in (0, 1)", call. = FALSE)
+  P <- as_count(chain_length, "chain_length", 2L)
+  if (waste_free && N %% P != 0L) stop("'num_particles' must be a multiple of 'chain_length'", call. = FALSE)
   t0 <- proc.time()[["elapsed"]]
   info <- NULL
   res <- run_chains(model, 1L, seed, 1L, function(id) {
@@ -105,6 +118,28 @@ bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinde
       w <- exp(inc - mx)
       beta <- nb
       betas <- c(betas, beta)
+      if (waste_free) {
+        wn <- w / sum(w)
+        C <- stats::cov.wt(U, wt = wn)$cov
+        Lc <- tryCatch(t(chol(C + diag(1e-10 * mean(diag(C)) + 1e-12, n))), error = function(e) diag(sqrt(pmax(diag(C), 1e-12)), n))
+        idx <- resample(wn, N %/% P)
+        Uc <- U[idx, , drop = FALSE]; lgc <- lg[idx]; lpc <- lpv[idx]
+        Us <- list(Uc); lgs <- list(lgc); lps <- list(lpc)
+        acc_sum <- 0
+        for (k in seq_len(P - 1L)) {
+          mv <- if (kernel == "metropolis") smc_rwm_move(Uc, lgc, lpc, beta, scale, Lc, log_g, lp, cores)
+                else smc_gradient_moves(Uc, lgc, lpc, beta, mu, L, Lc, scale, kernel, hmc_steps, 1L, lpg_full, cores)
+          Uc <- mv$U; lgc <- mv$lg; lpc <- mv$lpv; acc_sum <- acc_sum + mv$acc
+          Us[[k + 1L]] <- Uc; lgs[[k + 1L]] <- lgc; lps[[k + 1L]] <- lpc
+        }
+        U <- do.call(rbind, Us); lg <- unlist(lgs); lpv <- unlist(lps)
+        acc <- acc_sum / (P - 1L)
+        accs <- c(accs, acc)
+        target_acc <- switch(kernel, metropolis = 0.234, mala = 0.574, hmc = 0.65)
+        scale <- scale * exp(acc - target_acc)
+        if (beta >= 1) break
+        next
+      }
       idx <- resample(w / sum(w))
       U <- U[idx, , drop = FALSE]; lg <- lg[idx]; lpv <- lpv[idx]
       # random walk Metropolis moves targeting pi_beta
@@ -122,16 +157,11 @@ bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinde
         next
       }
       for (k in seq_len(num_mcmc_steps)) {
-        P <- U + scale * matrix(stats::rnorm(N * n), N, n) %*% t(Lc)
-        lgp <- log_g(P)
-        lpp <- eval_rows(lp, P, cores)
-        la <- beta * (lpp - lpv) + (1 - beta) * (lgp - lg)
-        la[!is.finite(la)] <- -Inf
-        ok <- log(stats::runif(N)) < la
-        U[ok, ] <- P[ok, ]; lg[ok] <- lgp[ok]; lpv[ok] <- lpp[ok]
-        acc_n <- acc_n + sum(ok)
+        mv <- smc_rwm_move(U, lg, lpv, beta, scale, Lc, log_g, lp, cores)
+        U <- mv$U; lg <- mv$lg; lpv <- mv$lpv
+        acc_n <- acc_n + mv$acc
       }
-      acc <- acc_n / (N * num_mcmc_steps)
+      acc <- acc_n / num_mcmc_steps
       accs <- c(accs, acc)
       scale <- scale * exp(acc - 0.234)
       if (beta >= 1) break
@@ -155,6 +185,19 @@ bayescomp_smc <- function(model, num_particles = 1000L, reference = c("pathfinde
   fit
 }
 
+# one random walk Metropolis step of every row of U targeting pi_beta
+smc_rwm_move <- function(U, lg, lpv, beta, scale, Lc, log_g, lp, cores) {
+  N <- nrow(U); n <- ncol(U)
+  P <- U + scale * matrix(stats::rnorm(N * n), N, n) %*% t(Lc)
+  lgp <- log_g(P)
+  lpp <- eval_rows(lp, P, cores)
+  la <- beta * (lpp - lpv) + (1 - beta) * (lgp - lg)
+  la[!is.finite(la)] <- -Inf
+  ok <- log(stats::runif(N)) < la
+  U[ok, ] <- P[ok, ]; lg[ok] <- lgp[ok]; lpv[ok] <- lpp[ok]
+  list(U = U, lg = lg, lpv = lpv, acc = mean(ok))
+}
+
 eval_rows <- function(f, U, cores = 1L) {
   if (cores > 1L && .Platform$OS.type != "windows") {
     ch <- split(seq_len(nrow(U)), cut(seq_len(nrow(U)), cores, labels = FALSE))
@@ -171,26 +214,23 @@ mc_checked <- function(res) {
   res
 }
 
-systematic_resample <- function(w) {
-  N <- length(w)
-  u <- (stats::runif(1) + 0:(N - 1L)) / N
-  pmin(findInterval(u, cumsum(w)) + 1L, N)
+systematic_resample <- function(w, M = length(w)) {
+  u <- (stats::runif(1) + 0:(M - 1L)) / M
+  pmin(findInterval(u, cumsum(w)) + 1L, length(w))
 }
 
-stratified_resample <- function(w) {
-  N <- length(w)
-  u <- (stats::runif(N) + 0:(N - 1L)) / N
-  pmin(findInterval(u, cumsum(w)) + 1L, N)
+stratified_resample <- function(w, M = length(w)) {
+  u <- (stats::runif(M) + 0:(M - 1L)) / M
+  pmin(findInterval(u, cumsum(w)) + 1L, length(w))
 }
-multinomial_resample <- function(w) sample.int(length(w), length(w), replace = TRUE, prob = w)
-residual_resample <- function(w) {
-  N <- length(w)
-  k <- floor(N * w)
-  idx <- rep(seq_len(N), k)
-  R <- N - sum(k)
+multinomial_resample <- function(w, M = length(w)) sample.int(length(w), M, replace = TRUE, prob = w)
+residual_resample <- function(w, M = length(w)) {
+  k <- floor(M * w)
+  idx <- rep(seq_along(w), k)
+  R <- M - sum(k)
   if (R > 0L) {
-    r <- N * w - k
-    idx <- c(idx, sample.int(N, R, replace = TRUE, prob = r))
+    r <- M * w - k
+    idx <- c(idx, sample.int(length(w), R, replace = TRUE, prob = r))
   }
   idx
 }

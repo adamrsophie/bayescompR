@@ -11,6 +11,8 @@ bayescomp_smc(
   reference_scale = 1.5,
   ess_threshold = 0.5,
   num_mcmc_steps = 10L,
+  waste_free = TRUE,
+  chain_length = 10L,
   kernel = c("metropolis", "mala", "hmc"),
   hmc_steps = 5L,
   resampling = c("systematic", "stratified", "residual", "multinomial"),
@@ -34,7 +36,15 @@ best Pathfinder approximation with its covariance inflated by
 \item{ess_threshold}{Target relative effective sample size used to pick
 each temperature.}
 
-\item{num_mcmc_steps}{MCMC steps per particle and temperature.}
+\item{num_mcmc_steps}{MCMC steps per particle and temperature when
+\code{waste_free = FALSE}.}
+
+\item{waste_free}{Resample \code{num_particles / chain_length} particles and
+keep every state of their chains of length \code{chain_length} (Dau and
+Chopin 2022) instead of moving every particle \code{num_mcmc_steps} times
+and keeping only the last state.}
+
+\item{chain_length}{Length of each waste-free chain, including its start.}
 
 \item{kernel}{Rejuvenation kernel: \code{"metropolis"} (random walk, no
 gradients), \code{"mala"} or \code{"hmc"} (\code{hmc_steps} leapfrog steps), all
@@ -72,5 +82,7 @@ fit$log_evidence  # exact: dnorm(1, 0, sqrt(2), log = TRUE)
 \references{
 Del Moral, P., Doucet, A. and Jasra, A. (2006). Sequential
 Monte Carlo samplers. \emph{Journal of the Royal Statistical Society B} 68,
-411 to 436.
+411 to 436. Dau, H.-D. and Chopin, N. (2022). Waste-free sequential
+Monte Carlo. \emph{Journal of the Royal Statistical Society B} 84, 114 to
+148.
 }

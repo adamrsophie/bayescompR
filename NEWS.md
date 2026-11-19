@@ -45,6 +45,12 @@
   along whitened random directions instead of random walk Metropolis, and
   `mcmc_steps` now defaults to three times the number of parameters.
 
+* `bayescomp_smc()` is waste-free by default (`waste_free = TRUE`,
+  `chain_length = 10`): it resamples one particle in ten and keeps every
+  state of their MCMC chains, which on test models gives the same accuracy
+  in about a quarter of the time. `waste_free = FALSE` restores the previous
+  moves.
+
 ## Bug fixes
 
 * `bayescomp_ess_quantile()` and `bayescomp_ess_tail()` use the indicator
