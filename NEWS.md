@@ -28,6 +28,10 @@
   scales the distance to the warmup mean (Ostmeyer 2024), which helps heavy
   tailed targets.
 
+* `bayescomp_laplace()` reports the Pareto k of the importance ratios of
+  its draws (`fit$pareto_k`) and warns above 0.7, where the approximation
+  is too far from the posterior to rely on.
+
 * `bayescomp_check_approximation()` starts short NUTS chains from a
   Pathfinder, variational or Laplace fit and flags variables whose mean or
   sd moves away from the approximation.

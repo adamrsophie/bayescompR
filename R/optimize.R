@@ -317,10 +317,19 @@ bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L
     gq <- chain_write_draws(model, qs, FALSE)
     dg <- matrix(0, draws, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
     dg[, "lp__"] <- 0
+    # Pareto k of the importance ratios posterior / approximation: above
+    # 0.7 the approximation is too far from the posterior to rely on, as is
+    # common for regressions with many coefficients (van Leeuwen and van Erp
+    # 2025)
+    lr <- log_p - log_g
+    k <- if (isTRUE(calculate_lp) && draws >= 100L && all(is.finite(lr))) psis_smooth(lr)$k else NA_real_
     list(q = qs, gq = cbind(log_p__ = log_p, log_g__ = log_g, gq), diag = dg, step_size = NA_real_,
-         inv_metric = S, n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0))
+         inv_metric = S, n_warmup_saved = 0L, time = c(warmup = 0, sampling = 0), pareto_k = k)
   })
   fit <- make_fit_extra(model, res, list(jacobian = jacobian), "laplace", seed, proc.time()[["elapsed"]] - t0)
+  fit$pareto_k <- res[[1L]]$pareto_k
+  if (isTRUE(fit$pareto_k > 0.7))
+    warning(sprintf("the Laplace approximation is poor here (Pareto k = %.2f of the importance ratios); check it with bayescomp_check_approximation() or sample with bayescomp_sample()", fit$pareto_k), call. = FALSE)
   fit
 }
 
