@@ -25,9 +25,13 @@ check <- function(nm) {
   r <- ref[ref$model == nm, ]
   df <- file.path(dir, paste0(nm, "data.txt"))
   inf <- list.files(dir, paste0("^", nm, "inits[0-9]*[.]txt$"), full.names = TRUE)
+  # The results of some pages come from the model printed there, not the
+  # variant in the model file; validation/bugs/models holds those models.
+  mf <- file.path("validation/bugs/models", paste0(nm, "model.txt"))
+  if (!file.exists(mf)) mf <- file.path(dir, paste0(nm, "model.txt"))
   t0 <- Sys.time()
   fit <- tryCatch(bugs(if (file.exists(df)) df, if (length(inf)) inf, unique(r$node), n.iter = 1000L + n_keep,
-                       model.file = file.path(dir, paste0(nm, "model.txt")), n.chains = 2, n.burnin = 1000L,
+                       model.file = mf, n.chains = 2, n.burnin = 1000L,
                        DIC = FALSE, bugs.seed = 1),
                   error = function(e) e)
   secs <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
