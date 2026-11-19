@@ -32,6 +32,11 @@
   its draws (`fit$pareto_k`) and warns above 0.7, where the approximation
   is too far from the posterior to rely on.
 
+* `bayescomp_laplace()` gains `num_modes`: the optimizer starts from that
+  many random points, and the distinct modes form a mixture of Gaussians
+  weighted by `exp(lp) |Sigma|^(1/2)`, so a multimodal posterior gets one
+  approximation that covers its modes.
+
 * `bayescomp_check_approximation()` starts short NUTS chains from a
   Pathfinder, variational or Laplace fit and flags variables whose mean or
   sd moves away from the approximation.

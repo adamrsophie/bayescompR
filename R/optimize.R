@@ -269,6 +269,11 @@ newton_opt <- function(lpg, u, iter, save_iterations = FALSE) {
 #' @param seed Random seed.
 #' @param calculate_lp Evaluate the log density of the draws (`log_p__`);
 #'   with `FALSE` it is `NaN`, as in CmdStan.
+#' @param num_modes Number of optimizer starts from random initial values
+#'   when `mode` is not given. With more than one, the distinct modes found
+#'   form a mixture of Gaussians weighted by `exp(lp) |Sigma|^(1/2)` at each
+#'   mode, so a multimodal posterior is covered by one approximation;
+#'   `log_g__` is then the log density of the mixture.
 #' @param refresh Report the stages, the optimizer's iterations and every
 #'   `refresh` draws (0, the default, is quiet).
 #' @return A `bayescomp_fit` with extra columns `log_p__` and `log_g__`.
@@ -278,11 +283,12 @@ newton_opt <- function(lpg, u, iter, save_iterations = FALSE) {
 #' sd(bayescomp_extract(fit, "mu"))
 #' @export
 bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L, seed = NULL, calculate_lp = TRUE,
-                              refresh = 0L) {
+                              num_modes = 1L, refresh = 0L) {
   check_model(model)
   refresh <- as.integer(refresh)
   say <- function(...) if (refresh > 0L) message(sprintf(...))
   draws <- as_count(draws, "draws", 1L)
+  num_modes <- as_count(num_modes, "num_modes", 1L)
   if (is.character(mode))
     mode <- if (grepl("\\.csv$", mode, ignore.case = TRUE)) bayescomp_read_csv(mode, model = model) else bayescomp_read_data(mode)
   t0 <- proc.time()[["elapsed"]]
@@ -299,16 +305,48 @@ bayescomp_laplace <- function(model, mode = NULL, jacobian = TRUE, draws = 1000L
     } else {
       bayescomp_unconstrain(model, mode)
     }
+    gauss <- function(u) {
+      H <- num_hessian(lpg, u)
+      S <- tryCatch(solve(-H), error = function(e) stop("the Hessian at the mode is singular", call. = FALSE))
+      S <- 0.5 * (S + t(S))
+      L <- tryCatch(t(chol(S)), error = function(e) stop("the negative Hessian at the mode is not positive definite", call. = FALSE))
+      list(u = u, S = S, L = L)
+    }
     say("Calculating the Hessian")
-    H <- num_hessian(lpg, u)
-    S <- tryCatch(solve(-H), error = function(e) stop("the Hessian at the mode is singular", call. = FALSE))
-    S <- 0.5 * (S + t(S))
-    L <- tryCatch(t(chol(S)), error = function(e) stop("the negative Hessian at the mode is not positive definite", call. = FALSE))
     n <- length(u)
-    z <- matrix(stats::rnorm(draws * n), draws, n)
-    qs <- sweep(z %*% t(L), 2L, u, "+")
-    # CmdStan's log_q__: the unnormalized Gaussian density, 0 at the mode
-    log_g <- -0.5 * rowSums(z^2)
+    if (is.null(mode) && num_modes > 1L) {
+      # more starts; modes closer than a hundredth of a posterior sd to one
+      # already found are the same mode
+      G <- list(gauss(u))
+      for (k in seq_len(num_modes - 1L)) {
+        op <- optimize_u(lpg, find_init(model, 2, 1L), "lbfgs", list(refresh = 0L))
+        if (op$code != 0L) next
+        same <- any(vapply(G, function(g) max(abs(op$u - g$u) / sqrt(diag(g$S))) < 0.01, TRUE))
+        if (!same) { gk <- tryCatch(gauss(op$u), error = function(e) NULL); if (!is.null(gk)) G[[length(G) + 1L]] <- gk }
+      }
+      lv <- attr(lpg, "value")
+      # mass of each mode: exp(lp) |Sigma|^(1/2)
+      lw <- vapply(G, function(g) lv(g$u) + sum(log(diag(g$L))), 0)
+      w <- exp(lw - max(lw)); w <- w / sum(w)
+      comp <- sample.int(length(G), draws, replace = TRUE, prob = w)
+      z <- matrix(stats::rnorm(draws * n), draws, n)
+      qs <- t(vapply(seq_len(draws), function(i) G[[comp[i]]]$u + as.vector(G[[comp[i]]]$L %*% z[i, ]), numeric(n)))
+      if (n == 1L) qs <- matrix(qs, ncol = 1L)
+      ldens <- vapply(G, function(g) {
+        r <- forwardsolve(g$L, t(sweep(qs, 2L, g$u)))
+        -0.5 * colSums(matrix(r, n)^2) - sum(log(diag(g$L)))
+      }, numeric(draws))
+      if (draws == 1L) ldens <- matrix(ldens, 1L)
+      log_g <- apply(sweep(ldens, 2L, log(w), "+"), 1L, function(x) max(x) + log(sum(exp(x - max(x)))))
+      S <- G[[which.max(w)]]$S
+      say("Found %d distinct modes", length(G))
+    } else {
+      g <- gauss(u); S <- g$S; L <- g$L
+      z <- matrix(stats::rnorm(draws * n), draws, n)
+      qs <- sweep(z %*% t(L), 2L, u, "+")
+      # CmdStan's log_q__: the unnormalized Gaussian density, 0 at the mode
+      log_g <- -0.5 * rowSums(z^2)
+    }
     say("Generating draws")
     log_p <- if (isTRUE(calculate_lp)) vapply(seq_len(draws), function(i) {
       if (refresh > 0L && i %% refresh == 0L) say("iteration: %d / %d", i, draws)

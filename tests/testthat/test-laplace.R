@@ -79,3 +79,14 @@ test_that("short MCMC runs flag a poor approximation and pass an exact one", {
   r2 <- bayescomp_check_approximation(fit2, chains = 4, iter = 150, seed = 1)
   expect_false(any(r2$flag))
 })
+
+test_that("Laplace with several starts forms a mixture over the modes", {
+  m <- bayescomp_model("parameters { vector[2] x; } model { target += log_mix(0.3,
+    multi_normal_lpdf(x | [-3, 0]', [[1, 0.8], [0.8, 1]]), multi_normal_lpdf(x | [3, 1]', [[1, -0.5], [-0.5, 2]])); }")
+  f <- bayescomp_laplace(m, seed = 2, draws = 2000, num_modes = 8)
+  x <- bayescomp_extract(f, "x")
+  expect_equal(mean(x[, 1] < 0), 0.3, tolerance = 0.1)
+  d <- f$draws[, 1, ]
+  # the mixture is exact here: posterior over approximation is constant
+  expect_lt(stats::sd(d[, "log_p__"] - d[, "log_g__"]), 1e-3)
+})
