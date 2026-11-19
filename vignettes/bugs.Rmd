@@ -134,5 +134,13 @@ Not supported:
 * stochastic nodes inside `data` blocks; and
 * `pD = TRUE` in `jags()` (the DIC of `dic.samples()`).
 
-`validation/bugs/run-examples.R` in the source repository runs the OpenBUGS
-Examples volumes 1 to 3.
+## Validation
+
+`validation/bugs/validate-examples.R` in the source repository runs 45 of
+the OpenBUGS Examples (volumes 1 to 3) and compares the posterior means of
+271 nodes with the estimates OpenBUGS 3.2.3 reports for them. A mean passes
+when it is within 4 combined Monte Carlo standard errors of OpenBUGS's
+estimate or within a tenth of its posterior standard deviation. All 45
+models pass. Fire, Stagnantc and t-df have no reported estimates, and Ice,
+Inhalers, Jama, StVeit and Sixcomp use features listed above as not
+supported.
