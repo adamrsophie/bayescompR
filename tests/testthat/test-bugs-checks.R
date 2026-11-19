@@ -197,3 +197,10 @@ test_that("a mixture reaches Dirichlet nodes that fill part of a row", {
   s <- run_jags(code, d, "error")
   expect_equal(mean(s$error[, 2, 2]), 17 / 22, tolerance = 0.02)
 })
+
+test_that("metropolized Gibbs keeps finite discrete conditionals and moves more often", {
+  z <- run_jags("model { z ~ dcat(p[]) }", list(p = c(0.2, 0.5, 0.3)), "z", n.iter = 21000, n.thin = 1)$z
+  expect_equal(as.numeric(prop.table(table(factor(z, 1:3)))), c(0.2, 0.5, 0.3), tolerance = 0.03)
+  # plain Gibbs moves with probability 1 - sum(p^2) = 0.62
+  expect_gt(mean(z[-1] != z[-length(z)]), 0.75)
+})

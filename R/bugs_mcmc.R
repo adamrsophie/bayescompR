@@ -341,10 +341,13 @@ bugs_slice_coord <- function(M, b, cells, sel, w, discrete = FALSE) {
   abs(z1 - z0)
 }
 
-# slice widths adapt to twice the mean jump during adaptation
+# Slice widths adapt during adaptation. For a uniform draw on a slice of
+# length l the mean jump is l / 3, and stepping out costs least at a width of
+# about 1.36 l (Campbell 2026; Yallup et al. 2026), so the width tracks
+# 3.6 times the mean jump.
 bugs_adapt_w <- function(w, jump, adapting) {
   if (!adapting) return(w)
-  pmax(0.95 * w + 0.05 * 2 * pmax(jump, 1e-10), 1e-8)
+  pmax(0.95 * w + 0.05 * 3.6 * pmax(jump, 1e-10), 1e-8)
 }
 
 # ---- other samplers ---------------------------------------------------------------------
@@ -384,8 +387,24 @@ bugs_enumerate <- function(M, b, cells) {
   if (any(!is.finite(mx))) stop_sampler(sprintf("every value of %s has zero probability", bugs_node_label(M, b$ids[which(!is.finite(mx))[1L]])))
   p <- exp(lp - mx)
   cp <- p / rowSums(p)
-  pick <- 1L + rowSums(stats::runif(b$n) > t(apply(cp, 1L, cumsum)))
-  bugs_set(M, b$var, cells, vals[pmin(pick, length(vals))])
+  # Metropolized Gibbs (Liu 1996): propose a value other than the current one
+  # with probability proportional to its conditional probability and accept
+  # with min(1, (1 - p_current) / (1 - p_proposed)). It leaves the conditional
+  # invariant and never wastes an update on staying put when another value is
+  # likely, so it is never worse than plain Gibbs (Neal 2024).
+  k0 <- match(x0, vals)
+  q <- cp
+  cur <- !is.na(k0)
+  q[cbind(which(cur), k0[cur])] <- 0
+  rs <- rowSums(q)
+  pick <- 1L + rowSums(stats::runif(b$n) > t(apply(q / pmax(rs, 1e-300), 1L, cumsum)))
+  pick <- pmin(pick, length(vals))
+  pc <- ifelse(cur, cp[cbind(seq_len(b$n), ifelse(cur, k0, 1L))], 0)
+  pp <- cp[cbind(seq_len(b$n), pick)]
+  acc <- rs > 1e-12 & stats::runif(b$n) < pmin(1, (1 - pc) / pmax(1 - pp, 1e-300))
+  # a current value outside the support is always replaced
+  new <- ifelse(acc | !cur, vals[pick], x0)
+  bugs_set(M, b$var, cells, new)
   bugs_write_desc(M, b)
 }
 
