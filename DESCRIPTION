@@ -53,6 +53,7 @@ Suggests:
     knitr,
     loo,
     posterior,
+    ranger,
     rmarkdown,
     rstantools,
     testthat (>= 3.0.0)

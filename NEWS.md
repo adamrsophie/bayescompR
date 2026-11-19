@@ -16,6 +16,9 @@
   minimum ESS stopping rule; `bayescomp_rhat_nested()` computes nested
   R-hat for many short chains grouped in superchains.
 
+* `bayescomp_rstar()` computes R* (Lambert and Vehtari 2022) with a random
+  forest from the ranger package, now in Suggests.
+
 * `bayescomp_rhat_local()` computes the local R-hat of Moins et al. (2023),
   which catches chains that differ in shape or tails, and `bayescomp_ksd()`
   the kernel Stein discrepancy of a fit's draws with the inverse
@@ -67,6 +70,20 @@
   partly observed are updated by elliptical slice sampling, which moves the
   whole vector at once without rejections or tuning, in place of
   coordinatewise slice sampling.
+
+* Scalar BUGS nodes with normal, t, logistic or double exponential priors
+  that share stochastic children, such as regression coefficients, also get
+  a joint update after their own: an exact multivariate normal draw when the
+  children are normal with means linear in them, otherwise an adaptive
+  random walk Metropolis move. On a regression with two strongly correlated
+  predictors the effective sample size of the coefficients rose from 52 to
+  2040 (normal) and from 64 to 584 (logistic) in 6000 draws. Conjugate
+  normal updates also read their children's arguments as vectors, which
+  made them several times faster.
+
+* Hidden Markov chains of categorical BUGS nodes, `z[t] ~ dcat(P[z[t-1], ])`,
+  are updated as a whole by forward filtering backward sampling instead of
+  one node at a time.
 
 * `bayescomp_nested()` draws new live points by hit-and-run slice sampling
   along whitened random directions instead of random walk Metropolis, and

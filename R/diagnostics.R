@@ -393,3 +393,72 @@ bayescomp_ksd <- function(fit, max_draws = 1000L) {
     2 * beta * (d * S^(beta - 1) + 2 * (beta - 1) * S^(beta - 2) * R2)
   sqrt(max(mean(K0), 0))
 }
+
+# halves a and b of each chain as separate chains
+abind_chains <- function(a, b) {
+  out <- array(0, c(dim(a)[1L], 2L * dim(a)[2L], dim(a)[3L]))
+  out[, 2L * seq_len(dim(a)[2L]) - 1L, ] <- a
+  out[, 2L * seq_len(dim(a)[2L]), ] <- b
+  out
+}
+
+#' R* convergence diagnostic
+#'
+#' R* of Lambert and Vehtari (2022): a random forest is trained to tell from
+#' the values of all variables which (split) chain a draw came from. R* is
+#' the classification accuracy on held out draws times the number of
+#' chains: about 1 when the chains are indistinguishable, larger when they
+#' are not. Unlike R-hat it uses the joint distribution of the variables.
+#' Needs the ranger package.
+#'
+#' @param x A `bayescomp_fit`, or an array of draws (iterations, chains,
+#'   variables).
+#' @param variables Variables to use (default: all except the sampler
+#'   columns).
+#' @param split Split each chain in half first.
+#' @param training_prop Share of the draws used to train the classifier.
+#' @param uncertainty Return draws of R* from the predicted chain
+#'   probabilities of the held out draws instead of one value.
+#' @param nsim Number of such draws.
+#' @param ... Arguments passed to [ranger::ranger()].
+#' @return A number, or a vector of `nsim` draws.
+#' @references Lambert, B. and Vehtari, A. (2022). R*: A robust MCMC
+#'   convergence diagnostic with uncertainty using decision tree classifiers.
+#'   *Bayesian Analysis* 17(2), 353 to 379.
+#' @examples
+#' \donttest{
+#' if (requireNamespace("ranger", quietly = TRUE)) {
+#'   set.seed(1)
+#'   x <- array(rnorm(4000), c(500, 4, 2))
+#'   bayescomp_rstar(x)
+#' }
+#' }
+#' @export
+bayescomp_rstar <- function(x, variables = NULL, split = TRUE, training_prop = 0.7, uncertainty = FALSE, nsim = 1000L, ...) {
+  if (!requireNamespace("ranger", quietly = TRUE)) stop("bayescomp_rstar() needs the 'ranger' package", call. = FALSE)
+  if (inherits(x, "bayescomp_fit")) {
+    x <- bayescomp_draws(x, variables, format = "array")
+    if (is.null(variables)) x <- x[, , !grepl("__$", dimnames(x)[[3L]]), drop = FALSE]
+  }
+  x <- as.array(x)
+  if (length(dim(x)) == 2L) x <- array(x, c(dim(x)[1L], 1L, dim(x)[2L]))
+  if (split) {
+    h <- dim(x)[1L] %/% 2L
+    x <- abind_chains(x[seq_len(h), , , drop = FALSE], x[dim(x)[1L] - h + seq_len(h), , , drop = FALSE])
+  }
+  n <- dim(x)[1L]; m <- dim(x)[2L]; p <- dim(x)[3L]
+  if (m < 2L) stop("R* needs at least two chains", call. = FALSE)
+  X <- matrix(x, n * m, p)
+  X <- X[, apply(X, 2L, function(v) !na_diag(v)), drop = FALSE]
+  if (ncol(X) == 0L) stop("no varying variable", call. = FALSE)
+  d <- data.frame(X, chain = factor(rep(seq_len(m), each = n)))
+  train <- sample.int(nrow(d), floor(training_prop * nrow(d)))
+  fit <- ranger::ranger(chain ~ ., data = d[train, ], probability = uncertainty, ...)
+  pred <- stats::predict(fit, data = d[-train, ])$predictions
+  truth <- as.integer(d$chain[-train])
+  if (!uncertainty) return(m * mean(as.integer(pred) == truth))
+  vapply(seq_len(nsim), function(s) {
+    lab <- apply(pred, 1L, function(pr) sample.int(m, 1L, prob = pr))
+    m * mean(lab == truth)
+  }, 0)
+}

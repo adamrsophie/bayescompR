@@ -36,3 +36,13 @@ test_that("kernel Stein discrepancy grows when the draws are biased", {
   f$unconstrained[[1L]] <- f$unconstrained[[1L]] + 0.5
   expect_gt(bayescomp_ksd(f), 3 * a)
 })
+
+test_that("R* is near 1 for mixed chains and larger when one chain differs", {
+  skip_if_not_installed("ranger")
+  set.seed(1)
+  x <- array(rnorm(8000), c(1000, 4, 2))
+  expect_lt(bayescomp_rstar(x), 1.15)
+  x[, 4, 1] <- 2 * x[, 4, 1]
+  expect_gt(bayescomp_rstar(x), 1.15)
+  expect_length(bayescomp_rstar(x, uncertainty = TRUE, nsim = 50), 50)
+})

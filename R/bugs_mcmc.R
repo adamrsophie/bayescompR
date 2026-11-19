@@ -356,6 +356,11 @@ bugs_adapt_w <- function(w, jump, adapting) {
 # ---- other samplers ---------------------------------------------------------------------
 
 # the parameters of each row, as a list of lists
+# argument k of each row, as a numeric vector
+bugs_arg_vec <- function(fn, rows, k) {
+  a <- fn$args(rows)
+  if (fn$mode == "vec") rep_len(as.numeric(a[[k]]), length(rows)) else vapply(a, `[[`, 0, k)
+}
 bugs_args_list <- function(fn, rows) {
   a <- fn$args(rows)
   if (fn$mode == "vec") lapply(seq_along(rows), function(j) lapply(a, function(x) x[(j - 1L) %% length(x) + 1L])) else a
@@ -531,17 +536,16 @@ bugs_conjugate <- function(M, b) {
     mu <- vapply(a, `[[`, 0, 1L); tau <- vapply(a, `[[`, 0, 2L)
     means_at <- function(v) {
       bugs_set(M, b$var, cells, rep_len(v, b$n)); bugs_write_desc(M, b)
-      lapply(b$cgroups, function(g) vapply(bugs_args_list(M$stmts[[g$stmt]]$fn, g$rows), `[[`, 0, 1L))
+      lapply(b$cgroups, function(g) bugs_arg_vec(M$stmts[[g$stmt]]$fn, g$rows, 1L))
     }
     m0 <- means_at(0); m1 <- means_at(1)
     prec <- tau; num <- tau * mu
     for (k in seq_along(b$cgroups)) {
       g <- b$cgroups[[k]]
-      cd <- bugs_child_data(M, g)
-      ct <- vapply(cd$args, `[[`, 0, 2L)
+      ct <- bugs_arg_vec(M$stmts[[g$stmt]]$fn, g$rows, 2L)
       cc <- m1[[k]] - m0[[k]]
       prec <- prec + bugs_by_owner(b, g, ct * cc^2)
-      num <- num + bugs_by_owner(b, g, ct * cc * (unlist(cd$x) - m0[[k]]))
+      num <- num + bugs_by_owner(b, g, ct * cc * (unlist(M$stmts[[g$stmt]]$fn$value(g$rows)) - m0[[k]]))
     }
     v <- stats::rnorm(b$n, num / prec, 1 / sqrt(prec))
     if (any(!is.finite(v))) stop_sampler(sprintf("the conjugate normal update of %s failed", b$var))
@@ -669,6 +673,9 @@ bugs_update <- function(M, b) {
     enumerate = bugs_enumerate(M, b, b$cells[, 1L]),
     mv_slice = { b$w <- bugs_mv_slice(M, b) },
     ess = bugs_ess(M, b),
+    rw_block = { b <- bugs_rw_block(M, b) },
+    joint_normal = { b <- bugs_joint_normal(M, b) },
+    ffbs = { b <- bugs_ffbs(M, b) },
     dirichlet = bugs_dirichlet(M, b),
     multinomial = bugs_multinomial(M, b),
     bugs_conjugate(M, b))
@@ -704,7 +711,216 @@ bugs_blocks <- function(M) {
   # the order of the graph
   key <- if (M$dialect == "openbugs") vapply(blocks, function(b) b$stmt * 1e9 + min(M$rank[b$ids]), 0)
          else vapply(blocks, function(b) min(M$rank[b$ids]), 1L)
-  blocks[order(key)]
+  bugs_ffbs_blocks(M, bugs_joint_blocks(M, blocks[order(key)]))
+}
+
+# ---- hidden Markov chains -----------------------------------------------------------------
+
+# A chain z[1], ..., z[T] of categorical nodes in which each one's only
+# categorical stochastic parent is the one before (z[t] ~ dcat(P[z[t-1], ]))
+# is updated as a whole by forward filtering backward sampling, which
+# single site updates of such chains mix very poorly against. The
+# transition and emission log densities are evaluated for all t at once:
+# setting the odd nodes to i and the even ones to j gives the transitions
+# i to j into every even node and j to i into every odd one.
+bugs_stoch_parents <- function(M, i) {
+  out <- integer(); q <- M$parents[[i]]; seen <- integer()
+  while (length(q)) {
+    j <- q[1L]; q <- q[-1L]
+    if (j %in% seen) next
+    seen <- c(seen, j)
+    if (M$nodes$kind[j] == "logical") q <- c(q, M$parents[[j]]) else out <- c(out, j)
+  }
+  unique(out)
+}
+bugs_ffbs_blocks <- function(M, blocks) {
+  en <- which(vapply(blocks, function(b) identical(b$sampler, "enumerate") && identical(b$dist$name, "dcat") && is.null(b$s$bound), TRUE))
+  if (!length(en)) return(blocks)
+  D <- unlist(lapply(blocks[en], `[[`, "ids"))
+  if (length(D) < 3L) return(blocks)
+  par <- lapply(D, function(i) intersect(bugs_stoch_parents(M, i), D))
+  if (any(lengths(par) > 1L)) par[lengths(par) > 1L] <- list(NA_integer_)
+  nxt <- rep(NA_integer_, length(D))
+  for (k in seq_along(D)) if (length(par[[k]]) == 1L && !is.na(par[[k]])) {
+    p <- match(par[[k]], D)
+    nxt[p] <- if (is.na(nxt[p])) D[k] else -1L  # a node with two chain children is not a chain
+  }
+  heads <- D[lengths(par) == 0L]
+  # categories: the length of the probability vector
+  ncat <- function(i) length(bugs_args_list(M$stmts[[M$nodes$stmt[i]]]$fn, M$nodes$row[i])[[1L]][[1L]])
+  chains <- list()
+  for (h in heads) {
+    path <- h
+    repeat { n <- nxt[match(path[length(path)], D)]; if (is.na(n) || n < 0L) break; path <- c(path, n) }
+    if (length(path) < 3L || any(nxt[match(path, D)] < 0L, na.rm = TRUE)) next
+    K <- vapply(path, ncat, 1L)
+    if (length(unique(K)) != 1L) next
+    desc <- lapply(path, function(i) bugs_desc(M, i))
+    em <- lapply(seq_along(path), function(t) setdiff(desc[[t]]$stoch, path))
+    # an emission may depend on one node of the chain only
+    if (any(vapply(unlist(em), function(c) sum(bugs_stoch_parents(M, c) %in% path) > 1L, TRUE))) next
+    L <- unique(unlist(lapply(desc, `[[`, "logical"))); L <- L[M$feeds[L]]
+    C <- unlist(em)
+    chains[[length(chains) + 1L]] <- list(
+      sampler = "ffbs", var = paste(unique(M$nodes$var[path]), collapse = ", "), n = length(path), K = K[1L], ids = path,
+      adapting = TRUE, vars = M$nodes$var[path], cells = vapply(path, function(i) M$cells[[i]][1L], 1L),
+      tgroups = lapply(split(seq_along(path), M$nodes$stmt[path]), function(k) list(stmt = M$nodes$stmt[path[k[1L]]], rows = M$nodes$row[path[k]], t = k)),
+      lgroups = bugs_logical_groups(M, L), cgroups = bugs_child_groups(M, C, rep(seq_along(path), lengths(em)), length(path)))
+  }
+  if (!length(chains)) return(blocks)
+  covered <- unlist(lapply(chains, `[[`, "ids"))
+  drop <- en[vapply(blocks[en], function(b) all(b$ids %in% covered), TRUE)]
+  at <- min(c(drop, en))
+  keep <- setdiff(seq_along(blocks), drop)
+  c(blocks[keep[keep < at]], chains, blocks[keep[keep >= at]])
+}
+bugs_ffbs_set <- function(M, b, v) {
+  for (nm in unique(b$vars)) { k <- b$vars == nm; bugs_set(M, nm, b$cells[k], v[k]) }
+  for (g in b$lgroups) M$stmts[[g$stmt]]$fn$write(g$rows)
+}
+bugs_ffbs <- function(M, b) {
+  T <- b$n; K <- b$K
+  odd <- seq_len(T) %% 2L == 1L
+  lA <- array(-Inf, c(T, K, K))  # lA[t, i, j]: log p(z[t] = j | z[t-1] = i)
+  l1 <- numeric(K); em <- matrix(0, T, K)
+  for (i in seq_len(K)) for (j in seq_len(K)) {
+    bugs_ffbs_set(M, b, ifelse(odd, i, j))
+    l <- numeric(T)
+    for (g in b$tgroups) l[g$t] <- M$stmts[[g$stmt]]$fn$lp(g$rows)
+    l[is.nan(l)] <- -Inf
+    ev <- !odd; ev[1L] <- FALSE
+    lA[cbind(which(ev), i, j)] <- l[ev]
+    ov <- odd; ov[1L] <- FALSE
+    lA[cbind(which(ov), j, i)] <- l[ov]
+    if (j == 1L) l1[i] <- l[1L]
+    if (i == j) for (g in b$cgroups) {
+      e <- M$stmts[[g$stmt]]$fn$lp(g$rows); e[is.nan(e)] <- -Inf
+      em[g$uowner, i] <- em[g$uowner, i] + as.vector(rowsum(e, g$owner, reorder = TRUE))
+    }
+  }
+  la <- matrix(-Inf, T, K)
+  la[1L, ] <- l1 + em[1L, ]
+  lse <- function(x) { m <- max(x); if (!is.finite(m)) m else m + log(sum(exp(x - m))) }
+  for (t in 2:T) for (j in seq_len(K)) la[t, j] <- em[t, j] + lse(la[t - 1L, ] + lA[t, , j])
+  if (!is.finite(lse(la[T, ]))) stop_sampler(sprintf("every path of %s has zero probability", b$var))
+  draw <- function(lw) { w <- exp(lw - max(lw)); sample.int(K, 1L, prob = w) }
+  z <- integer(T)
+  z[T] <- draw(la[T, ])
+  for (t in (T - 1L):1L) z[t] <- draw(la[t, ] + lA[t + 1L, , z[t + 1L]])
+  bugs_ffbs_set(M, b, z)
+  b
+}
+
+# ---- joint updates of regression coefficients ---------------------------------------------
+
+# Scalar real nodes that share stochastic children, such as the
+# coefficients of a regression, mix slowly one at a time when they are
+# correlated a posteriori. Each such group gets a joint update after its
+# members' own updates: an exact multivariate normal draw when every child
+# is normal with a mean linear in the group and a precision that does not
+# depend on it (conj_dnorm for one node), otherwise an adaptive random walk
+# Metropolis move (Haario, Saksman and Tamminen 2001).
+bugs_joint_max <- 50L
+bugs_joint_blocks <- function(M, blocks) {
+  cand <- which(vapply(blocks, function(b) b$n == 1L && b$K == 1L && !any(b$fixed) && b$sampler %in% c("slice", "conj_dnorm") &&
+                         b$dist$name %in% c("dnorm", "dt", "dlogis", "ddexp") && is.null(b$s$bound) && length(b$children) > 0L, TRUE))
+  if (length(cand) < 2L) return(blocks)
+  comp <- seq_along(cand)
+  for (i in seq_along(cand)[-1L]) for (j in seq_len(i - 1L)) {
+    if (comp[i] != comp[j] && length(intersect(blocks[[cand[i]]]$children, blocks[[cand[j]]]$children)))
+      comp[comp == comp[i]] <- comp[j]
+  }
+  add <- list(); after <- integer()
+  for (k in unique(comp)) {
+    idx <- cand[comp == k]
+    if (length(idx) < 2L || length(idx) > bugs_joint_max) next
+    mb <- blocks[idx]
+    ids <- vapply(mb, function(b) b$ids, 1L)
+    L <- unique(unlist(lapply(mb, `[[`, "lids")))
+    C <- setdiff(unique(unlist(lapply(mb, `[[`, "children"))), ids)
+    cg <- bugs_child_groups(M, C, rep(1L, length(C)), 1L)
+    normal <- all(vapply(mb, `[[`, "", "sampler") == "conj_dnorm") &&
+      all(vapply(cg, function(g) identical(M$stmts[[g$stmt]]$dist, "dnorm") && is.null(M$stmts[[g$stmt]]$bound), TRUE))
+    add[[length(add) + 1L]] <- list(
+      sampler = if (normal) "joint_normal" else "rw_block", var = paste(unique(vapply(mb, `[[`, "", "var")), collapse = ", "),
+      n = length(idx), K = 1L, ids = ids, adapting = TRUE,
+      members = lapply(mb, function(b) list(var = b$var, cell = b$cells[1L, 1L], stmt = b$stmt, rows = b$rows)),
+      lgroups = bugs_logical_groups(M, L), cgroups = cg)
+    after <- c(after, max(idx))
+  }
+  if (!length(add)) return(blocks)
+  out <- list()
+  for (j in seq_along(blocks)) out <- c(out, list(blocks[[j]]), add[after == j])
+  out
+}
+bugs_joint_get <- function(M, b) vapply(b$members, function(m) get(m$var, envir = M$S)[m$cell], 0)
+bugs_joint_set <- function(M, b, v) {
+  for (k in seq_along(b$members)) bugs_set(M, b$members[[k]]$var, b$members[[k]]$cell, v[k])
+  for (g in b$lgroups) M$stmts[[g$stmt]]$fn$write(g$rows)
+}
+bugs_joint_lp <- function(M, b, v) {
+  bugs_joint_set(M, b, v)
+  lp <- sum(vapply(b$members, function(m) sum(M$stmts[[m$stmt]]$fn$lp(m$rows)), 0))
+  for (g in b$cgroups) lp <- lp + sum(M$stmts[[g$stmt]]$fn$lp(g$rows))
+  if (is.nan(lp)) -Inf else lp
+}
+bugs_rw_block <- function(M, b) {
+  d <- b$n
+  x0 <- bugs_joint_get(M, b)
+  if (is.null(b$cov)) { b$cov <- diag(0.01, d); b$ls <- log(2.38^2 / d); b$t <- 0L; b$mean <- x0; b$S <- matrix(0, d, d) }
+  lp0 <- bugs_joint_lp(M, b, x0)
+  R <- tryCatch(chol(b$cov), error = function(e) diag(sqrt(pmax(diag(b$cov), 1e-12)), d))
+  x1 <- x0 + exp(b$ls / 2) * as.vector(crossprod(R, stats::rnorm(d)))
+  lp1 <- bugs_joint_lp(M, b, x1)
+  a <- if (is.finite(lp1)) min(1, exp(lp1 - lp0)) else 0
+  if (stats::runif(1) < a) x0 <- x1 else bugs_joint_set(M, b, x0)
+  if (b$adapting) {
+    # running covariance of the chain (Welford), which the members' own
+    # updates already move, and a scale tuned toward acceptance 0.234
+    b$t <- b$t + 1L
+    dx <- x0 - b$mean; b$mean <- b$mean + dx / b$t; b$S <- b$S + tcrossprod(dx, x0 - b$mean)
+    b$ls <- b$ls + (a - 0.234) / sqrt(b$t)
+    if (b$t > 2L * d + 10L) b$cov <- b$S / (b$t - 1L) + diag(1e-10, d)
+  }
+  b
+}
+bugs_joint_normal <- function(M, b) {
+  d <- b$n
+  x0 <- bugs_joint_get(M, b)
+  at <- function(v) {
+    bugs_joint_set(M, b, v)
+    pa <- lapply(b$members, function(m) bugs_args_list(M$stmts[[m$stmt]]$fn, m$rows)[[1L]])
+    list(cm = unlist(lapply(b$cgroups, function(g) bugs_arg_vec(M$stmts[[g$stmt]]$fn, g$rows, 1L))),
+         ct = unlist(lapply(b$cgroups, function(g) bugs_arg_vec(M$stmts[[g$stmt]]$fn, g$rows, 2L))),
+         pm = vapply(pa, `[[`, 0, 1L), pt = vapply(pa, `[[`, 0, 2L))
+  }
+  a0 <- at(numeric(d))
+  X <- matrix(0, length(a0$cm), d)
+  same <- TRUE
+  for (j in seq_len(d)) {
+    e <- numeric(d); e[j] <- 1
+    aj <- at(e)
+    X[, j] <- aj$cm - a0$cm
+    same <- same && isTRUE(all.equal(aj$ct, a0$ct)) && isTRUE(all.equal(aj$pm, a0$pm)) && isTRUE(all.equal(aj$pt, a0$pt))
+  }
+  if (is.null(b$linear)) {
+    # each member is linear on its own; check once that the group is too
+    v <- stats::rnorm(d)
+    b$linear <- same && isTRUE(all.equal(at(v)$cm, a0$cm + as.vector(X %*% v), tolerance = 1e-8))
+  }
+  if (!isTRUE(b$linear) || !same) {
+    b$sampler <- "rw_block"
+    bugs_joint_set(M, b, x0)
+    return(bugs_rw_block(M, b))
+  }
+  y <- unlist(lapply(b$cgroups, function(g) M$stmts[[g$stmt]]$fn$value(g$rows)))
+  Q <- diag(a0$pt, d) + crossprod(X * sqrt(a0$ct))
+  r <- a0$pt * a0$pm + as.vector(crossprod(X, a0$ct * (y - a0$cm)))
+  R <- tryCatch(chol(Q), error = function(e) NULL)
+  if (is.null(R)) { bugs_joint_set(M, b, x0); return(b) }
+  mu <- backsolve(R, forwardsolve(t(R), r))
+  bugs_joint_set(M, b, mu + backsolve(R, stats::rnorm(d)))
+  b
 }
 
 # initial values: given ones, then the typical value of the prior (JAGS) or

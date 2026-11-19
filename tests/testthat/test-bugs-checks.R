@@ -214,3 +214,34 @@ test_that("multivariate normal nodes get elliptical slice updates with the exact
   expect_equal(unname(colMeans(s)), as.vector(V %*% (4 * crossprod(X, y))), tolerance = 0.03)
   expect_equal(unname(apply(s, 2, sd)), unname(sqrt(diag(V))), tolerance = 0.1)
 })
+
+test_that("correlated regression coefficients get a joint normal update with the exact posterior", {
+  skip_on_cran()
+  set.seed(1); n <- 60; x1 <- rnorm(n); x2 <- x1 + 0.1 * rnorm(n); y <- 1 + x1 - x2 + rnorm(n)
+  code <- "model { for (i in 1:n) { y[i] ~ dnorm(mu[i], 1); mu[i] <- b0 + b1 * x1[i] + b2 * x2[i] }
+    b0 ~ dnorm(0, 0.001); b1 ~ dnorm(0, 0.001); b2 ~ dnorm(0, 0.001) }"
+  m <- jags.model(textConnection(code), data = list(n = n, x1 = x1, x2 = x2, y = y), n.chains = 1, quiet = TRUE, seed = 3)
+  expect_true("joint_normal" %in% vapply(m$state$chains[[1L]]$blocks, `[[`, "", "sampler"))
+  s <- do.call(rbind, coda.samples(m, c("b0", "b1", "b2"), n.iter = 3000))
+  X <- cbind(1, x1, x2); V <- solve(crossprod(X) + diag(0.001, 3))
+  expect_equal(unname(colMeans(s)), as.vector(V %*% crossprod(X, y)), tolerance = 0.05)
+  expect_equal(unname(apply(s, 2, sd)), unname(sqrt(diag(V))), tolerance = 0.1)
+})
+
+test_that("hidden Markov chains are updated by forward filtering backward sampling", {
+  skip_on_cran()
+  set.seed(2); T <- 40; P <- matrix(c(0.95, 0.05, 0.1, 0.9), 2, byrow = TRUE); mu <- c(0, 1.5)
+  z <- integer(T); z[1] <- 1; for (t in 2:T) z[t] <- sample(2, 1, prob = P[z[t - 1], ]); y <- rnorm(T, mu[z], 1)
+  code <- "model { z[1] ~ dcat(p0[]); for (t in 2:T) { z[t] ~ dcat(P[z[t-1], ]) }
+    for (t in 1:T) { y[t] ~ dnorm(mu[z[t]], 1) } }"
+  m <- jags.model(textConnection(code), data = list(T = T, P = P, mu = mu, y = y, p0 = c(0.5, 0.5)), n.chains = 1, quiet = TRUE, seed = 3)
+  expect_identical(unique(vapply(m$state$chains[[1L]]$blocks, `[[`, "", "sampler")), "ffbs")
+  # exact smoothing probabilities by the forward backward algorithm
+  la <- matrix(0, T, 2); la[1, ] <- log(0.5) + dnorm(y[1], mu, 1, log = TRUE)
+  for (t in 2:T) for (j in 1:2) la[t, j] <- dnorm(y[t], mu[j], 1, log = TRUE) + log(sum(exp(la[t - 1, ]) * P[, j]))
+  lb <- matrix(0, T, 2)
+  for (t in (T - 1):1) for (i in 1:2) lb[t, i] <- log(sum(P[i, ] * dnorm(y[t + 1], mu, 1) * exp(lb[t + 1, ])))
+  pz <- exp(la + lb); pz <- pz[, 2] / rowSums(pz)
+  s <- do.call(rbind, coda.samples(m, "z", n.iter = 3000))
+  expect_lt(max(abs(colMeans(s) - 1 - pz)), 0.05)
+})
