@@ -66,10 +66,10 @@ bugs_eval_value <- function(e, row_major) {
       "+" = if (length(args) == 1L) ev(args[[1L]]) else ev(args[[1L]]) + ev(args[[2L]]),
       "*" = ev(args[[1L]]) * ev(args[[2L]]),
       "/" = ev(args[[1L]]) / ev(args[[2L]]),
-      ":" = ev(args[[1L]]):ev(args[[2L]]),
+      ":" = { a <- ev(args[[1L]]); b <- ev(args[[2L]]); bugs_cap_n(abs(b - a) + 1); a:b },
       "c" = unlist(lapply(args, ev), use.names = FALSE),
-      "rep" = do.call(rep, lapply(args, ev)),
-      "seq" = do.call(seq, lapply(args, ev)),
+      "rep" = { a <- bugs_plain(lapply(args, ev), names(args)); bugs_cap_n(bugs_rep_len(a)); do.call(rep, a) },
+      "seq" = { a <- bugs_plain(lapply(args, ev), names(args)); bugs_cap_n(bugs_seq_len(a)); do.call(seq, a) },
       "as.integer" = as.integer(ev(args[[1L]])),
       "as.double" = as.double(ev(args[[1L]])),
       "list" = {
@@ -91,6 +91,26 @@ bugs_eval_value <- function(e, row_major) {
   ev(e)
 }
 
+# rep() and seq() in data files: plain numbers only, and at most 1e8 values
+bugs_plain <- function(a, nms) {
+  for (x in a) if (!is.numeric(x) || !is.null(attributes(x))) stop_data("rep() and seq() in data take plain numbers")
+  if (!is.null(nms)) names(a) <- nms
+  a
+}
+bugs_cap_n <- function(n) if (!is.finite(n) || n > 1e8) stop_data("a value in the data is too long")
+bugs_arg <- function(a, name, pos) { nm <- names(a) %||% rep("", length(a)); if (name %in% nm) a[[name]] else if (length(a) >= pos && !nzchar(nm[pos])) a[[pos]] }
+bugs_rep_len <- function(a) {
+  lo <- bugs_arg(a, "length.out", 4L)
+  if (!is.null(lo)) return(max(lo))
+  length(a[[1L]]) * max(bugs_arg(a, "times", 2L) %||% 1) * max(bugs_arg(a, "each", 3L) %||% 1)
+}
+bugs_seq_len <- function(a) {
+  lo <- bugs_arg(a, "length.out", 4L)
+  if (!is.null(lo)) return(max(lo))
+  from <- bugs_arg(a, "from", 1L) %||% 1; to <- bugs_arg(a, "to", 2L) %||% 1; by <- bugs_arg(a, "by", 3L) %||% 1
+  if (by == 0) 1 else abs((to - from) / by) + 1
+}
+
 bugs_is_rectangular <- function(text) {
   first <- sub("^\\s+", "", strsplit(text, "\n")[[1L]])
   first <- first[nzchar(first) & !startsWith(first, "#")][1L]
@@ -109,7 +129,10 @@ bugs_read_rectangular <- function(text, what) {
     tk <- strsplit(r, "[[:space:],]+")[[1L]]
     tk <- tk[nzchar(tk)]
     if (length(tk) != length(head)) stop_data(sprintf("a row of the rectangular %s has %d values for %d columns", what, length(tk), length(head)))
-    suppressWarnings(as.numeric(ifelse(tk == "NA", NA, tk)))
+    v <- suppressWarnings(as.numeric(ifelse(tk == "NA", NA, tk)))
+    bad <- is.na(v) & tk != "NA"
+    if (any(bad)) stop_data(sprintf("'%s' in the rectangular %s is not a number", tk[bad][1L], what))
+    v
   })
   M <- do.call(rbind, vals)
   out <- list()
@@ -142,8 +165,9 @@ bugs_check_values <- function(x, what) {
   for (nm in names(x)) {
     v <- x[[nm]]
     if (is.data.frame(v)) v <- as.matrix(v)
+    d <- dim(v)
     if (is.factor(v)) v <- as.integer(v)
-    if (is.logical(v)) v <- as.integer(v)
+    if (is.logical(v)) { v <- as.integer(v); dim(v) <- d }
     if (!is.numeric(v)) stop_data(sprintf("%s '%s' is not numeric", what, nm))
     x[[nm]] <- v
   }

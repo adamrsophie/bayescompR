@@ -42,7 +42,7 @@ test_that("models written as R functions and OpenBUGS output work", {
     lambda ~ dgamma(1, 1)
   }
   y <- c(2, 4, 3, 5)
-  b <- bugs(list(y = y, N = 4), NULL, "lambda", m, n.chains = 2, n.iter = 4000, seed = 6)
+  b <- bugs(list(y = y, N = 4), NULL, "lambda", 4000, m, n.chains = 2, bugs.seed = 6)
   expect_s3_class(b, "bugs")
   # gamma(1 + sum y, 1 + N) posterior
   expect_equal(b$mean$lambda, 15 / 5, tolerance = 0.03)

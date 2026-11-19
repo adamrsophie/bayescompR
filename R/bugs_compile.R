@@ -33,6 +33,15 @@ bugs_compile <- function(prog, data = list(), dialect = "jags") {
     else {
       if (identical(s$kind, "derivative")) stop_unsupported("differential equations (D(...) statements) are not supported", s$loc)
       s$loops <- loops
+      # one canonical (BUGS) parameter list, used by code generation and the
+      # choice of samplers alike
+      if (identical(s$kind, "stochastic") && !is.null(s$argnames) && any(nzchar(s$argnames))) s <- bugs_named_args(s)
+      # NIMBLE's I() is truncation
+      if (identical(s$kind, "stochastic") && identical(s$bound$type, "I") && dialect == "nimble") s$bound$type <- "T"
+      if (identical(s$kind, "logical")) s$cut <- identical(s$expr$kind, "call") && identical(s$expr$name, "cut")
+      cut_bad <- if (identical(s$kind, "logical")) bugs_has_cut(s$expr, top = TRUE)
+                 else any(vapply(s$args, bugs_has_cut, TRUE))
+      if (cut_bad) stop_unsupported("cut() must be the whole right side of a logical node, as in y <- cut(x)", s$loc)
       stmts[[length(stmts) + 1L]] <<- s
     }
   }
@@ -42,21 +51,18 @@ bugs_compile <- function(prog, data = list(), dialect = "jags") {
   for (k in seq_along(stmts)) M$stmts[[k]]$inst <- bugs_unroll(M$stmts[[k]], data)
   # 2. left side cells and array sizes
   bugs_size_arrays(M, prog$var)
-  # 3, 4. nodes, observation status and parents
+  # 3. nodes and code
   bugs_make_nodes(M)
-  bugs_find_parents(M)
-  # 5. order
-  bugs_order(M)
-  # 6. code
   for (k in seq_along(M$stmts)) M$stmts[[k]]$fn <- bugs_codegen(M, k)
-  # OpenBUGS data transformations: a logical node of the data that is also
-  # stochastic is computed once and observed
-  if (length(M$transforms)) {
-    tl <- M$transforms[M$nodes$kind[M$transforms] == "logical"]
-    bugs_eval_nodes(M, tl[order(M$rank[tl])])
-    for (i in which(M$nodes$kind == "stochastic")) if (!M$nodes$obs[i] && all(!is.na(get(M$nodes$var[i], envir = M$S)[M$cells[[i]]])))
-      M$nodes$obs[i] <- TRUE
-  }
+  # logical nodes computable from the data are constants (this covers
+  # OpenBUGS data transformations), then observation status
+  bugs_fold(M)
+  bugs_observed(M)
+  # 4, 5. parents and order
+  bugs_find_parents(M)
+  bugs_order(M)
+  for (k in seq_along(M$stmts)) if (M$stmts[[k]]$kind == "stochastic")
+    environment(M$stmts[[k]]$fn$lp)$cobs <- M$nodes$obs[M$stmts[[k]]$nodes]
   M
 }
 
@@ -72,7 +78,10 @@ bugs_const <- function(e, env, data, what = "this expression") {
         if (is.null(e$index) && !is.null(env[[e$name]])) return(env[[e$name]])
         v <- data[[e$name]]
         if (is.null(v)) stop_semantic(sprintf("%s must be a constant, but '%s' is not data", what, e$name), e$loc)
-        if (is.null(e$index)) return(v)
+        if (is.null(e$index)) {
+          if (anyNA(v)) stop_semantic(sprintf("%s uses a missing value of '%s'", what, e$name), e$loc)
+          return(v)
+        }
         idx <- lapply(e$index, function(ix) switch(ix$kind, single = ev(ix$e), range = ev(ix$lo):ev(ix$hi), all = NULL))
         d <- dim(v) %||% length(v)
         if (length(idx) != length(d)) stop_semantic(sprintf("'%s' has %d dimensions but %d indices", e$name, length(d), length(idx)), e$loc)
@@ -208,7 +217,7 @@ bugs_cells <- function(ix, d) {
 
 bugs_make_nodes <- function(M) {
   owner <- lapply(M$dims, function(d) array(0L, d))
-  nodes <- list(stmt = integer(), row = integer(), var = character(), kind = character(), obs = logical())
+  nodes <- list(stmt = integer(), row = integer(), var = character(), kind = character())
   cells <- list()
   n <- 0L
   transforms <- integer()
@@ -236,23 +245,59 @@ bugs_make_nodes <- function(M) {
     }
     M$stmts[[k]]$nodes <- ids
   }
+  nodes$obs <- logical(n)
+  nodes$folded <- logical(n)
   M$owner <- owner
   M$nodes <- nodes
   M$cells <- cells
   M$transforms <- transforms
-  # observed: every element of a stochastic node has data
-  obs <- logical(n)
+  M$fixed <- list()
+}
+
+# Logical nodes whose values follow from the data alone are computed once
+# and become constants. Unknown values are NA at this point, so a node is
+# folded when its value has no NA (R's NA rules make such a value hold for
+# every value of the unknowns).
+bugs_fold <- function(M) {
+  L <- which(M$nodes$kind == "logical")
+  repeat {
+    changed <- FALSE
+    for (i in L[!M$nodes$folded[L]]) {
+      s <- M$stmts[[M$nodes$stmt[i]]]
+      v <- tryCatch(suppressWarnings(s$fn$value(M$nodes$row[i])), error = function(e) NULL)
+      if (is.list(v)) v <- v[[1L]]
+      if (is.null(v) || anyNA(v) || length(v) != length(M$cells[[i]]) && length(v) != 1L) next
+      cur <- get(M$nodes$var[i], envir = M$S)[M$cells[[i]]]
+      if (!i %in% M$transforms && any(!is.na(cur)))
+        stop_semantic(sprintf("%s is a logical node and cannot be given as data", bugs_node_label(M, i)), s$loc)
+      bugs_set(M, M$nodes$var[i], M$cells[[i]], v)
+      M$nodes$folded[i] <- TRUE
+      changed <- TRUE
+    }
+    if (!changed) break
+  }
+}
+
+# observed stochastic nodes: every element has a value. A multivariate
+# normal may be partly observed: its missing elements are sampled.
+bugs_observed <- function(M) {
+  n <- length(M$nodes$kind)
   for (i in seq_len(n)) {
-    v <- get(nodes$var[i], envir = M$S)[cells[[i]]]
-    if (nodes$kind[i] == "stochastic") {
-      if (all(!is.na(v))) obs[i] <- TRUE
-      else if (any(!is.na(v)) && !i %in% transforms)
-        stop_semantic(sprintf("%s is partly observed; a multivariate node must be fully observed or fully missing", bugs_node_label(M, i)), M$stmts[[nodes$stmt[i]]]$loc)
-    } else if (any(!is.na(v)) && !i %in% transforms) {
-      stop_semantic(sprintf("%s is a logical node and cannot be given as data", bugs_node_label(M, i)), M$stmts[[nodes$stmt[i]]]$loc)
+    v <- get(M$nodes$var[i], envir = M$S)[M$cells[[i]]]
+    s <- M$stmts[[M$nodes$stmt[i]]]
+    if (M$nodes$kind[i] == "stochastic") {
+      if (all(!is.na(v))) M$nodes$obs[i] <- TRUE
+      else if (any(!is.na(v))) {
+        if (!s$dist %in% c("dmnorm", "dmnorm.vcov", "dmt"))
+          stop_semantic(sprintf("%s is partly observed; only multivariate normal and t nodes may be", bugs_node_label(M, i)), s$loc)
+        M$fixed[[as.character(i)]] <- !is.na(v)
+      }
+    } else if (!M$nodes$folded[i] && any(!is.na(v)) && !i %in% M$transforms) {
+      stop_semantic(sprintf("%s is a logical node and cannot be given as data", bugs_node_label(M, i)), s$loc)
     }
   }
-  M$nodes$obs <- obs
+  # values that never change: observed stochastic and folded logical nodes
+  M$const <- M$nodes$obs | M$nodes$folded
 }
 
 bugs_node_label <- function(M, i) {
@@ -277,55 +322,66 @@ bugs_stmt_exprs <- function(s) {
 # the cells (as owner node ids) an expression reads in one instance, and
 # whether an index depends on nodes
 bugs_refs <- function(M, e, env) {
-  out <- integer()
-  walk <- function(e) {
+  out <- integer(); poss <- integer()
+  walk <- function(e, possible = FALSE) {
+    add <- function(ids) if (possible) poss <<- c(poss, ids) else out <<- c(out, ids)
     switch(e$kind,
       num = NULL,
-      unop = walk(e$a),
-      binop = { walk(e$a); walk(e$b) },
-      call = for (a in e$args) walk(a),
+      unop = walk(e$a, possible),
+      binop = { walk(e$a, possible); walk(e$b, possible) },
+      call = for (a in e$args) walk(a, possible),
       var = {
         if (is.null(e$index) && !is.null(env[[e$name]])) return(NULL)
         own <- M$owner[[e$name]]
         if (is.null(own)) stop_semantic(sprintf("unknown variable '%s'", e$name), e$loc)
         d <- dim(own)
-        if (is.null(e$index)) { out <<- c(out, as.vector(own)); return(NULL) }
+        if (is.null(e$index)) { add(as.vector(own)); return(NULL) }
         if (length(e$index) != length(d) && !(length(d) == 1L && d == 1L && length(e$index) == 1L))
           stop_semantic(sprintf("'%s' has %d dimensions but is used with %d indices", e$name, length(d), length(e$index)), e$loc)
+        unresolved <- FALSE
         ix <- lapply(seq_along(e$index), function(k) {
           ii <- e$index[[k]]
           r <- tryCatch(switch(ii$kind,
-            single = bugs_const(ii$e, env, M$data_c),
-            range = bugs_const(ii$lo, env, M$data_c):bugs_const(ii$hi, env, M$data_c),
+            single = bugs_const(ii$e, env, M$known),
+            range = bugs_const(ii$lo, env, M$known):bugs_const(ii$hi, env, M$known),
             all = seq_len(d[k])), bayescomp_semantic_error = function(err) NULL)
           if (is.null(r)) {
             # an index that depends on nodes: every position it can take
-            for (sub in Filter(Negate(is.null), list(ii$e, ii$lo, ii$hi))) walk(sub)
+            for (sub in Filter(Negate(is.null), list(ii$e, ii$lo, ii$hi))) walk(sub, possible)
+            unresolved <<- TRUE
             r <- seq_len(d[k])
           }
           if (any(r < 1 | r > d[k])) stop_semantic(sprintf("index %s of '%s' is out of range 1:%d", paste(range(r), collapse = ":"), e$name, d[k]), e$loc)
           r
         })
-        out <<- c(out, as.vector(own[as.matrix(expand.grid(ix))]))
+        ids <- as.vector(own[as.matrix(expand.grid(ix))])
+        if (unresolved) poss <<- c(poss, ids) else add(ids)
       })
   }
   walk(e)
-  out
+  list(definite = out, possible = poss)
 }
 
 bugs_find_parents <- function(M) {
   n <- length(M$nodes$kind)
-  # constants for index evaluation: data, and values of data transforms
-  M$data_c <- M$data
+  # known values for index evaluation: data, folded and observed values
+  M$known <- lapply(stats::setNames(nm = ls(M$S)), function(v) bugs_drop(get(v, envir = M$S)))
   parents <- vector("list", n)
   for (k in seq_along(M$stmts)) {
     s <- M$stmts[[k]]
     ex <- bugs_stmt_exprs(s)
     for (r in seq_len(nrow(s$inst))) {
-      env <- bugs_inst_env(s, r)
-      p <- unique(unlist(lapply(ex, function(e) bugs_refs(M, e, env)), use.names = FALSE))
       id <- s$nodes[r]
-      parents[[id]] <- p[p != 0L & p != id]
+      if (M$const[id] && M$nodes$kind[id] == "logical") next
+      env <- bugs_inst_env(s, r)
+      rf <- lapply(ex, function(e) bugs_refs(M, e, env))
+      def <- unique(unlist(lapply(rf, `[[`, "definite"), use.names = FALSE))
+      pos <- unique(unlist(lapply(rf, `[[`, "possible"), use.names = FALSE))
+      if (id %in% def) stop_semantic(sprintf("the model has a directed cycle: %s depends on itself", bugs_node_label(M, id)), s$loc)
+      p <- unique(c(def, pos))
+      p <- p[p != 0L & p != id]
+      # constants are not parents
+      parents[[id]] <- p[!M$const[p]]
     }
   }
   M$parents <- parents
@@ -356,12 +412,23 @@ bugs_order <- function(M) {
 bugs_data_block <- function(stmts, data, dialect) {
   prog <- list(var = list(), data = list(), model = stmts)
   D <- bugs_compile(prog, data, dialect)
-  for (i in D$order) {
+  for (i in seq_along(D$nodes$kind)) {
     if (D$nodes$kind[i] == "stochastic" && !D$nodes$obs[i]) stop_unsupported("stochastic relations in a data block are not supported")
-    if (D$nodes$kind[i] == "logical") bugs_eval_nodes(D, i)
+    if (D$nodes$kind[i] == "logical" && !D$nodes$folded[i]) stop_semantic(sprintf("%s in the data block cannot be computed from the data", bugs_node_label(D, i)))
   }
   out <- data
-  for (nm in setdiff(names(D$dims), names(data))) out[[nm]] <- bugs_drop(get(nm, envir = D$S))
+  for (nm in names(D$dims)) out[[nm]] <- bugs_drop(get(nm, envir = D$S))
   out
 }
+
+# cut() anywhere but at the top of a logical node's expression
+bugs_has_cut <- function(e, top = FALSE) {
+  switch(e$kind,
+    call = (!top && identical(e$name, "cut")) || any(vapply(e$args, bugs_has_cut, TRUE)),
+    unop = bugs_has_cut(e$a),
+    binop = bugs_has_cut(e$a) || bugs_has_cut(e$b),
+    var = any(vapply(e$index %||% list(), function(ix) any(vapply(Filter(Negate(is.null), list(ix$e, ix$lo, ix$hi)), bugs_has_cut, TRUE)), TRUE)),
+    FALSE)
+}
+
 bugs_drop <- function(a) if (length(dim(a)) == 1L) as.vector(a) else a

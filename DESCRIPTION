@@ -124,4 +124,5 @@ Collate:
     'bugs_compile.R'
     'bugs_mcmc.R'
     'bugs_api.R'
+    'bugs_nimble.R'
 Config/roxygen2/version: 8.1.1

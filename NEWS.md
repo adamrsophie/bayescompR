@@ -1,5 +1,20 @@
 # bayescompR (development version)
 
+## New features
+
+* Models written in the BUGS language run without JAGS, OpenBUGS, WinBUGS,
+  MultiBUGS or NIMBLE installed. `jags()` takes the arguments of
+  `R2jags::jags()` and returns its result; `bugs()` does the same for
+  `R2OpenBUGS::bugs()`; `jags.model()`, `update()`, `coda.samples()` and
+  `jags.samples()` follow rjags; and `nimbleCode()`, `nimbleModel()`,
+  `configureMCMC()`, `buildMCMC()`, `compileNimble()`, `runMCMC()` and
+  `nimbleMCMC()` follow NIMBLE. The models are compiled and sampled in R
+  with Gibbs updates (conjugate gamma, beta, Dirichlet, Wishart and normal
+  updates for linear models, enumeration of discrete nodes) and slice
+  sampling. Models can be files, text, or R functions; data and initial
+  values can be R lists, R dump files, or OpenBUGS list and rectangular
+  files. `vignette("bugs")` lists what is supported.
+
 ## Bug fixes
 
 * `bayescomp_ess_quantile()` and `bayescomp_ess_tail()` use the indicator

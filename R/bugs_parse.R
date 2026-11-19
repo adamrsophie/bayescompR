@@ -65,6 +65,13 @@ bugs_lex <- function(code, file = NULL) {
     ch <- chars[i]
     if (ch %in% c(" ", "\t", "\r", "\n", "\f")) { adv(); next }
     if (ch == "#") { while (i <= n && chars[i] != "\n") adv(); next }
+    # JAGS block comments
+    if (ch == "/" && i < n && chars[i + 1L] == "*") {
+      adv(); adv()
+      while (i <= n && !(chars[i] == "*" && i < n && chars[i + 1L] == "/")) adv()
+      if (i > n) stop_syntax("unterminated comment", list(file = file, line = line))
+      adv(); adv(); next
+    }
     l0 <- line; c0 <- col
     nx <- if (i < n) chars[i + 1L] else ""
     if (is_alpha(ch) || (ch == "." && !is_digit(nx)) || ch == "_") {

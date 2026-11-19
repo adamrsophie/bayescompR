@@ -24,18 +24,20 @@ bfun(c("arccosh", "acosh"), acosh); bfun(c("arcsinh", "asinh"), asinh); bfun(c("
 bfun("logit", stats::qlogis); bfun("ilogit", stats::plogis); bfun("cloglog", function(x) log(-log1p(-x))); bfun("icloglog", icloglog)
 bfun("probit", stats::qnorm); bfun(c("phi", "Phi"), stats::pnorm)
 bfun("pow", function(a, b) a^b); bfun("step", function(x) as.numeric(x >= 0)); bfun("equals", function(a, b) as.numeric(a == b))
-bfun("round", round); bfun("loggam", lgamma); bfun("logfact", lfactorial); bfun("lgamma", lgamma); bfun("gamma", gamma)
-bfun("ifelse", function(c, a, b) ifelse(c != 0, a, b)); bfun("exp", exp)
+bfun("round", function(x) sign(x) * floor(abs(x) + 0.5)); bfun("loggam", lgamma); bfun("logfact", lfactorial); bfun("lgamma", lgamma); bfun("gamma", gamma)
+bfun("ifelse", function(c, a, b) { n <- max(length(c), length(a), length(b)); ifelse(rep_len(c != 0, n), rep_len(a, n), rep_len(b, n)) })
 bfun("trunc", trunc)   # OpenBUGS: floor, set per dialect in bugs_fun_get()
-bfun("max", function(...) { a <- list(...); if (length(a) == 1L) max(a[[1L]]) else do.call(pmax, a) }, elementwise = FALSE)
-bfun("min", function(...) { a <- list(...); if (length(a) == 1L) min(a[[1L]]) else do.call(pmin, a) }, elementwise = FALSE)
-bfun("sum", function(x) sum(x), elementwise = FALSE); bfun("mean", function(x) mean(x), elementwise = FALSE)
+bfun("max", function(...) max(...), elementwise = FALSE)
+bfun("min", function(...) min(...), elementwise = FALSE)
+bfun("sum", function(...) sum(...), elementwise = FALSE); bfun("mean", function(x) mean(x), elementwise = FALSE)
 bfun("prod", function(x) prod(x), elementwise = FALSE); bfun("sd", function(x) stats::sd(x), elementwise = FALSE)
 bfun("inprod", function(a, b) sum(a * b), elementwise = FALSE)
 bfun("inverse", function(a) solve(a), elementwise = FALSE)
 bfun("logdet", function(a) as.numeric(determinant(a, logarithm = TRUE)$modulus), elementwise = FALSE)
 bfun("sort", function(x) sort(x), elementwise = FALSE)
-bfun("rank", function(x, s) { if (missing(s)) rank(x, ties.method = "min") else sum(x <= s) }, elementwise = FALSE)
+# rank(v[]) gives the ranks (JAGS, ties in order); rank(v[], s) the number
+# of elements of v that are at most v[s] (OpenBUGS)
+bfun("rank", function(x, s) { if (missing(s)) rank(x, ties.method = "first") else sum(x <= x[s]) }, elementwise = FALSE)
 bfun("ranked", function(x, s) sort(x)[s], elementwise = FALSE)
 bfun("order", function(x) order(x), elementwise = FALSE)
 bfun("t", function(x) t(x), elementwise = FALSE)
@@ -51,26 +53,68 @@ bugs_fun_get <- function(name, loc = NULL, dialect = "jags") {
   f
 }
 
-bugs_inv_link <- list(log = exp, logit = stats::plogis, cloglog = icloglog, probit = stats::pnorm)
+# probabilities from link functions are inside (0, 1); keep them there when
+# they round to 0 or 1, as at extreme initial values
+open01 <- function(p) pmin(pmax(p, .Machine$double.xmin), 1 - .Machine$double.eps / 2)
+bugs_inv_link <- list(log = exp, logit = function(x) open01(stats::plogis(x)), cloglog = function(x) open01(icloglog(x)),
+                      probit = function(x) open01(stats::pnorm(x)))
 
-# cumulative distribution functions for T() truncation
+# log cumulative distribution functions for T() truncation: log P(X <= q)
+# with lower = TRUE, log P(X > q) otherwise
 bugs_cdf <- list(
-  dnorm = function(q, mu, tau) stats::pnorm(q, mu, sd_of(tau)),
-  dlnorm = function(q, mu, tau) stats::plnorm(q, mu, sd_of(tau)),
-  dt = function(q, mu, tau, k) stats::pt((q - mu) * sqrt(tau), k),
-  dlogis = function(q, mu, tau) stats::plogis(q, mu, 1 / tau),
-  ddexp = function(q, mu, tau) ifelse(q < mu, 0.5 * exp(-tau * (mu - q)), 1 - 0.5 * exp(-tau * (q - mu))),
-  dgamma = function(q, r, mu) stats::pgamma(q, r, mu),
-  dexp = function(q, lambda) stats::pexp(q, lambda),
-  dchisqr = function(q, k) stats::pchisq(q, k),
-  dweib = function(q, v, lambda) ifelse(q > 0, -expm1(-lambda * q^v), 0),
-  dbeta = function(q, a, b) stats::pbeta(q, a, b),
-  dunif = function(q, a, b) stats::punif(q, a, b),
-  dpar = function(q, alpha, c) ifelse(q > c, 1 - (c / q)^alpha, 0),
-  dpois = function(q, lambda) stats::ppois(q, lambda),
-  dbin = function(q, p, n) stats::pbinom(q, n, p),
-  dnegbin = function(q, p, r) stats::pnbinom(q, r, p),
-  dbern = function(q, p) stats::pbinom(q, 1, p))
+  dnorm = function(q, lower, mu, tau) stats::pnorm(q, mu, sd_of(tau), lower.tail = lower, log.p = TRUE),
+  dlnorm = function(q, lower, mu, tau) stats::plnorm(q, mu, sd_of(tau), lower.tail = lower, log.p = TRUE),
+  dt = function(q, lower, mu, tau, k) stats::pt((q - mu) * sqrt(tau), k, lower.tail = lower, log.p = TRUE),
+  dlogis = function(q, lower, mu, tau) stats::plogis(q, mu, 1 / tau, lower.tail = lower, log.p = TRUE),
+  ddexp = function(q, lower, mu, tau) {
+    near <- log(0.5) - tau * abs(q - mu)
+    far <- log1p(-0.5 * exp(-tau * abs(q - mu)))
+    if (lower) ifelse(q < mu, near, far) else ifelse(q < mu, far, near)
+  },
+  dgamma = function(q, lower, r, mu) stats::pgamma(q, r, mu, lower.tail = lower, log.p = TRUE),
+  dexp = function(q, lower, lambda) stats::pexp(q, lambda, lower.tail = lower, log.p = TRUE),
+  dchisqr = function(q, lower, k) stats::pchisq(q, k, lower.tail = lower, log.p = TRUE),
+  dweib = function(q, lower, v, lambda) {
+    h <- lambda * pmax(q, 0)^v
+    if (lower) ifelse(q > 0, log(-expm1(-h)), -Inf) else ifelse(q > 0, -h, 0)
+  },
+  dbeta = function(q, lower, a, b) stats::pbeta(q, a, b, lower.tail = lower, log.p = TRUE),
+  dunif = function(q, lower, a, b) stats::punif(q, a, b, lower.tail = lower, log.p = TRUE),
+  dpar = function(q, lower, alpha, c) {
+    r <- pmin(c / pmax(q, c), 1)
+    if (lower) ifelse(q > c, log1p(-r^alpha), -Inf) else ifelse(q > c, alpha * log(r), 0)
+  },
+  dpois = function(q, lower, lambda) stats::ppois(q, lambda, lower.tail = lower, log.p = TRUE),
+  dbin = function(q, lower, p, n) stats::pbinom(q, n, p, lower.tail = lower, log.p = TRUE),
+  dnegbin = function(q, lower, p, r) stats::pnbinom(q, r, p, lower.tail = lower, log.p = TRUE),
+  dbern = function(q, lower, p) stats::pbinom(q, 1, p, lower.tail = lower, log.p = TRUE))
+bugs_cdf$dchisq <- bugs_cdf$dchisqr
+bugs_cdf$dbinom <- bugs_cdf$dbin
+
+# log(1 - exp(x)) for x <= 0
+log1mexp <- function(x) ifelse(x > -log(2), log(-expm1(x)), log1p(-exp(x)))
+
+# log P(lo <= X <= hi), computed from the tail where it is accurate; for a
+# discrete X the lower limit is the smallest admitted integer
+bugs_log_mass <- function(cdf, lo, hi, a, discrete) {
+  if (discrete) lo <- ceiling(lo) - 1
+  n <- max(length(lo), length(hi))
+  lo <- rep_len(lo, n); hi <- rep_len(hi, n)
+  out <- numeric(n)
+  up <- is.infinite(hi) & hi > 0
+  dn <- is.infinite(lo) & lo < 0
+  if (any(up & !dn)) out[up & !dn] <- do.call(cdf, c(list(lo, FALSE), a))[up & !dn]
+  if (any(dn & !up)) out[dn & !up] <- do.call(cdf, c(list(hi, TRUE), a))[dn & !up]
+  two <- !up & !dn
+  if (any(two)) {
+    flo <- do.call(cdf, c(list(lo, TRUE), a)); fhi <- do.call(cdf, c(list(hi, TRUE), a))
+    slo <- do.call(cdf, c(list(lo, FALSE), a)); shi <- do.call(cdf, c(list(hi, FALSE), a))
+    upper <- flo > log(0.5)
+    m <- ifelse(upper, slo + log1mexp(pmin(shi - slo, 0)), fhi + log1mexp(pmin(flo - fhi, 0)))
+    out[two] <- rep_len(m, n)[two]
+  }
+  out
+}
 
 # ---- translation ------------------------------------------------------------------------
 
@@ -111,6 +155,8 @@ bugs_tr <- function(e, M, loopvars, vec) {
     unop = if (e$op == "-") call("-", tr(e$a)) else call("as.numeric", call("!", tr(e$a))),
     binop = {
       op <- switch(e$op, "&&" = "&", "||" = "|", e$op)
+      if (!op %in% c("+", "-", "*", "/", "^", "<", "<=", ">", ">=", "==", "!=", "&", "|", "%*%"))
+        stop_unsupported(sprintf("the operator '%s' is not supported", e$op), e$loc)
       r <- call(op, tr(e$a), tr(e$b))
       if (op %in% c("<", "<=", ">", ">=", "==", "!=", "&", "|")) call("as.numeric", r) else r
     },
@@ -122,13 +168,22 @@ bugs_tr <- function(e, M, loopvars, vec) {
 }
 
 # x[i, 1:K] with drop, as an R array; a missing index is NULL
+# (linear indices are computed directly: this runs once per node and row)
 .bugs_sub <- function(a, ...) {
   ix <- list(...)
   d <- dim(a)
-  ix <- Map(function(i, n) if (is.null(i)) seq_len(n) else i, ix, d)
-  r <- do.call(`[`, c(list(a), ix, list(drop = FALSE)))
-  keep <- lengths(ix) > 1L
-  if (sum(keep) <= 1L) as.vector(r) else array(r, dim(r)[keep])
+  if (is.null(d)) d <- length(a)
+  lin <- 1; stride <- 1; keep <- integer()
+  for (k in seq_along(ix)) {
+    i <- ix[[k]]
+    i <- if (is.null(i)) seq_len(d[k]) else as.integer(i)
+    if (any(i < 1L | i > d[k], na.rm = TRUE)) stop("subscript out of bounds", call. = FALSE)
+    if (length(i) == 1L) lin <- lin + (i - 1L) * stride
+    else { keep <- c(keep, length(i)); lin <- rep.int(lin, length(i)) + rep((i - 1L) * stride, each = length(lin)) }
+    stride <- stride * d[k]
+  }
+  r <- a[lin]
+  if (length(keep) <= 1L) r else array(r, keep)
 }
 .bugs_whole <- function(a) if (length(dim(a)) == 1L) as.vector(a) else a
 
@@ -141,8 +196,6 @@ bugs_codegen <- function(M, k) {
   ids <- s$nodes
   single_lhs <- all(lengths(M$cells[ids]) == 1L)
   d <- if (s$kind == "stochastic") bugs_dist_get(s$dist, M$dialect, s$loc)
-  if (s$kind == "stochastic" && !is.null(s$argnames) && any(nzchar(s$argnames)))
-    s <- bugs_named_args(s, d)
   if (s$kind == "stochastic" && length(s$args) != d$npar)
     stop_semantic(sprintf("%s takes %d parameters but %d were given", s$dist, d$npar, length(s$args)), s$loc)
   vec <- single_lhs && all(vapply(ex, bugs_is_elementwise, TRUE, M = M)) && (s$kind == "logical" || identical(d$dim, "scalar"))
@@ -170,8 +223,8 @@ bugs_codegen <- function(M, k) {
                              lapply(seq_along(loopvars), function(j) call("<-", bugs_loop_name(loopvars[j]), call("[", as.name("inst"), as.name("r"), j))),
                              per_row))
     environment(inner) <- fenv
-    fenv$inner <- inner
-    body(f) <- quote(lapply(rows, inner))
+    # each closure carries its own row evaluator
+    body(f) <- bquote(lapply(rows, .(inner)))
     environment(f) <- fenv
     f
   }
@@ -208,6 +261,11 @@ bugs_codegen <- function(M, k) {
   lo <- if (!is.null(s$bound$lo)) bugs_tr(s$bound$lo, M, loopvars, vec)
   hi <- if (!is.null(s$bound$hi)) bugs_tr(s$bound$hi, M, loopvars, vec)
   fenv$btype <- s$bound$type %||% ""
+  # a flat prior restricted by T() has no normalizer
+  if (identical(fenv$btype, "T") && s$dist == "dflat") fenv$btype <- "I"
+  # OpenBUGS: C() only restricts missing values; an observed value is used
+  # as is (cobs is set once the observed nodes are known)
+  fenv$cobs <- logical(length(ids))
   if (identical(fenv$btype, "T")) {
     fenv$cdf <- bugs_cdf[[s$dist]]
     if (is.null(fenv$cdf)) stop_unsupported(sprintf("truncation of %s", s$dist), s$loc)
@@ -226,13 +284,10 @@ bugs_codegen <- function(M, k) {
       lp <- suppressWarnings(do.call(d$lpdf, c(list(x), a)))
       if (nzchar(btype)) {
         b <- bounds_f(rows)
-        lp[x < b[[1L]] | x > b[[2L]]] <- -Inf
-        if (btype == "T") {
-          # discrete: P(lo <= X <= hi) = F(hi) - F(lo - 1)
-          flo <- if (all(is.infinite(b[[1L]]))) 0 else do.call(cdf, c(list(if (discrete) b[[1L]] - 1 else b[[1L]]), a))
-          fhi <- if (all(is.infinite(b[[2L]]))) 1 else do.call(cdf, c(list(b[[2L]]), a))
-          lp <- lp - log(fhi - flo)
-        }
+        out <- x < b[[1L]] | x > b[[2L]]
+        if (btype == "C") out <- out & !cobs[rows]
+        lp[out] <- -Inf
+        if (btype == "T") lp <- lp - bugs_log_mass(cdf, b[[1L]], b[[2L]], a, discrete)
       }
       rep_len(lp, length(rows))
     }
@@ -246,17 +301,17 @@ bugs_codegen <- function(M, k) {
     out$lp <- function(rows, x = NULL) {
       a <- args_f(rows)
       b <- if (nzchar(btype)) bounds_f(rows)
-      vapply(seq_along(rows), function(j) {
-        xv <- if (is.null(x)) bugs_shape_value(S[[var]][cells[[rows[j]]]], shape[[rows[j]]]) else x[[j]]
-        lp <- suppressWarnings(do.call(d$lpdf, c(list(xv), a[[j]])))
+      sv <- if (is.null(x)) S[[var]]
+      suppressWarnings(vapply(seq_along(rows), function(j) {
+        xv <- if (is.null(x)) bugs_shape_value(sv[cells[[rows[j]]]], shape[[rows[j]]]) else x[[j]]
+        lp <- do.call(d$lpdf, c(list(xv), a[[j]]))
         if (!is.null(b)) {
           bj <- b[[j]]
-          if (any(xv < bj[[1L]] | xv > bj[[2L]])) return(-Inf)
-          if (btype == "T") lp <- lp - log((if (is.infinite(bj[[2L]])) 1 else do.call(cdf, c(list(bj[[2L]]), a[[j]]))) -
-                                             (if (is.infinite(bj[[1L]])) 0 else do.call(cdf, c(list(if (discrete) bj[[1L]] - 1 else bj[[1L]]), a[[j]]))))
+          if (!(btype == "C" && cobs[rows[j]]) && any(xv < bj[[1L]] | xv > bj[[2L]])) return(-Inf)
+          if (btype == "T") lp <- lp - bugs_log_mass(cdf, bj[[1L]], bj[[2L]], a[[j]], discrete)
         }
         sum(lp)
-      }, 0)
+      }, 0))
     }
     out$rng <- function(rows) { a <- args_f(rows); lapply(seq_along(rows), function(j) do.call(d$rng, c(list(1L), a[[j]]))) }
     out$typical <- function(rows) { a <- args_f(rows); lapply(seq_along(rows), function(j) do.call(d$typical, a[[j]])) }
@@ -267,46 +322,80 @@ bugs_codegen <- function(M, k) {
 
 bugs_shape_value <- function(v, shape) if (length(shape) >= 2L) array(v, shape) else v
 
-# NIMBLE's named alternative parameters: dnorm(mu, sd = s), dgamma(shape, rate = r)
-bugs_named_args <- function(s, d) {
+# NIMBLE's named parameters: dnorm(mu, sd = s), dgamma(shape, scale = r).
+# Positional arguments fill the BUGS parameters in order; a name either
+# names a BUGS parameter or an alternative that is converted to one.
+# Unknown names are errors.
+.bugs_named <- list(
+  dnorm = list(par = c("mean", "tau"), default = list(0, 1), alt = list(sd = c("tau", "sd2prec"), var = c("tau", "inv"))),
+  dlnorm = list(par = c("meanlog", "taulog"), default = list(0, 1), alt = list(sdlog = c("taulog", "sd2prec"), varlog = c("taulog", "inv"))),
+  dt = list(par = c("mu", "tau", "df"), default = list(0, 1, 1), alt = list(sigma = c("tau", "sd2prec"))),
+  dlogis = list(par = c("location", "rate"), default = list(0, 1), alt = list(scale = c("rate", "inv"))),
+  ddexp = list(par = c("location", "rate"), default = list(0, 1), alt = list(scale = c("rate", "inv"), var = c("rate", "var2rate"))),
+  dgamma = list(par = c("shape", "rate"), default = list(NULL, 1), alt = list(scale = c("rate", "inv"))),
+  dexp = list(par = "rate", default = list(1), alt = list(scale = c("rate", "inv"))),
+  dbeta = list(par = c("shape1", "shape2"), default = list(NULL, NULL), alt = list()),
+  dunif = list(par = c("min", "max"), default = list(0, 1), alt = list()),
+  dweib = list(par = c("shape", "lambda"), default = list(NULL, 1), alt = list(scale = c("lambda", "scale2lambda"), rate = c("lambda", "rate2lambda"))),
+  dbern = list(par = "prob", default = list(NULL), alt = list()),
+  dbin = list(par = c("prob", "size"), default = list(NULL, NULL), alt = list()),
+  dbinom = list(par = c("prob", "size"), default = list(NULL, NULL), alt = list()),
+  dnegbin = list(par = c("prob", "size"), default = list(NULL, NULL), alt = list()),
+  dpois = list(par = "lambda", default = list(NULL), alt = list()),
+  dchisqr = list(par = "df", default = list(NULL), alt = list()),
+  dchisq = list(par = "df", default = list(NULL), alt = list()),
+  dcat = list(par = "prob", default = list(NULL), alt = list()),
+  dmulti = list(par = c("prob", "size"), default = list(NULL, NULL), alt = list()),
+  ddirch = list(par = "alpha", default = list(NULL), alt = list()),
+  dmnorm = list(par = c("mean", "prec"), default = list(NULL, NULL), alt = list(cov = c("prec", "inverse"))),
+  dwish = list(par = c("R", "df"), default = list(NULL, NULL), alt = list()))
+
+bugs_named_args <- function(s) {
+  spec <- .bugs_named[[s$dist]]
+  if (is.null(spec)) stop_unsupported(sprintf("named parameters of %s", s$dist), s$loc)
   nm <- s$argnames
   a <- s$args
   num <- function(v) list(kind = "num", value = v, loc = NULL)
   bin <- function(op, x, y) list(kind = "binop", op = op, a = x, b = y, loc = NULL)
-  pos <- function(k) if (k <= length(nm) && !nzchar(nm[k])) a[[k]]
-  get_arg <- function(key, k) { w <- which(nm == key); if (length(w)) a[[w]] else pos(k) }
-  conv <- switch(s$dist,
-    dnorm = , dlnorm = , dlogis = , dt = , ddexp = {
-      loc <- get_arg("mean", 1L) %||% get_arg("meanlog", 1L) %||% get_arg("location", 1L) %||% num(0)
-      scale <- if (any(nm == "sd")) bin("/", num(1), bin("^", a[[which(nm == "sd")]], num(2)))
-               else if (any(nm == "sdlog")) bin("/", num(1), bin("^", a[[which(nm == "sdlog")]], num(2)))
-               else if (any(nm == "var")) bin("/", num(1), a[[which(nm == "var")]])
-               else if (any(nm == "scale") && s$dist %in% c("dlogis", "ddexp")) bin("/", num(1), a[[which(nm == "scale")]])
-               else if (any(nm == "scale")) bin("/", num(1), bin("^", a[[which(nm == "scale")]], num(2)))
-               else get_arg("tau", 2L) %||% get_arg("taulog", 2L) %||% get_arg("rate", 2L) %||% num(1)
-      out <- list(loc, scale)
-      if (s$dist == "dt") out <- c(out, list(get_arg("df", 3L) %||% num(1)))
-      out
-    },
-    dgamma = {
-      sh <- get_arg("shape", 1L)
-      rt <- if (any(nm == "scale")) bin("/", num(1), a[[which(nm == "scale")]])
-            else if (any(nm == "mean") && any(nm == "sd")) NULL else get_arg("rate", 2L) %||% num(1)
-      if (any(nm == "mean") && any(nm == "sd")) {
-        m <- a[[which(nm == "mean")]]; sdv <- a[[which(nm == "sd")]]
-        sh <- bin("/", bin("^", m, num(2)), bin("^", sdv, num(2)))
-        rt <- bin("/", m, bin("^", sdv, num(2)))
-      }
-      list(sh, rt)
-    },
-    dexp = list(if (any(nm == "scale")) bin("/", num(1), a[[which(nm == "scale")]]) else get_arg("rate", 1L) %||% num(1)),
-    dbin = , dbinom = list(get_arg("prob", 1L), get_arg("size", 2L)),
-    dpois = list(get_arg("lambda", 1L)),
-    dbeta = list(get_arg("shape1", 1L), get_arg("shape2", 2L)),
-    dunif = list(get_arg("min", 1L) %||% num(0), get_arg("max", 2L) %||% num(1)),
-    stop_unsupported(sprintf("named parameters of %s", s$dist), s$loc))
-  if (any(vapply(conv, is.null, TRUE))) stop_semantic(sprintf("missing parameters of %s", s$dist), s$loc)
-  s$args <- conv
+  conv <- function(how, e, others) switch(how,
+    sd2prec = bin("/", num(1), bin("^", e, num(2))),
+    inv = bin("/", num(1), e),
+    var2rate = list(kind = "call", name = "sqrt", args = list(bin("/", num(2), e)), loc = NULL),
+    scale2lambda = bin("^", e, list(kind = "unop", op = "-", a = others$shape, loc = NULL)),
+    rate2lambda = bin("^", e, others$shape),
+    inverse = list(kind = "call", name = "inverse", args = list(e), loc = NULL))
+  out <- stats::setNames(vector("list", length(spec$par)), spec$par)
+  unnamed <- which(!nzchar(nm))
+  if (length(unnamed) > length(spec$par)) stop_semantic(sprintf("%s takes %d parameters", s$dist, length(spec$par)), s$loc)
+  for (k in seq_along(unnamed)) out[[k]] <- a[[unnamed[k]]]
+  named <- which(nzchar(nm))
+  alts <- list()
+  for (k in named) {
+    if (nm[k] %in% spec$par) {
+      if (!is.null(out[[nm[k]]])) stop_semantic(sprintf("parameter '%s' of %s is given twice", nm[k], s$dist), s$loc)
+      out[[nm[k]]] <- a[[k]]
+    } else if (nm[k] %in% names(spec$alt)) alts[[nm[k]]] <- a[[k]]
+    else if (s$dist == "dgamma" && nm[k] %in% c("mean", "sd")) alts[[nm[k]]] <- a[[k]]
+    else stop_semantic(sprintf("%s has no parameter '%s'", s$dist, nm[k]), s$loc)
+  }
+  if (s$dist == "dgamma" && xor(!is.null(alts$mean), !is.null(alts$sd)))
+    stop_semantic("dgamma needs both mean and sd", s$loc)
+  if (s$dist == "dgamma" && !is.null(alts$mean)) {
+    v <- bin("^", alts$sd, num(2))
+    out$shape <- bin("/", bin("^", alts$mean, num(2)), v)
+    out$rate <- bin("/", alts$mean, v)
+    alts$mean <- alts$sd <- NULL
+  }
+  for (an in names(alts)) {
+    target <- spec$alt[[an]][1L]
+    if (!is.null(out[[target]])) stop_semantic(sprintf("%s: give only one of '%s' and '%s'", s$dist, target, an), s$loc)
+    out[[target]] <- conv(spec$alt[[an]][2L], alts[[an]], out)
+  }
+  for (k in seq_along(out)) if (is.null(out[[k]])) {
+    if (is.null(spec$default[[k]])) stop_semantic(sprintf("parameter '%s' of %s is missing", spec$par[k], s$dist), s$loc)
+    out[[k]] <- num(spec$default[[k]])
+  }
+  s$args <- unname(out)
   s$argnames <- NULL
   s
 }

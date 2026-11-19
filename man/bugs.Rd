@@ -6,56 +6,79 @@
 \usage{
 bugs(
   data,
-  inits = NULL,
-  parameters.to.save = NULL,
+  inits,
+  parameters.to.save,
+  n.iter,
   model.file = "model.txt",
   n.chains = 3,
-  n.iter = 2000,
   n.burnin = floor(n.iter/2),
   n.thin = 1,
+  saveExec = FALSE,
+  restart = FALSE,
+  debug = FALSE,
   DIC = TRUE,
-  seed = NULL,
+  digits = 5,
+  codaPkg = FALSE,
+  working.directory = NULL,
+  clearWD = FALSE,
+  bugs.seed = 1,
+  summary.only = FALSE,
+  save.history = FALSE,
+  over.relax = FALSE,
   cores = getOption("mc.cores", 1L),
   refresh = 0L,
   ...
 )
 }
 \arguments{
-\item{data}{A named list of data, or a character vector naming objects to
-take from the calling environment, or a data file in R dump or BUGS list
+\item{data}{A named list of data, a character vector naming objects to
+take from the calling environment, or data files in R dump or BUGS list
 format. Missing values (\code{NA}) are unobserved and sampled.}
 
 \item{inits}{Initial values as in \code{\link[=jags]{jags()}}; \code{NULL} draws them from the
 priors (OpenBUGS's gen inits).}
 
-\item{parameters.to.save}{Names of the variables to monitor. \code{NULL}
-monitors every unobserved stochastic variable.}
+\item{parameters.to.save}{Names of the variables to monitor, or parts of
+them such as \code{"b[2]"}. \code{NULL} monitors every unobserved stochastic
+variable. \code{"deviance"} monitors the deviance.}
+
+\item{n.iter}{Iterations per chain, including the burn-in.}
 
 \item{model.file}{The model: a file name, a character vector of BUGS code,
 or an R function whose body is the model (as in R2jags).}
 
-\item{n.thin}{Thinning (default 1, as R2OpenBUGS).}
+\item{n.thin}{Thinning: as in OpenBUGS, every iteration after the burn-in
+runs \code{n.thin} updates and keeps the last, so \code{n.iter - n.burnin} draws
+are kept per chain.}
+
+\item{debug, digits, summary.only, saveExec, restart, clearWD, over.relax, save.history}{Accepted for compatibility and ignored.}
 
 \item{DIC}{Monitor the deviance and compute DIC with OpenBUGS's
-\verb{pD = mean(deviance) - deviance(posterior means)}.}
+\verb{pD = mean(deviance) - deviance(posterior means)}. When an unobserved
+discrete node is a parent of the data, the plug-in deviance is not
+defined and half the variance of the deviance is used instead.}
 
-\item{seed}{Seed of the random numbers.}
+\item{codaPkg}{Write CODA files to \code{working.directory} (or a temporary
+directory) and return their names instead of the results.}
+
+\item{working.directory}{Directory of the model and data files.}
+
+\item{bugs.seed}{Seed of the random numbers.}
 
 \item{cores}{Chains run in parallel on this many cores.}
 
 \item{refresh}{Print progress every \code{refresh} iterations; 0 is silent.}
 
-\item{...}{Other arguments of \code{bugs()} (\code{debug}, \code{working.directory},
-\code{OpenBUGS.pgm}, \code{bugs.directory}, \code{codaPkg}, \code{useWINE}) are accepted and
-ignored.}
+\item{...}{Other arguments of \code{R2OpenBUGS::bugs()} (\code{OpenBUGS.pgm},
+\code{useWINE}, \code{WINE}, \code{newWINE}, \code{WINEPATH}) are accepted and ignored.}
 }
 \value{
 An object of class \code{bugs}, as R2OpenBUGS returns.
 }
 \description{
 Runs a model written in the BUGS language as OpenBUGS understands it, with
-the arguments and the result of \code{R2OpenBUGS::bugs()} and
-\code{R2WinBUGS::bugs()}. Nothing outside R is needed.
+the arguments and the result of \code{R2OpenBUGS::bugs()}. Nothing outside R
+is needed.
 }
 \examples{
 code <- "model {
@@ -64,6 +87,6 @@ code <- "model {
   tau ~ dgamma(0.01, 0.01)
 }"
 fit <- bugs(list(y = c(1.2, 0.8, 1.9, 1.1), N = 4), list(list(mu = 0, tau = 1), list(mu = 1, tau = 2)),
-            c("mu", "tau"), code, n.chains = 2, n.iter = 1000, seed = 1)
+            c("mu", "tau"), 1000, code, n.chains = 2)
 fit$summary
 }
