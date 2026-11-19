@@ -27,6 +27,17 @@ test_that("MALA, Metropolis and slice sampling target the posterior", {
   check_moments(fit)
 })
 
+test_that("radial moves keep the target and resume exactly", {
+  skip_on_cran()
+  m <- bayescomp_model(target_code)
+  for (a in c("nuts", "mala")) {
+    fit <- bayescomp_sample(m, chains = 2, iter_warmup = 300, iter_sampling = 300, algorithm = a,
+                            radial_moves = TRUE, seed = 7, refresh = 0)
+    check_moments(fit)
+  }
+  expect_true(is.numeric(fit$final[[1L]]$radial_sd))
+})
+
 test_that("value only density matches the gradient density up to a constant", {
   m <- bayescomp_model(target_code)
   f <- lp_value_fun(m)

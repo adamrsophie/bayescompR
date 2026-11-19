@@ -332,6 +332,8 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   w <- windows_new(nw, cfg$adapt_init_buffer, cfg$adapt_term_buffer, cfg$adapt_window)
   est <- est_new(n, dense)
   fisher <- isTRUE(cfg$fisher)
+  radial <- isTRUE(cfg$radial)
+  rad_sd <- cfg$radial_sd %||% (1 / sqrt(n))
   if (fisher) estg <- est_new(n, FALSE)
   if (adapt && hamiltonian) st$eps <- init_stepsize(st, q0)
   off <- as.integer(cfg$sampling_offset %||% 0L)
@@ -366,6 +368,17 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
     # shrink along with the moves
     s <- if (cfg$algorithm == "elliptical_slice" && it <= nw) slice_transition(st, q) else trans(st, q)
     q <- s$q
+    if (radial) {
+      # radial move (Ostmeyer 2024): scale the distance to the center by
+      # exp(g); the Jacobian of the scaling in n dimensions is exp(n g)
+      g <- stats::rnorm(1, 0, rad_sd)
+      qn <- st$center + (q - st$center) * exp(g)
+      lpn <- st$lp(qn)
+      la <- lpn - s$lp + n * g
+      a <- if (is.finite(la)) min(1, exp(la)) else 0
+      if (stats::runif(1) < a) { q <- qn; s$q <- qn; s$lp <- lpn }
+      if (it <= nw) rad_sd <- rad_sd * exp((a - 0.5) / sqrt(it))
+    }
     st$eps <- eps_nominal
     if (it <= nw && adapt) {
       if (tune_step) st$eps <- dual_avg_learn(da, s$accept_stat)
@@ -430,5 +443,5 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
        # the state after the last transition, for an exact continuation: an
        # interrupt can stop a transition halfway through its random numbers
        final = list(q = q, rng = get0(".Random.seed", envir = globalenv(), inherits = FALSE), exact = !stopped,
-                    center = st$center, n_sampling = off + max(0L, n_done - nw)))
+                    center = st$center, radial_sd = if (radial) rad_sd, n_sampling = off + max(0L, n_done - nw)))
 }

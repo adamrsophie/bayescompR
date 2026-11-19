@@ -21,6 +21,14 @@
   the kernel Stein discrepancy of a fit's draws with the inverse
   multiquadric kernel, which also detects bias.
 
+* `bayescomp_sample()` gains `radial_moves`: after each transition a move
+  scales the distance to the warmup mean (Ostmeyer 2024), which helps heavy
+  tailed targets.
+
+* `bayescomp_check_approximation()` starts short NUTS chains from a
+  Pathfinder, variational or Laplace fit and flags variables whose mean or
+  sd moves away from the approximation.
+
 * `bayescomp_pdmp()` simulates event times exactly by thinning against a
   piecewise constant rate bound built on a grid along the path, with an
   adaptive horizon (Andral and Kamatani 2024), instead of integrating the

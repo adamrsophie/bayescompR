@@ -66,3 +66,13 @@ test_that("Laplace calls are checked as in stanc", {
                "covariance function", class = "bayescomp_semantic_error")
   expect_silent(bayescomp_check(paste0(f, "model { target += laplace_marginal_tol(lik, (y,), 1, kf, (x, a), [0, 0]', 1e-8, 100, 1, 100, 1); }")))
 })
+
+test_that("short MCMC runs flag a poor approximation and pass an exact one", {
+  skip_on_cran()
+  m <- bayescomp_model("parameters { real<lower=0> s; real mu; } model { s ~ gamma(1.5, 1); mu ~ normal(0, s); }")
+  r <- bayescomp_check_approximation(bayescomp_laplace(m, seed = 1), chains = 4, iter = 150, seed = 1)
+  expect_true(any(r$flag))
+  m2 <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(1, 2); }")
+  r2 <- bayescomp_check_approximation(bayescomp_laplace(m2, seed = 1), chains = 4, iter = 150, seed = 1)
+  expect_false(any(r2$flag))
+})
