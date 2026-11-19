@@ -107,6 +107,9 @@ bugs_make_block <- function(M, ids, desc) {
   k <- M$nodes$stmt[ids[1L]]
   s <- M$stmts[[k]]
   L <- unique(unlist(lapply(desc, `[[`, "logical")))
+  # logical nodes that no stochastic node depends on are computed once per
+  # recorded iteration instead (bugs_feeds)
+  L <- L[M$feeds[L]]
   C <- unlist(lapply(desc, `[[`, "stoch"))
   owner <- rep(seq_along(ids), vapply(desc, function(x) length(x$stoch), 1L))
   K <- length(M$cells[[ids[1L]]])
@@ -596,7 +599,19 @@ bugs_update <- function(M, b) {
 
 # ---- setting up ---------------------------------------------------------------------------
 
+# logical nodes with a stochastic descendant
+bugs_feeds <- function(M) {
+  n <- length(M$nodes$kind)
+  f <- logical(n)
+  for (i in rev(M$order)) if (M$nodes$kind[i] == "logical") {
+    ch <- M$children[[i]]
+    f[i] <- any(M$nodes$kind[ch] == "stochastic") || any(f[ch])
+  }
+  f
+}
+
 bugs_blocks <- function(M) {
+  M$feeds <- bugs_feeds(M)
   U <- which(M$nodes$kind == "stochastic" & !M$nodes$obs)
   U <- U[order(M$rank[U])]
   desc <- lapply(U, function(i) bugs_desc(M, i))
@@ -742,8 +757,11 @@ bugs_monitor <- function(M, vars) {
 # the state of one chain: the compiled model with its values and samplers
 bugs_chain_init <- function(M, inits, init_how) {
   bugs_initialize(M, inits, init_how)
-  list(M = M, blocks = bugs_blocks(M))
+  blocks <- bugs_blocks(M)
+  rest <- which(M$nodes$kind == "logical" & !M$const & !M$feeds)
+  list(M = M, blocks = blocks, rest = bugs_logical_groups(M, rest))
 }
+bugs_write_rest <- function(st) for (g in st$rest) st$M$stmts[[g$stmt]]$fn$write(g$rows)
 
 # run n iterations; every thin-th one after `skip` is recorded, and the
 # running sums of the unobserved variables are kept in `means` if given
@@ -761,6 +779,7 @@ bugs_chain_run <- function(st, n, adapting, mon, deviance, skip = 0L, thin = 1L,
     }
     if (k < length(keep) && t == keep[k + 1L]) {
       k <- k + 1L
+      bugs_write_rest(st)
       row <- unlist(lapply(mon, function(m) get(m$var, envir = M$S)[m$cells]), use.names = FALSE)
       if (deviance) row <- c(row, devf())
       out[k, ] <- row
@@ -771,6 +790,7 @@ bugs_chain_run <- function(st, n, adapting, mon, deviance, skip = 0L, thin = 1L,
     }
     if (refresh > 0L && t %% refresh == 0L) message(sprintf("chain %d: iteration %d / %d", chain, t, n))
   }
+  bugs_write_rest(st)
   list(state = st, draws = out)
 }
 
