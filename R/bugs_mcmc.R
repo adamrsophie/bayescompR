@@ -622,8 +622,11 @@ bugs_blocks <- function(M) {
     dd <- desc[as.character(ids)]
     for (cl in bugs_color(M, ids, dd)) blocks[[length(blocks) + 1L]] <- bugs_make_block(M, ids[cl], dd[cl])
   }
-  # blocks in the order of their first node, as in a sweep through the graph
-  blocks[order(vapply(blocks, function(b) min(M$rank[b$ids]), 1L))]
+  # OpenBUGS updates nodes in the order the model declares them; JAGS in
+  # the order of the graph
+  key <- if (M$dialect == "openbugs") vapply(blocks, function(b) b$stmt * 1e9 + min(M$rank[b$ids]), 0)
+         else vapply(blocks, function(b) min(M$rank[b$ids]), 1L)
+  blocks[order(key)]
 }
 
 # initial values: given ones, then the typical value of the prior (JAGS) or
