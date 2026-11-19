@@ -169,7 +169,7 @@ test_that("invalid sampler controls are refused", {
   m <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 1); }")
   expect_error(bayescomp_sample(m, metric = "dense_e", inv_metric = matrix(c(1, 0.5, 0, 1), 2), chains = 1, seed = 1, refresh = 0),
                "inv_metric")
-  expect_error(bayescomp_pdmp(m, dt = 0), "dt")
+  expect_error(bayescomp_pdmp(m, grid_size = 0), "grid_size")
 })
 
 test_that("generated quantities of tempering, ensembles and RJMCMC are reproducible", {

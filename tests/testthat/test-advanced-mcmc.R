@@ -102,6 +102,7 @@ test_that("piecewise deterministic samplers target the posterior", {
     fit <- bayescomp_pdmp(m, meth, chains = 2, iter_warmup = 150, iter_sampling = 500, seed = 1)
     moments_ok(fit, 0.25)
     expect_true(all(fit$events > 0))
+    expect_true(all(fit$bound_violations < 5))
   }
 })
 

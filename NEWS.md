@@ -2,6 +2,13 @@
 
 ## New features
 
+* `bayescomp_pdmp()` simulates event times exactly by thinning against a
+  piecewise constant rate bound built on a grid along the path, with an
+  adaptive horizon (Andral and Kamatani 2024), instead of integrating the
+  rate with a fixed step, which biased the output. Proposals above the bound
+  are counted in `bound_violations`. `dt` is deprecated and ignored; the new
+  `grid_size` sets the grid.
+
 * Models written in the BUGS language run without JAGS, OpenBUGS, WinBUGS,
   MultiBUGS or NIMBLE installed. `jags()` takes the arguments of
   `R2jags::jags()` and returns its result; `bugs()` does the same for
