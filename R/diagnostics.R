@@ -146,10 +146,12 @@ bayescomp_ess_basic <- function(x) ess_raw(split_chains(as_draws_matrix_chains(x
 #' @export
 bayescomp_ess_quantile <- function(x, probs = c(0.05, 0.95)) {
   x <- as_draws_matrix_chains(x)
-  # as posterior 1.7.1: the indicator x <= q for every quantile
+  # as posterior 1.8.0: the indicator of the tail beyond the quantile,
+  # x <= q below the median and x >= q above it
   vapply(probs, function(p) {
+    if (p == 1) p <- (length(x) - 0.5) / length(x)
     q <- stats::quantile(x, p, names = FALSE)
-    ind <- x <= q
+    ind <- if (p > 0.5) x >= q else x <= q
     if (na_diag(ind + 0)) return(NA_real_)
     ess_raw(split_chains(ind + 0))
   }, 0)
@@ -224,4 +226,239 @@ bayescomp_check_gradients <- function(model, init = 2, seed = NULL, epsilon = 1e
   }, 0)
   out <- data.frame(param = seq_along(u) - 1L, value = u, model = r$grad, finite_diff = fd, error = r$grad - fd)
   structure(out, log_prob = r$value, passed = all(abs(out$error) <= error))
+}
+
+#' Multivariate effective sample size
+#'
+#' The multivariate effective sample size of Vats, Flegal and Jones (2019),
+#' `n (det(Lambda) / det(Sigma))^(1 / p)`, where `Lambda` is the sample
+#' covariance of the draws and `Sigma` the replicated batch means estimate of
+#' the asymptotic covariance of their mean (Vats and Knudson 2021), together
+#' with the number of effective draws that estimates every mean to relative
+#' precision `epsilon` with confidence `1 - alpha`.
+#'
+#' @param x A `bayescomp_fit`, or an array of draws (iterations by chains by
+#'   variables).
+#' @param variables Variables of a fit to use (default all parameters).
+#' @param alpha,epsilon Confidence level and relative precision of the
+#'   stopping rule.
+#' @return A list with `mess`, `min_ess` (the effective sample size the
+#'   stopping rule asks for), `enough` (`mess >= min_ess`) and `batch_size`.
+#' @references Vats, D., Flegal, J. M. and Jones, G. L. (2019). Multivariate
+#'   output analysis for Markov chain Monte Carlo. *Biometrika* 106, 321 to
+#'   337. Vats, D. and Knudson, C. (2021). Revisiting the Gelman-Rubin
+#'   diagnostic. *Statistical Science* 36, 518 to 529.
+#' @examples
+#' set.seed(1)
+#' x <- array(rnorm(4000), c(500, 4, 2))
+#' bayescomp_ess_multi(x)$mess
+#' @export
+bayescomp_ess_multi <- function(x, variables = NULL, alpha = 0.05, epsilon = 0.05) {
+  if (inherits(x, "bayescomp_fit")) {
+    x <- bayescomp_draws(x, variables, format = "array")
+    if (is.null(variables)) x <- x[, , !grepl("__$", dimnames(x)[[3L]]), drop = FALSE]
+  }
+  x <- as.array(x)
+  if (length(dim(x)) == 2L) x <- array(x, c(dim(x)[1L], 1L, dim(x)[2L]))
+  n <- dim(x)[1L]; m <- dim(x)[2L]; p <- dim(x)[3L]
+  keep <- vapply(seq_len(p), function(j) !na_diag(x[, , j]), TRUE)
+  x <- x[, , keep, drop = FALSE]; p <- sum(keep)
+  if (p == 0L || n < 10L) stop("too few draws or no varying variable", call. = FALSE)
+  b <- max(1L, floor(sqrt(n)))
+  a <- n %/% b
+  if (a * m <= p) stop(sprintf("%d batch means for %d variables: the batch means covariance is singular; use more draws or fewer variables", a * m, p), call. = FALSE)
+  X <- matrix(x[seq_len(a * b), , , drop = FALSE], ncol = p)
+  mu <- colMeans(X)
+  # batch means of every chain, centered at the overall mean
+  bm <- do.call(rbind, lapply(seq_len(m), function(ch) {
+    xc <- matrix(x[seq_len(a * b), ch, , drop = FALSE], ncol = p)
+    rowsum(xc, rep(seq_len(a), each = b)) / b
+  }))
+  bm <- sweep(bm, 2L, mu)
+  Sigma <- b * crossprod(bm) / (a * m - 1)
+  Lambda <- stats::cov(X)
+  ld <- function(S) as.numeric(determinant(S, logarithm = TRUE)$modulus)
+  N <- a * b * m
+  mess <- N * exp((ld(Lambda) - ld(Sigma)) / p)
+  min_ess <- 2^(2 / p) * pi / (p * gamma(p / 2))^(2 / p) * stats::qchisq(1 - alpha, p) / epsilon^2
+  list(mess = mess, min_ess = min_ess, enough = mess >= min_ess, batch_size = b)
+}
+
+#' Nested R-hat
+#'
+#' The nested R-hat of Margossian et al. (2024) for many short chains
+#' started in groups (superchains) from the same point: it compares the
+#' variance between superchain means with the variance within superchains,
+#' and is reliable even with one draw per chain.
+#'
+#' @param x Matrix of draws, iterations by chains (a vector is one draw per
+#'   chain).
+#' @param superchain Superchain of each chain (a vector with one entry per
+#'   column); every superchain needs the same number of chains.
+#' @return A number; values near 1 (Margossian et al. suggest below about
+#'   1.01 with many chains) indicate the chains have forgotten their starts.
+#' @references Margossian, C. C., Hoffman, M. D., Sountsov, P., Riou-Durand,
+#'   L., Vehtari, A. and Gelman, A. (2024). Nested R-hat: assessing the
+#'   convergence of Markov chain Monte Carlo when running many short chains.
+#'   *Bayesian Analysis*.
+#' @examples
+#' set.seed(1)
+#' x <- matrix(rnorm(10 * 64), 10, 64)
+#' bayescomp_rhat_nested(x, rep(1:8, each = 8))
+#' @export
+bayescomp_rhat_nested <- function(x, superchain) {
+  x <- if (is.null(dim(x))) matrix(x, nrow = 1L) else as.matrix(x)
+  if (length(superchain) != ncol(x)) stop("'superchain' needs one entry per chain", call. = FALSE)
+  g <- split(seq_len(ncol(x)), superchain)
+  M <- unique(lengths(g))
+  if (length(g) < 2L || length(M) != 1L) stop("need at least two superchains of equal size", call. = FALSE)
+  N <- nrow(x)
+  cm <- colMeans(x)
+  sm <- vapply(g, function(i) mean(cm[i]), 0)
+  B <- stats::var(sm)
+  W <- mean(vapply(g, function(i) {
+    bk <- if (M > 1L) stats::var(cm[i]) else 0
+    wk <- if (N > 1L) mean(apply(x[, i, drop = FALSE], 2L, stats::var)) else 0
+    bk + wk
+  }, 0))
+  sqrt(1 + B / W)
+}
+
+#' Local R-hat
+#'
+#' The local R-hat of Moins et al. (2023): the R-hat of the indicator
+#' `x <= z`, maximized over thresholds `z` taken at quantiles of the pooled
+#' draws (`R-hat_infinity`). It detects chains that agree in location and
+#' scale but differ in the shape or the tails of their distributions, which
+#' rank normalized R-hat can miss.
+#'
+#' @param x Matrix of draws, iterations by chains.
+#' @param n_grid Number of thresholds.
+#' @return A number, `R-hat_infinity`, with attribute `"local"`, a data frame
+#'   of thresholds `z` and their R-hat.
+#' @references Moins, T., Arbel, J., Dutfoy, A. and Girard, S. (2023). On the
+#'   use of a local R-hat to improve MCMC convergence diagnostic. *Bayesian
+#'   Analysis*.
+#' @examples
+#' set.seed(1)
+#' x <- cbind(rnorm(500), runif(500, -sqrt(3), sqrt(3)))
+#' bayescomp_rhat_local(x)
+#' @export
+bayescomp_rhat_local <- function(x, n_grid = 100L) {
+  x <- as_draws_matrix_chains(x)
+  if (ncol(x) < 2L) x <- split_chains(x)
+  z <- unique(stats::quantile(x, seq(0, 1, length.out = n_grid + 2L)[-c(1L, n_grid + 2L)], names = FALSE))
+  r <- vapply(z, function(zz) { ind <- (x <= zz) + 0; if (na_diag(ind)) NA_real_ else rhat_raw(ind) }, 0)
+  structure(max(r, na.rm = TRUE), local = data.frame(z = z, rhat = r))
+}
+
+#' Kernel Stein discrepancy
+#'
+#' The kernel Stein discrepancy of the draws of a fit with the inverse
+#' multiquadric kernel `(1 + |x - y|^2)^(-1/2)` on the unconstrained scale
+#' (Gorham and Mackey 2017). It needs only the gradient of the log density at
+#' the draws, is zero only for the target, and so measures sample quality
+#' including bias that convergence diagnostics cannot see. Compare values
+#' between samplers or runs of one model; the scale has no absolute meaning.
+#'
+#' @param fit A `bayescomp_fit` with unconstrained draws.
+#' @param max_draws Draws used (thinned evenly); the cost is quadratic.
+#' @return A number.
+#' @references Gorham, J. and Mackey, L. (2017). Measuring sample quality
+#'   with kernels. *Proceedings of the 34th International Conference on
+#'   Machine Learning*, 1292 to 1301.
+#' @examples
+#' \donttest{
+#' m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
+#' fit <- bayescomp_sample(m, chains = 1, iter_sampling = 500, seed = 1, refresh = 0)
+#' bayescomp_ksd(fit)
+#' }
+#' @export
+bayescomp_ksd <- function(fit, max_draws = 1000L) {
+  if (!inherits(fit, "bayescomp_fit") || is.null(fit$unconstrained)) stop("'fit' must be a fit with unconstrained draws", call. = FALSE)
+  X <- do.call(rbind, fit$unconstrained)
+  if (nrow(X) > max_draws) X <- X[unique(round(seq(1, nrow(X), length.out = max_draws))), , drop = FALSE]
+  lpg <- model_lpg(fit$model, jacobian = TRUE, propto = FALSE)
+  B <- t(apply(X, 1L, function(u) lpg(u)$grad))
+  if (ncol(X) == 1L) B <- matrix(B, ncol = 1L)
+  d <- ncol(X); beta <- -0.5
+  sq <- rowSums(X^2)
+  R2 <- pmax(outer(sq, sq, "+") - 2 * tcrossprod(X), 0)
+  S <- 1 + R2
+  bx <- rowSums(B * X)
+  # b_j . (x_i - x_j) - b_i . (x_i - x_j)
+  cross <- (tcrossprod(X, B) - matrix(bx, nrow(X), nrow(X), byrow = TRUE)) -
+    (matrix(bx, nrow(X), nrow(X)) - tcrossprod(B, X))
+  K0 <- tcrossprod(B) * S^beta + 2 * beta * S^(beta - 1) * cross -
+    2 * beta * (d * S^(beta - 1) + 2 * (beta - 1) * S^(beta - 2) * R2)
+  sqrt(max(mean(K0), 0))
+}
+
+# halves a and b of each chain as separate chains
+abind_chains <- function(a, b) {
+  out <- array(0, c(dim(a)[1L], 2L * dim(a)[2L], dim(a)[3L]))
+  out[, 2L * seq_len(dim(a)[2L]) - 1L, ] <- a
+  out[, 2L * seq_len(dim(a)[2L]), ] <- b
+  out
+}
+
+#' R* convergence diagnostic
+#'
+#' R* of Lambert and Vehtari (2022): a random forest is trained to tell from
+#' the values of all variables which (split) chain a draw came from. R* is
+#' the classification accuracy on held out draws times the number of
+#' chains: about 1 when the chains are indistinguishable, larger when they
+#' are not. Unlike R-hat it uses the joint distribution of the variables.
+#' Needs the ranger package.
+#'
+#' @param x A `bayescomp_fit`, or an array of draws (iterations, chains,
+#'   variables).
+#' @param variables Variables to use (default: all except the sampler
+#'   columns).
+#' @param split Split each chain in half first.
+#' @param training_prop Share of the draws used to train the classifier.
+#' @param uncertainty Return draws of R* from the predicted chain
+#'   probabilities of the held out draws instead of one value.
+#' @param nsim Number of such draws.
+#' @param ... Arguments passed to [ranger::ranger()].
+#' @return A number, or a vector of `nsim` draws.
+#' @references Lambert, B. and Vehtari, A. (2022). R*: A robust MCMC
+#'   convergence diagnostic with uncertainty using decision tree classifiers.
+#'   *Bayesian Analysis* 17(2), 353 to 379.
+#' @examples
+#' \donttest{
+#' if (requireNamespace("ranger", quietly = TRUE)) {
+#'   set.seed(1)
+#'   x <- array(rnorm(4000), c(500, 4, 2))
+#'   bayescomp_rstar(x)
+#' }
+#' }
+#' @export
+bayescomp_rstar <- function(x, variables = NULL, split = TRUE, training_prop = 0.7, uncertainty = FALSE, nsim = 1000L, ...) {
+  if (!requireNamespace("ranger", quietly = TRUE)) stop("bayescomp_rstar() needs the 'ranger' package", call. = FALSE)
+  if (inherits(x, "bayescomp_fit")) {
+    x <- bayescomp_draws(x, variables, format = "array")
+    if (is.null(variables)) x <- x[, , !grepl("__$", dimnames(x)[[3L]]), drop = FALSE]
+  }
+  x <- as.array(x)
+  if (length(dim(x)) == 2L) x <- array(x, c(dim(x)[1L], 1L, dim(x)[2L]))
+  if (split) {
+    h <- dim(x)[1L] %/% 2L
+    x <- abind_chains(x[seq_len(h), , , drop = FALSE], x[dim(x)[1L] - h + seq_len(h), , , drop = FALSE])
+  }
+  n <- dim(x)[1L]; m <- dim(x)[2L]; p <- dim(x)[3L]
+  if (m < 2L) stop("R* needs at least two chains", call. = FALSE)
+  X <- matrix(x, n * m, p)
+  X <- X[, apply(X, 2L, function(v) !na_diag(v)), drop = FALSE]
+  if (ncol(X) == 0L) stop("no varying variable", call. = FALSE)
+  d <- data.frame(X, chain = factor(rep(seq_len(m), each = n)))
+  train <- sample.int(nrow(d), floor(training_prop * nrow(d)))
+  fit <- ranger::ranger(chain ~ ., data = d[train, ], probability = uncertainty, ...)
+  pred <- stats::predict(fit, data = d[-train, ])$predictions
+  truth <- as.integer(d$chain[-train])
+  if (!uncertainty) return(m * mean(as.integer(pred) == truth))
+  vapply(seq_len(nsim), function(s) {
+    lab <- apply(pred, 1L, function(pr) sample.int(m, 1L, prob = pr))
+    m * mean(lab == truth)
+  }, 0)
 }

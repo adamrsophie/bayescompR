@@ -19,7 +19,7 @@ make_fit <- function(model, res, cfg, method, seed, elapsed) {
     draws = draws, sampler_diagnostics = sdiag, method = method, model = model,
     n_warmup_saved = nw, step_size = vapply(res, `[[`, 0, "step_size"),
     inv_metric = lapply(res, `[[`, "inv_metric"),
-    unconstrained = lapply(res, `[[`, "q"),
+    unconstrained = lapply(res, `[[`, "q"), final = lapply(res, `[[`, "final"),
     time = list(chains = do.call(rbind, lapply(res, `[[`, "time")), total = elapsed),
     config = cfg, seed = if (is.null(seed)) attr(res, "seed") else seed,
     diagnostics = if (!is.null(res[[1L]]$diagnostics)) lapply(res, `[[`, "diagnostics"),
@@ -253,9 +253,9 @@ bayescomp_diagnose <- function(fit, quiet = FALSE) {
   col <- function(v) if (!is.null(sd) && v %in% dimnames(sd)[[3L]] && !all(is.na(sd[, , v]))) sd[, , v, drop = FALSE]
   nt <- if (is.null(sd)) 0L else dim(sd)[1L] * dim(sd)[2L]
   algo <- fit$config$algorithm
-  ham <- is.null(algo) || algo %in% c("nuts", "hmc")
+  ham <- is.null(algo) || algo %in% c("nuts", "walnuts", "hmc")
   dv <- if (ham) col("divergent__")
-  td <- if (is.null(algo) || identical(algo, "nuts")) col("treedepth__")
+  td <- if (is.null(algo) || algo %in% c("nuts", "walnuts")) col("treedepth__")
   en <- if (ham) col("energy__")
   div <- if (is.null(dv)) NA_integer_ else sum(dv, na.rm = TRUE)
   mtd <- fit$config$max_treedepth %||% 10L

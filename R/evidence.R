@@ -6,14 +6,17 @@
 #'
 #' Estimates the marginal likelihood by shrinking a set of live points
 #' through nested likelihood contours (Skilling 2006). New points are drawn
-#' from the prior restricted to the current contour with random walk
-#' Metropolis whose covariance comes from the live points. The prior must be
+#' from the prior restricted to the current contour by hit-and-run slice
+#' sampling along random directions whitened by the covariance of the live
+#' points (Handley, Hobson and Lasenby 2015; Yallup et al. 2026), which needs
+#' no step size and rejects nothing. The prior must be
 #' proper; it is the model evaluated on an empty data set, as in
 #' [bayescomp_sgmcmc()].
 #'
 #' @param model A `bayescomp_model` with an observation count in its data.
 #' @param num_live Number of live points.
-#' @param mcmc_steps Constrained Metropolis steps per replacement.
+#' @param mcmc_steps Slice sampling steps per replacement; the default is
+#'   three times the number of parameters, at least 5.
 #' @param dlogz Stop when the evidence left in the live points is below
 #'   this on the log scale.
 #' @param max_iter Maximum number of replacements.
@@ -24,7 +27,11 @@
 #' @return A `bayescomp_fit` with method `"nested"` and elements
 #'   `log_evidence`, `log_evidence_se` and `information`.
 #' @references Skilling, J. (2006). Nested sampling for general Bayesian
-#'   computation. *Bayesian Analysis* 1, 833 to 859.
+#'   computation. *Bayesian Analysis* 1, 833 to 859. Handley, W. J., Hobson,
+#'   M. P. and Lasenby, A. N. (2015). PolyChord: next-generation nested
+#'   sampling. *Monthly Notices of the Royal Astronomical Society* 453, 4384
+#'   to 4398. Yallup, D. et al. (2026). Nested slice sampling.
+#'   arXiv:2601.23252.
 #' @examples
 #' \donttest{
 #' m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }
@@ -34,13 +41,14 @@
 #' fit$log_evidence
 #' }
 #' @export
-bayescomp_nested <- function(model, num_live = 400L, mcmc_steps = 20L, dlogz = 0.01, max_iter = 50000L,
+bayescomp_nested <- function(model, num_live = 400L, mcmc_steps = NULL, dlogz = 0.01, max_iter = 50000L,
                              n_name = "N", subset = NULL, output_samples = 1000L, seed = NULL) {
   check_model(model)
   n <- model$dim
   if (n == 0L) stop("the model has no parameters", call. = FALSE)
   sp <- split_setup(model, n_name, subset)
   nl <- as_count(num_live, "num_live", 10L)
+  mcmc_steps <- if (is.null(mcmc_steps)) max(5L, 3L * n) else as_count(mcmc_steps, "mcmc_steps", 1L)
   S <- as_count(output_samples, "output_samples", 1L)
   t0 <- proc.time()[["elapsed"]]
   pseed <- next_seed(seed)
@@ -55,7 +63,6 @@ bayescomp_nested <- function(model, num_live = 400L, mcmc_steps = 20L, dlogz = 0
     LP <- apply(P, 1L, lprior)
     dead_u <- list(); dead_l <- numeric(0); dead_L <- numeric(0); converged <- FALSE
     log_z <- -Inf
-    scale <- 1
     log_x <- 0
     for (i in seq_len(max_iter)) {
       w <- which.min(LL)
@@ -71,16 +78,30 @@ bayescomp_nested <- function(model, num_live = 400L, mcmc_steps = 20L, dlogz = 0
       k <- sample.int(nl, 1L)
       while (k == w && nl > 1L) k <- sample.int(nl, 1L)
       x <- P[k, ]; lx <- LL[k]; px <- LP[k]
-      acc <- 0
       for (s in seq_len(mcmc_steps)) {
-        y <- x + scale * as.vector(Lc %*% stats::rnorm(n)) / sqrt(n)
-        py <- lprior(y)
-        if (is.finite(py) && log(stats::runif(1)) < py - px) {
+        # slice sampling of the prior along a whitened random direction,
+        # restricted to L > Lstar, with a width of three live point scales
+        z <- stats::rnorm(n)
+        d <- as.vector(Lc %*% (z / sqrt(sum(z^2))))
+        lev <- px - stats::rexp(1)
+        inside <- function(t) {
+          y <- x + t * d; py <- lprior(y)
+          if (!is.finite(py) || py <= lev) return(NULL)
           ly <- logL(y)
-          if (ly > Lstar) { x <- y; lx <- ly; px <- py; acc <- acc + 1 }
+          if (ly > Lstar) list(y = y, py = py, ly = ly)
+        }
+        lo <- -3 * stats::runif(1); hi <- lo + 3; j <- 0L
+        while (j < 50L && !is.null(inside(lo))) { lo <- lo - 3; j <- j + 1L }
+        j <- 0L
+        while (j < 50L && !is.null(inside(hi))) { hi <- hi + 3; j <- j + 1L }
+        repeat {
+          t <- stats::runif(1, lo, hi)
+          v <- inside(t)
+          if (!is.null(v)) { x <- v$y; px <- v$py; lx <- v$ly; break }
+          if (t < 0) lo <- t else hi <- t
+          if (hi - lo < 1e-12) break
         }
       }
-      scale <- scale * exp((acc / mcmc_steps - 0.5) / 5)
       P[w, ] <- x; LL[w] <- lx; LP[w] <- px
       if (max(LL) + log_x < log_z + log(expm1(dlogz))) { converged <- TRUE; break }
     }

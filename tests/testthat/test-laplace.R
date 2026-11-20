@@ -66,3 +66,27 @@ test_that("Laplace calls are checked as in stanc", {
                "covariance function", class = "bayescomp_semantic_error")
   expect_silent(bayescomp_check(paste0(f, "model { target += laplace_marginal_tol(lik, (y,), 1, kf, (x, a), [0, 0]', 1e-8, 100, 1, 100, 1); }")))
 })
+
+test_that("short MCMC runs flag a poor approximation and pass an exact one", {
+  skip_on_cran()
+  m <- bayescomp_model("parameters { real<lower=0> s; real mu; } model { s ~ gamma(1.5, 1); mu ~ normal(0, s); }")
+  expect_warning(fit <- bayescomp_laplace(m, seed = 1), "Pareto k")
+  expect_gt(fit$pareto_k, 0.7)
+  r <- bayescomp_check_approximation(fit, chains = 4, iter = 150, seed = 1)
+  expect_true(any(r$flag))
+  m2 <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(1, 2); }")
+  expect_no_warning(fit2 <- bayescomp_laplace(m2, seed = 1))
+  r2 <- bayescomp_check_approximation(fit2, chains = 4, iter = 150, seed = 1)
+  expect_false(any(r2$flag))
+})
+
+test_that("Laplace with several starts forms a mixture over the modes", {
+  m <- bayescomp_model("parameters { vector[2] x; } model { target += log_mix(0.3,
+    multi_normal_lpdf(x | [-3, 0]', [[1, 0.8], [0.8, 1]]), multi_normal_lpdf(x | [3, 1]', [[1, -0.5], [-0.5, 2]])); }")
+  f <- bayescomp_laplace(m, seed = 2, draws = 2000, num_modes = 8)
+  x <- bayescomp_extract(f, "x")
+  expect_equal(mean(x[, 1] < 0), 0.3, tolerance = 0.1)
+  d <- f$draws[, 1, ]
+  # the mixture is exact here: posterior over approximation is constant
+  expect_lt(stats::sd(d[, "log_p__"] - d[, "log_g__"]), 1e-3)
+})

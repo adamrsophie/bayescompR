@@ -15,6 +15,7 @@ bayescomp_parallel_tempering(
   adapt_schedule = TRUE,
   reference = c("pathfinder", "standard"),
   reference_scale = 1.5,
+  adapt_reference = FALSE,
   init = 2,
   seed = NULL,
   cores = getOption("mc.cores", 1L),
@@ -39,12 +40,20 @@ bayescomp_parallel_tempering(
 
 \item{reference, reference_scale}{Gaussian reference, as in
 \code{\link[=bayescomp_smc]{bayescomp_smc()}}.}
+
+\item{adapt_reference}{Refit the Gaussian reference to the draws of the
+posterior replica at the end of each full warmup round (variational
+reference). The reference stays fixed during sampling. A moment matched
+reference can settle on one mode when the posterior replica has not yet
+visited the others, so it is off by default.}
 }
 \value{
 A \code{bayescomp_fit} with draws from the \code{beta = 1} replica and
 elements \code{betas} (final schedule per chain), \code{swap_rate} (acceptance per
 adjacent pair, per chain), \code{barrier} (estimated global communication
-barrier) and \code{log_evidence} (stepping stone estimate per chain).
+barrier), \code{log_evidence} (stepping stone estimate per chain) and
+\code{suggested_num_temps} (about twice the barrier plus one, the number of
+temperatures beyond which more replicas no longer help).
 }
 \description{
 Parallel tempering
@@ -62,5 +71,7 @@ mean(bayescomp_extract(fit, "x") > 0)
 Syed, S., Bouchard-Cote, A., Deligiannidis, G. and Doucet, A.
 (2022). Non-reversible parallel tempering: a scalable highly parallel
 MCMC scheme. \emph{Journal of the Royal Statistical Society B} 84, 321 to
-350.
+350. Surjanovic, N., Syed, S., Bouchard-Cote, A. and Campbell, T. (2022).
+Parallel tempering with a variational reference. \emph{Advances in Neural
+Information Processing Systems} 35.
 }

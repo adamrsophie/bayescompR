@@ -24,13 +24,22 @@
 #   adj   adjoint of each node
 .ad$tape <- NULL
 .ad$n <- 0L
+# value only mode (tape_start(values_only = TRUE)): values that depend on
+# the leaves are still "bcad", so densities see which arguments are
+# parameters and drop constants as under a tape, but nothing is recorded
+.ad$vonly <- FALSE
+# marks mode (propto_value_fun): no tape, and only the non data arguments
+# of densities (wrapped by rt_keep) are "bcad"
+.ad$vmark <- FALSE
 
-tape_start <- function() {
+tape_start <- function(values_only = FALSE) {
   # an environment, not a list: tape_restore() moves the outer lists back and
   # drops these bindings, so the outer tape is not shared and not copied by
   # its next node
   old <- new.env(parent = emptyenv())
   old$tape <- .ad$tape; old$n <- .ad$n; old$cap <- .ad$cap
+  old$vonly <- .ad$vonly; .ad$vonly <- values_only
+  old$vmark <- .ad$vmark; .ad$vmark <- FALSE
   .ad$check <- isTRUE(getOption("bayescompR.check_adjoints"))
   old$gr <- .ad$gr; .ad$gr <- NULL
   old$ids <- .ad$ids; .ad$ids <- NULL
@@ -45,7 +54,7 @@ tape_start <- function() {
   old
 }
 tape_restore <- function(old) {
-  .ad$tape <- old$tape; .ad$n <- old$n; .ad$cap <- old$cap
+  .ad$tape <- old$tape; .ad$n <- old$n; .ad$cap <- old$cap; .ad$vonly <- old$vonly; .ad$vmark <- old$vmark
   .ad$gr <- old$gr; old$gr <- NULL
   .ad$ids <- old$ids; old$ids <- NULL
   .ad$adj <- old$adj; old$adj <- NULL
@@ -75,6 +84,7 @@ val <- function(x) if (inherits(x, "bcad")) x$v else x
 ad_leaf <- function(v) {
   if (is.null(.ad$tape)) stop("internal error: no active tape", call. = FALSE)
   storage.mode(v) <- "double"
+  if (.ad$vonly) return(structure(list(v = v, id = 1L), class = "bcad"))
   n <- .ad$n + 1L
   if (n > .ad$cap) tape_grow()
   .ad$n <- n
@@ -87,7 +97,16 @@ ad_leaf <- function(v) {
 # `grads` is a function(g) returning a list, one adjoint contribution per
 # parent (NULL for non differentiable parents).
 ad_node <- function(v, parents, grads) {
-  if (is.null(.ad$tape)) return(v)
+  if (is.null(.ad$tape)) {
+    # marks mode: a value computed from a marked argument (a GLM linear
+    # predictor) stays marked, so the density it reaches keeps its terms
+    if (.ad$vmark) for (p in parents) if (inherits(p, "bcad")) return(structure(list(v = v, id = 0L), class = "bcad"))
+    return(v)
+  }
+  if (.ad$vonly) {
+    for (p in parents) if (inherits(p, "bcad")) return(structure(list(v = v, id = 1L), class = "bcad"))
+    return(v)
+  }
   np <- length(parents)
   ids <- integer(np)
   for (k in seq_len(np)) {
@@ -242,12 +261,21 @@ bshape <- function(a, b) {
   invisible(NULL)
 }
 
+# g * d where a zero adjoint gives zero even when d is not finite (an
+# element of a container that does not reach the result, such as the off
+# diagonal of sqrt(D) at 0, must not turn the gradient into NaN)
+gmul <- function(g, d) {
+  r <- g * d
+  if (anyNA(r)) r[rep_len(g == 0, length(r))] <- 0
+  r
+}
+
 # elementwise unary op with derivative function df(x, y) giving dy/dx
 ad_unary <- function(x, f, df) {
   vx <- val(x)
   y <- f(vx)
   if (!inherits(x, "bcad")) return(y)
-  ad_node(y, list(x), function(g) list(g * df(vx, y)))
+  ad_node(y, list(x), function(g) list(gmul(g, df(vx, y))))
 }
 
 # elementwise binary op; da(a, b, y), db(a, b, y) are partial derivatives
@@ -259,8 +287,8 @@ ad_binary <- function(a, b, f, da, db) {
   if (!inherits(a, "bcad") && !inherits(b, "bcad")) return(y)
   ad_node(y, list(a, b), function(g) {
     list(
-      if (inherits(a, "bcad")) unbroadcast(g * da(va, vb, y), va),
-      if (inherits(b, "bcad")) unbroadcast(g * db(va, vb, y), vb)
+      if (inherits(a, "bcad")) unbroadcast(gmul(g, da(va, vb, y)), va),
+      if (inherits(b, "bcad")) unbroadcast(gmul(g, db(va, vb, y)), vb)
     )
   })
 }
@@ -349,8 +377,8 @@ Summary.bcad <- function(..., na.rm = FALSE) {
   switch(.Generic,
     sum = ad_sum(x),
     prod = ad_prod(x),
-    max = ad_select(x, which.max(val(x))),
-    min = ad_select(x, which.min(val(x))),
+    max = ad_select(x, which_ext(val(x), which.max)),
+    min = ad_select(x, which_ext(val(x), which.min)),
     stop("unsupported summary ", .Generic, " for differentiable values", call. = FALSE))
 }
 

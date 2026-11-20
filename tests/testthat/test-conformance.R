@@ -9,7 +9,8 @@ test_that("all samplers target a correlated Gaussian", {
   cases <- list(
     list(algorithm = "nuts", metric = "diag_e"), list(algorithm = "nuts", metric = "dense_e"),
     list(algorithm = "nuts", metric = "unit_e"), list(algorithm = "hmc", metric = "diag_e"),
-    list(algorithm = "mala", metric = "dense_e"), list(algorithm = "metropolis", metric = "dense_e"),
+    list(algorithm = "mala", metric = "dense_e"), list(algorithm = "barker", metric = "dense_e"),
+    list(algorithm = "metropolis", metric = "dense_e"),
     list(algorithm = "slice", metric = "diag_e"), list(algorithm = "elliptical_slice", metric = "dense_e"))
   for (cs in cases) {
     label <- paste(cs$algorithm, cs$metric)

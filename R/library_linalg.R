@@ -11,6 +11,11 @@ sym_check <- function(f, A, tol = 1e-8) {
   if (any(!is.finite(v))) stop_domain(sprintf("%s: matrix has non-finite elements", f))
   if (max(abs(v - t(v)), 0) > tol * max(1, max(abs(v)))) stop_domain(sprintf("%s: matrix is not symmetric", f))
 }
+# symmetric and positive definite, as Stan's check_pos_definite
+spd_check <- function(f, A) {
+  sym_check(f, A)
+  if (inherits(try(chol(val(A)), silent = TRUE), "try-error")) stop_domain(sprintf("%s: matrix is not positive definite", f))
+}
 square_check <- function(f, A) {
   v <- val(A)
   if (nrow(v) != ncol(v)) stop_domain(sprintf("%s: matrix is not square (%d x %d)", f, nrow(v), ncol(v)))
@@ -26,11 +31,12 @@ ad_cholesky <- function(A) {
   if (!is_ad(A)) return(L)
   ad_node(L, list(A), function(Lbar) {
     Lbar[upper.tri(Lbar)] <- 0
-    P <- crossprod(L, Lbar)
+    # R %*% Lbar is t(L) %*% Lbar; crossprod() is slower on the reference BLAS
+    P <- R %*% Lbar
     P[upper.tri(P)] <- 0
     diag(P) <- diag(P) / 2
-    Linv <- backsolve(R, diag(nrow(L)))  # R^{-1} = L^{-T}
-    S <- Linv %*% P %*% t(Linv)
+    # S = L^{-T} P L^{-1} by two triangular solves instead of an inverse
+    S <- t(backsolve(R, t(backsolve(R, P))))
     list(0.5 * (S + t(S)))
   })
 }
@@ -61,7 +67,9 @@ ad_log_det <- function(A) {
   d <- determinant(vA, logarithm = TRUE)
   y <- as.numeric(d$modulus)
   if (!is_ad(A)) return(y)
-  ad_node(y, list(A), function(g) list(g * t(solve(vA))))
+  # at a singular matrix the inverse does not exist and the gradient is not
+  # finite, so the point is rejected
+  ad_node(y, list(A), function(g) list(g * t(tryCatch(solve(vA), error = function(e) vA * NaN))))
 }
 def("log_determinant", "matrix", "real", ad_log_det)
 def("log_determinant_spd", "matrix", "real", function(A) {
@@ -75,7 +83,14 @@ def("determinant", "matrix", "real", function(A) {
   vA <- val(A)
   y <- det(vA)
   if (!is_ad(A)) return(y)
-  ad_node(y, list(A), function(g) list(g * y * t(solve(vA))))
+  # the gradient is the cofactor matrix, from the SVD A = U S V' as
+  # det(U) det(V) U diag(prod of the other singular values) V', which also
+  # holds at a singular matrix
+  ad_node(y, list(A), function(g) {
+    s <- svd(vA)
+    p <- vapply(seq_along(s$d), function(i) prod(s$d[-i]), 0)
+    list(g * sign(det(s$u)) * sign(det(s$v)) * (s$u %*% (p * t(s$v))))
+  })
 })
 
 # solve A x = B
@@ -102,10 +117,10 @@ ad_solve <- function(A, B, f = "mdivide_left") {
 def("mdivide_left", c("matrix", "vector"), "vector", function(A, b) ad_solve(A, b))
 def("mdivide_left", c("matrix", "matrix"), "matrix", function(A, B) ad_solve(A, B))
 def("mdivide_left_spd", c("matrix", "vector"), "vector", function(A, b) {
-  sym_check("mdivide_left_spd", A); ad_solve(A, b, "mdivide_left_spd")
+  spd_check("mdivide_left_spd", A); ad_solve(A, b, "mdivide_left_spd")
 })
 def("mdivide_left_spd", c("matrix", "matrix"), "matrix", function(A, B) {
-  sym_check("mdivide_left_spd", A); ad_solve(A, B, "mdivide_left_spd")
+  spd_check("mdivide_left_spd", A); ad_solve(A, B, "mdivide_left_spd")
 })
 # B / A = B * inverse(A) = t(solve(t(A), t(B)))
 mdivide_right_impl <- function(B, A, rowvec = FALSE) {
@@ -136,25 +151,47 @@ ad_tri_solve <- function(L, B, f) {
   if (!any_ad(L, B)) return(out)
   ad_node(out, list(L, B), function(g) {
     G <- if (vec) matrix(g, ncol = 1L) else g
-    Bbar <- backsolve(t(vL), G)
-    gL <- -Bbar %*% t(X)
-    gL[upper.tri(gL)] <- 0
-    list(if (is_ad(L)) gL, if (is_ad(B)) (if (vec) as.vector(Bbar) else Bbar))
+    Bbar <- backsolve(vL, G, upper.tri = FALSE, transpose = TRUE)
+    gL <- if (is_ad(L)) {
+      r <- -Bbar %*% t(X)
+      r[upper.tri(r)] <- 0
+      r
+    }
+    list(gL, if (is_ad(B)) (if (vec) as.vector(Bbar) else Bbar))
   })
 }
 def("mdivide_left_tri_low", c("matrix", "vector"), "vector", function(L, b) ad_tri_solve(L, b, "mdivide_left_tri_low"))
 def("mdivide_left_tri_low", c("matrix", "matrix"), "matrix", function(L, B) ad_tri_solve(L, B, "mdivide_left_tri_low"))
-# B * inverse(tri(L)): X = t(solve(t(L), t(B))) with t(L) upper triangular
+# B * inverse(tri(L)) by triangular solves, O(K^2) per row of B:
+# t(X) = solve(t(L), t(B)); reverse Bbar = G * inverse(t(L)), Lbar = -t(X) Bbar
 ad_tri_solve_right <- function(B, L, rowvec) {
+  f <- "mdivide_right_tri_low"
   L <- as_dbl(L)
   B <- as_dbl(B)
-  Bm <- if (rowvec) as_row(B) else B
   vL <- val(L)
-  mask <- matrix(1, nrow(vL), ncol(vL))
-  mask[upper.tri(mask)] <- 0
-  Lt <- ad_transpose(L * mask)
-  X <- ad_transpose(ad_solve(Lt, ad_transpose(Bm), "mdivide_right_tri_low"))
-  if (rowvec) ad_reshape(X, NULL) else X
+  vL[upper.tri(vL)] <- 0
+  vB <- val(B)
+  Bm <- if (rowvec) matrix(vB, nrow = 1L) else vB
+  square_check(f, L)
+  if (ncol(Bm) != nrow(vL)) stop_shape(sprintf("%s: columns of the right side (%d) must match rows of the matrix (%d)", f, ncol(Bm), nrow(vL)))
+  if (any(diag(vL) == 0)) stop_domain(paste0(f, ": matrix is singular"))
+  Xt <- backsolve(vL, t(Bm), upper.tri = FALSE, transpose = TRUE)
+  out <- if (rowvec) as.vector(Xt) else t(Xt)
+  if (!any_ad(L, B)) return(out)
+  ad_node(out, list(L, B), function(g) {
+    Gt <- if (rowvec) matrix(g, ncol = 1L) else t(g)
+    Bbar_t <- forwardsolve(vL, Gt)
+    gL <- if (is_ad(L)) {
+      r <- -Xt %*% t(Bbar_t)
+      r[upper.tri(r)] <- 0
+      r
+    }
+    gB <- if (is_ad(B)) {
+      r <- t(Bbar_t)
+      if (rowvec) { if (is.null(dim(vB))) as.vector(r) else array(r, dim(vB)) } else r
+    }
+    list(gL, gB)
+  })
 }
 def("mdivide_right_tri_low", c("row_vector", "matrix"), "row_vector", function(b, L) ad_tri_solve_right(b, L, TRUE))
 def("mdivide_right_tri_low", c("matrix", "matrix"), "matrix", function(B, L) ad_tri_solve_right(B, L, FALSE))
@@ -453,9 +490,14 @@ gp_sqdist <- function(x1, x2) {
   if (a$d != b$d) stop_shape("gp covariance: points have different dimensions")
   va <- val(x1); vb <- val(x2)
   if (!any_ad(x1, x2)) {
+    # differences per dimension, not |a|^2 + |b|^2 - 2ab, which loses the
+    # separation of points far from the origin; the same arithmetic as the
+    # fixed input ARD node, so values with and without gradients agree
     A <- if (is.null(dim(va))) matrix(va, ncol = 1L) else va
     B <- if (is.null(dim(vb))) matrix(vb, ncol = 1L) else vb
-    return(pmax(outer(rowSums(A^2), rowSums(B^2), `+`) - 2 * A %*% t(B), 0))
+    d2 <- 0
+    for (k in seq_len(ncol(A))) d2 <- d2 + outer(A[, k], B[, k], `-`)^2
+    return(if (is.matrix(d2)) d2 else matrix(d2, nrow(A), nrow(B)))
   }
   A <- if (is.null(dim(va))) ad_reshape(as_dbl(x1), c(length(va), 1L)) else as_dbl(x1)
   B <- if (is.null(dim(vb))) ad_reshape(as_dbl(x2), c(length(vb), 1L)) else as_dbl(x2)
@@ -511,14 +553,63 @@ gp_ard_scale <- function(name, x, l) {
   as_dbl(x) / ad_gather(as_dbl(l), rep(seq_len(ncol(v)), each = nrow(v)), dim(v))
 }
 gp_kernel_ard <- function(name, kfun) {
+  sqexp <- identical(kfun, k_sqexp)
   def(name, c("vector[]", "real", "real[]"), "matrix", function(x, s, l) {
     chk_positive(name, "magnitude", s)
+    if (sqexp && !is_ad(x) && any_ad(s, l)) return(gp_sqexp_ard_fixed(name, x, x, s, l))
+    if (!is_ad(x)) return(kfun(gp_ard_fixed_d2(name, x, x, l), as_dbl(s), 1))
     xs <- gp_ard_scale(name, x, l)
     kfun(gp_sqdist(xs, xs), as_dbl(s), 1)
   })
   def(name, c("vector[]", "vector[]", "real", "real[]"), "matrix", function(x1, x2, s, l) {
     chk_positive(name, "magnitude", s)
+    if (sqexp && !any_ad(x1, x2) && any_ad(s, l)) return(gp_sqexp_ard_fixed(name, x1, x2, s, l))
+    if (!any_ad(x1, x2)) return(kfun(gp_ard_fixed_d2(name, x1, x2, l), as_dbl(s), 1))
     kfun(gp_sqdist(gp_ard_scale(name, x1, l), gp_ard_scale(name, x2, l)), as_dbl(s), 1)
+  })
+}
+# scaled squared distances of fixed inputs, sum_k (x1[i,k] - x2[j,k])^2 / l_k^2,
+# from the differences of the inputs (scaling first would lose the
+# separation of points far from the origin)
+gp_ard_fixed_d2 <- function(name, x1, x2, l) {
+  v1 <- val(x1); v2 <- val(x2)
+  chk_positive(name, "length scale", l)
+  if (ncol(v1) != nelem(l) || ncol(v2) != nelem(l)) stop_shape(sprintf("%s: the number of length scales must equal the dimension of the inputs", name))
+  # scale the differences, then square: squaring a tiny length scale first
+  # underflows and gives 0 * Inf on the diagonal
+  il <- flat(1 / as_dbl(l))
+  d2 <- 0
+  for (k in seq_len(ncol(v1))) {
+    z <- outer(v1[, k], v2[, k], `-`) * ad_select(il, k)
+    d2 <- d2 + z * z
+  }
+  d2
+}
+# Squared exponential ARD covariance of fixed inputs as one node: the
+# forward pass is the one the general path computes; the reverse pass
+# accumulates the magnitude and length scale adjoints from the kept
+# covariance, recomputing the differences of one input dimension at a time,
+# instead of a tape of gathers and products per dimension.
+gp_sqexp_ard_fixed <- function(name, x1, x2, s, l) {
+  v1 <- val(x1); v2 <- val(x2)
+  chk_positive(name, "length scale", l)
+  vl <- as.numeric(val(l))
+  if (ncol(v1) != length(vl) || ncol(v2) != length(vl)) stop_shape(sprintf("%s: the number of length scales must equal the dimension of the inputs", name))
+  # differences before scaling, so points far from the origin keep their
+  # separation
+  dd <- function(k) outer(v1[, k], v2[, k], `-`) / vl[k]
+  d2 <- 0
+  for (k in seq_along(vl)) d2 <- d2 + dd(k)^2
+  vs <- val(s)
+  E <- exp(-0.5 * d2)
+  C <- vs * vs * E
+  ad_node(C, list(s, l), function(g) {
+    W <- g * C
+    # dC/dl_k = C * dd_k^2 / l_k, whose limit is zero where the covariance
+    # has decayed to zero, also when dd_k^2 overflows
+    tl <- function(k) { t <- W * dd(k)^2; t[W == 0] <- 0; sum(t) / vl[k] }
+    list(if (is_ad(s)) 2 * vs * sum(g * E),
+         if (is_ad(l)) vapply(seq_along(vl), tl, 0))
   })
 }
 gp_kernel_ard("gp_exp_quad_cov", k_sqexp)

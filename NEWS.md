@@ -1,3 +1,365 @@
+# bayescompR (development version)
+
+## New features
+
+* Loop vectorization now also rewrites reads with two loop dependent
+  positions, such as `B[t[n], id[n]]` on a matrix or two dimensional array
+  and `b[id[n]][t[n]]` on an array of vectors, into one gather. A Poisson
+  model with a compound symmetry random effect over 240 rows written this way
+  takes about a tenth of the time per gradient. An element of a product
+  with a group vector, `(L * z[id[n]])[t[n]]` with `L` the same in every
+  iteration, is read from the one product `L * to_matrix(z)` instead of a
+  product per row.
+
+* `bayescomp_sample(algorithm = "barker")` adds the Barker proposal, a
+  gradient based random walk that flips a Gaussian step toward the gradient
+  and is far less sensitive to the step size than MALA.
+
+* `bayescomp_sample(adapt_metric = "fisher")` adapts a diagonal metric from
+  the variances of the draws and of the gradients,
+  `sqrt(var(draws) / var(gradients))`, which minimizes a Fisher divergence,
+  as nutpie does.
+
+* `bayescomp_ess_multi()` computes the multivariate effective sample size
+  of Vats, Flegal and Jones (2019) with replicated batch means and their
+  minimum ESS stopping rule; `bayescomp_rhat_nested()` computes nested
+  R-hat for many short chains grouped in superchains.
+
+* `bayescomp_rstar()` computes R* (Lambert and Vehtari 2022) with a random
+  forest from the ranger package, now in Suggests.
+
+* `bayescomp_rhat_local()` computes the local R-hat of Moins et al. (2023),
+  which catches chains that differ in shape or tails, and `bayescomp_ksd()`
+  the kernel Stein discrepancy of a fit's draws with the inverse
+  multiquadric kernel, which also detects bias.
+
+* `bayescomp_sample()` gains `radial_moves`: after each transition a move
+  scales the distance to the warmup mean (Ostmeyer 2024), which helps heavy
+  tailed targets.
+
+* `bayescomp_sample(algorithm = "walnuts")` runs WALNUTS (Bou-Rabee,
+  Carpenter, Kleppe and Liu 2025): NUTS whose macro steps are each split
+  into as many leapfrog micro steps, a power of two, as keep the energy
+  error below 0.3. On Neal's funnel in 6 dimensions it reached the lower
+  tail of the log scale (5% quantile -4.76, truth -4.93; NUTS -2.96) with
+  no divergences; on easy targets it costs about twice the gradients of
+  NUTS per effective draw.
+
+* `bayescomp_sample(antithetic = TRUE)` runs the chains in pairs that share
+  their random numbers, with negated momenta in the second chain of each
+  pair (Piponi, Hoffman and Sountsov 2020). For HMC on a normal posterior
+  the standard deviation of the estimated mean fell tenfold.
+
+* `bayescomp_laplace()` reports the Pareto k of the importance ratios of
+  its draws (`fit$pareto_k`) and warns above 0.7, where the approximation
+  is too far from the posterior to rely on.
+
+* `bayescomp_laplace()` gains `num_modes`: the optimizer starts from that
+  many random points, and the distinct modes form a mixture of Gaussians
+  weighted by `exp(lp) |Sigma|^(1/2)`, so a multimodal posterior gets one
+  approximation that covers its modes.
+
+* `bayescomp_check_approximation()` starts short NUTS chains from a
+  Pathfinder, variational or Laplace fit and flags variables whose mean or
+  sd moves away from the approximation.
+
+* `bayescomp_pdmp()` simulates event times exactly by thinning against a
+  piecewise constant rate bound built on a grid along the path, with an
+  adaptive horizon (Andral and Kamatani 2024), instead of integrating the
+  rate with a fixed step, which biased the output. Proposals above the bound
+  are counted in `bound_violations`. `dt` is deprecated and ignored; the new
+  `grid_size` sets the grid.
+
+* Models written in the BUGS language run without JAGS, OpenBUGS, WinBUGS,
+  MultiBUGS or NIMBLE installed. `jags()` takes the arguments of
+  `R2jags::jags()` and returns its result; `bugs()` does the same for
+  `R2OpenBUGS::bugs()`; `jags.model()`, `update()`, `coda.samples()` and
+  `jags.samples()` follow rjags; and `nimbleCode()`, `nimbleModel()`,
+  `configureMCMC()`, `buildMCMC()`, `compileNimble()`, `runMCMC()` and
+  `nimbleMCMC()` follow NIMBLE. The models are compiled and sampled in R
+  with Gibbs updates (conjugate gamma, beta, Dirichlet, Wishart and normal
+  updates for linear models, enumeration of discrete nodes) and slice
+  sampling. Models can be files, text, or R functions; data and initial
+  values can be R lists, R dump files, or OpenBUGS list and rectangular
+  files. `vignette("bugs")` lists what is supported.
+
+* `bayescomp_ensemble()` gains `method = "side"` (a Gaussian step along the
+  difference of two walkers, tuned toward acceptance 0.5) and
+  `method = "slice"` (ensemble slice sampling with a scale tuned during
+  warmup). The stretch move warns above 50 parameters, where it mixes poorly.
+
+* `bayescomp_parallel_tempering()` gains `adapt_reference`, which refits the
+  Gaussian reference to the posterior replica after each full warmup round,
+  and reports `suggested_num_temps` from the estimated barrier.
+
+* Finite discrete BUGS nodes use metropolized Gibbs, which proposes a value
+  other than the current one and so moves more often than plain Gibbs while
+  keeping the same conditional. Slice widths adapt to four times the mean
+  jump, near the width that minimizes stepping out cost.
+
+* Multivariate normal BUGS nodes (`dmnorm`, `dmnorm.vcov`) that are not
+  partly observed are updated by elliptical slice sampling, which moves the
+  whole vector at once without rejections or tuning, in place of
+  coordinatewise slice sampling.
+
+* Scalar BUGS nodes with normal, t, logistic or double exponential priors
+  that share stochastic children, such as regression coefficients, also get
+  a joint update after their own: an exact multivariate normal draw when the
+  children are normal with means linear in them, otherwise an adaptive
+  random walk Metropolis move. On a regression with two strongly correlated
+  predictors the effective sample size of the coefficients rose from 52 to
+  2040 (normal) and from 64 to 584 (logistic) in 6000 draws. Conjugate
+  normal updates also read their children's arguments as vectors, which
+  made them several times faster.
+
+* Hidden Markov chains of categorical BUGS nodes, `z[t] ~ dcat(P[z[t-1], ])`,
+  are updated as a whole by forward filtering backward sampling instead of
+  one node at a time.
+
+* `bayescomp_nested()` draws new live points by hit-and-run slice sampling
+  along whitened random directions instead of random walk Metropolis, and
+  `mcmc_steps` now defaults to three times the number of parameters.
+
+* `bayescomp_smc()` gains `waste_free = TRUE` with `chain_length`: each
+  stage resamples one particle in `chain_length` and keeps every state of
+  their MCMC chains (Dau and Chopin 2022). It needs about a quarter of the
+  density evaluations of the default moves; on a test model its evidence
+  estimates were as accurate but its posterior means varied more across
+  seeds, so it is not the default.
+
+## Bug fixes
+
+* `bayescomp_ess_quantile()` and `bayescomp_ess_tail()` use the indicator
+  of the upper tail (`x >= q`) for probabilities above one half, as
+  posterior 1.8.0 does.
+
+* Loops whose loop invariant expressions read `target()` or call `_lp`,
+  `_rng` or `_jacobian` functions are no longer vectorized; the rewrite
+  evaluated them once instead of once per iteration and changed the density.
+* `cov_matrix` and `cholesky_factor_cov` parameters no longer give a NaN
+  gradient for large off diagonal values.
+* Metropolis and slice sampling work with the native Cranelift and LLVM
+  backends; they evaluated every point as -Inf.
+* `cholesky_factor_corr` and `corr_matrix` parameters have a finite log
+  Jacobian where `tanh()` of the unconstrained value rounds to 1; it was
+  -Inf with a NaN gradient.
+* GLM densities reject an intercept vector whose length is neither 1 nor the
+  number of rows of `x`; it was recycled.
+* `bayescomp_log_lik()` gives fused GLMs (`normal_id_glm`,
+  `bernoulli_logit_glm`, `poisson_log_glm`, `neg_binomial_2_log_glm`,
+  `binomial_logit_glm`, `ordered_logistic_glm`, `categorical_logit_glm`) one
+  column per row of `x`, as the equivalent unfused statement; it gave one
+  joint column. `bayescomp_posterior_predict()` draws from them.
+* `bayescomp_posterior_predict()` works for multivariate statements such as
+  `multi_normal`, with one column per element of the left side; it failed
+  with "number of items to replace is not a multiple of replacement length".
+* Pointwise terms of statements with a shared vector argument, such as
+  `categorical_logit` log odds or `ordered_logistic` cutpoints, no longer
+  split that argument across observations; they failed with a domain error.
+  Cutpoints given as one vector per observation now give one term per
+  observation instead of one joint term.
+* `ordered_logistic_rng()` and `ordered_probit_rng()` with a vector of
+  linear predictors draw one category per element; they mixed the
+  cutpoints of all elements into one draw.
+
+* The squared distances of GP covariance functions with fixed inputs are
+  computed from coordinate differences, so points far from the origin keep
+  their separation, and values with and without gradients agree.
+* Two sided truncation of a distribution with an upper tail function
+  (`T[40, 41]` on a standard normal) uses upper tail probabilities for
+  intervals above the median; the density was infinite.
+* Loop vectorization no longer rewrites a loop over a user defined density
+  (whose scalar and vector overloads can differ), evaluates nothing for a
+  loop with no iterations, and leaves loops whose bounds read `target()`,
+  have effects or change in the body as loops.
+* A `for` loop tests its upper bound before every iteration, as Stan does,
+  when the bound reads `target()` or a variable the body assigns; it was
+  evaluated once.
+* The prepared `normal_id_glm()` factorization centers the data and
+  standardizes the residuals, so data far from the origin and very small
+  or large scales give the same value and gradient as the unfused
+  density; it falls back to the observation level sum when its rounding
+  error is not negligible against the scale.
+* Truncation of a density with a scalar outcome and vector parameters
+  subtracts one normalizing term per element.
+* Metropolis, slice, ensemble, Gibbs and reverse diffusion samplers use the
+  density with constants dropped, as HMC does. The two targets differ by more than a
+  constant when a program reads `target()` or drops a data only statement
+  in a parameter dependent branch. Evidence estimators and model
+  probabilities keep the normalized density.
+* ARD covariance functions of fixed inputs (`gp_exp_quad_cov`, Matern and
+  exponential with one length scale per dimension) take differences
+  before scaling, so the covariance does not depend on the origin.
+* `cholesky_factor_corr` and `corr_matrix` parameters compute
+  `1 - tanh(u)^2` from `u`, so the factor stays valid (with a positive
+  diagonal) far in the tails.
+* `neg_binomial_2` and `neg_binomial_2_log` are one node with stable
+  partials: finite gradients for very small and very large precision and
+  log means up to the largest finite values.
+* SG-MCMC and expectation propagation build the data subsets with the seed
+  of the full model, so random numbers drawn in transformed data are the
+  same in every subset (a model without a seed whose transformed data
+  draws random numbers is an error).
+* Pointwise `poisson_log` and `neg_binomial_2_log` terms broadcast a scalar
+  outcome over vector parameters; pointwise replay binds each chain's
+  `CHAIN_ID`; observations keep the name of an indexed variable; draws that
+  record different observations are an error; truncated terms of
+  observations outside their bounds are `-Inf`.
+* `bayescomp_sample(resume = )` reports an exact continuation only when
+  every chain finished and kept its state and random number stream, and
+  transformed data random numbers are the same (with a seed);
+  `fixed_param` chains keep their thinning phase. Generated quantities
+  draw from their own substream of each chain's stream, so a continuation
+  also continues them instead of repeating or overlapping draws.
+  `step_size = NULL` and `inv_metric = NULL` keep the adapted values, and
+  a different `algorithm` warns that it is ignored.
+* Expectation propagation warns about sites whose update never succeeded
+  and does not report convergence while one is missing.
+* Adaptation windows of one draw keep the metric; `bayescomp_hessian_vector()`
+  scales its step by the coordinates the direction moves; the ODE
+  `max_num_steps` applies between output times, as in Stan;
+  `multi_normal_cholesky` with arrays of vectors checks its Cholesky
+  factor (as Stan does) and `multi_student_t` the sizes of its arguments; SG-MCMC rejects a nonpositive step size;
+  Laplace fits record the seed they drew.
+* Complex compound assignment (`z += 1`, `w *= z`) uses complex
+  arithmetic; `z ^ b` keeps the derivatives of the other elements when one
+  base is zero and gives `0 ^ 0 = 1`; `norm()`, `arg()`, `proj()` and the
+  complex elementary functions accept real arguments.
+* `categorical_logit_glm` with a `row_vector` of predictors uses every
+  outcome and checks the size of the intercepts, and its `_lupmf` is 0 for
+  data only arguments; `normal_id_glm` accepts a `vector` of predictors as
+  one column; a target increment that is `NA` is an error.
+* `gamma`, `rayleigh` and `loglogistic` densities require a positive
+  variate, as in Stan; `mdivide_left_spd` rejects a matrix that is not
+  positive definite.
+* `determinant()` has the cofactor gradient also at a singular matrix, and
+  `log_determinant()` rejects the point instead of failing.
+* `student_t` and `cauchy` densities are finite for residuals whose square
+  overflows.
+* `max()` and `min()` of a container with NaN return NaN.
+* Arguments of user defined functions called in the model block keep the
+  terms of `_lupdf` densities they reach, also after `floor()` of a
+  parameter.
+* A zero adjoint no longer turns an infinite elementwise derivative into
+  NaN, so `sqrt()` of a matrix with zeros has a finite gradient.
+* `return .5;` parses, an integer division of a multi indexed value
+  (`x[idx][1] / 2`) compiles, and sizes of top level variables that depend
+  on parameters through an integer are a semantic error.
+* SG-MCMC, expectation propagation and nested sampling accept a model that
+  declares `int<lower=1> N`; parallel SMC and EP workers draw from seeds
+  per stage instead of overlapping streams, and a worker error is
+  reported.
+* `wishart_cholesky_lpdf()` and `inv_wishart_cholesky_lpdf()` reject
+  matrices that are not Cholesky factors (lower triangular with a positive
+  diagonal), as Stan does, instead of evaluating them through the
+  covariance matrices.
+
+## New features
+
+* `bayescomp_sgmcmc()` gains `lp_every`, so the exact full data `lp__` can
+  be computed at only some saved draws or not at all.
+* `bayescomp_log_lik()` and `bayescomp_posterior_predict()` support
+  truncated statements (renormalized per observation; predictive draws by
+  inversion for the normal, which also works far in the tails, and by
+  rejection otherwise) and user defined densities (one joint term per
+  statement), and `bayescomp_log_lik(group = )` sums observations by group
+  for leave one group out cross validation. Pointwise terms use the
+  argument values the statement used, also when an argument reads
+  `target()`.
+* `bayescomp_hessian()` and `bayescomp_hessian_vector()` give the Hessian
+  of the log density and its product with a vector, by central differences
+  of the gradient with steps scaled to the parameter values.
+* `bayescomp_capabilities()` lists the algorithm behind each ODE, DAE,
+  algebraic solver, integrator, `map_rect` and `reduce_sum` interface, the
+  controls it honors and ignores, and how it is differentiated.
+* `bayescomp_sample(resume = )` continues a finished fit exactly: from the
+  state after the last transition (not the last kept draw) with the chain's
+  random number stream, transition controls and thinning phase, also after
+  a warmup only run, so the parameter draws equal those of one longer run.
+  `config$resume` of the result records whether a continuation was exact.
+
+## Performance
+
+* `multi_normal()` with a covariance that depends on parameters (a
+  marginal Gaussian process) computes its partials in the covariance
+  directly, as Stan does, instead of differentiating through the Cholesky
+  factor: about 4 times faster gradients with 200 observations. The
+  adjoint of `cholesky_decompose()` uses triangular solves instead of an
+  explicit inverse (about 1.6 times faster for latent Gaussian processes).
+
+* A truncated density with one bound and vector parameters computes its
+  normalizer with one vectorized `_lccdf` or `_lcdf` call instead of one
+  call per element (about 200 times faster over 1000 observations), and
+  loop vectorization now also rewrites truncated statements whose bounds
+  do not depend on the loop.
+
+* Loop vectorization also rewrites loops whose body declares scalar
+  locals (`real mu = ...;`, replaced by their values), uses
+  `dot_product(X[n], b)`, adds any scalar to `target` (including `_lcdf`
+  and `_lccdf` terms), or sits in a `profile` block: 10 to 28 times faster
+  gradients for such loops over 200 observations. A loop such as
+  `for (n in 1:N) y[n] ~ ordered_logistic(eta[n], c)` with a shared vector
+  argument (cutpoints, a simplex, logits) that does not depend on the loop
+  is rewritten as well (about 50 times faster over 300 observations).
+
+* Proportional log density values (Metropolis, slice, ensemble and Gibbs
+  sampling, ADVI, Pathfinder, optimization) no longer record a tape. The
+  program runs on plain numbers and only the parameter dependent arguments
+  of densities are marked, so each density drops the terms Stan drops
+  (about 1.4 times faster on a hierarchical regression). Programs with
+  user defined functions or solvers keep the class of parameter dependent
+  values without recording them.
+
+* The factorizations of Gaussian GLMs with fixed data are kept within a
+  memory budget instead of 64 per model, so models with many such
+  statements do not factor them again on every evaluation.
+
+* MALA and static HMC reuse the density and gradient of the retained state
+  (one evaluation per MALA transition instead of two), and NUTS computes the
+  inverse metric product once per leaf.
+* ADVI, flow VI and Laplace evaluate value only log densities without a
+  reverse sweep.
+* Fused densities compute partials only for differentiable arguments.
+* `mdivide_right_tri_low()` uses triangular solves.
+* The negative binomial precision partial no longer sums over large counts
+  whose result is discarded.
+* The negative binomial precision partial is one vectorized digamma
+  difference (with a series where the precision is large) instead of a sum
+  per observation.
+* Cholesky factors are kept for up to four fixed covariance matrices.
+* Covariance transforms build their index layout once per shape.
+* Multivariate normal and Student t densities transpose arrays of vectors
+  whole instead of splitting them into rows; a shared mean vector is
+  broadcast by one operation.
+* `cholesky_factor_corr` uses one node for the factor and one for the log
+  Jacobian instead of a scalar graph.
+* GLM linear predictors are one node, and `normal_id_glm` with fixed data, a
+  scalar intercept and a scalar scale uses a QR factorization prepared once,
+  so each evaluation costs O(P^2) instead of O(N P).
+* SG-MCMC initialization and expectation propagation reuse the joint value
+  and gradient that the optimizer asks for in two calls.
+* RMHMC carries the metric derivatives at the end of one leapfrog step into
+  the next.
+* NaN checks no longer allocate, and pointwise log likelihoods and
+  predictive draws compute and keep only the requested array.
+* Pointwise log likelihoods of the common univariate families are computed
+  for all observations at once, and predictive draws call the vectorized
+  `_rng` function once per statement.
+* Dirichlet densities of arrays of simplexes work on whole matrices instead
+  of splitting them into rows.
+* `integrate_1d()` and its variants evaluate the gradient of the integrand
+  once per integration point instead of once per point and parameter.
+* The `normal_id_glm` factorizations belong to the model instance, so
+  SG-MCMC and expectation propagation with many data subsets no longer
+  refactor at every evaluation.
+* `gp_exp_quad_cov()` with one length scale per dimension and fixed inputs
+  is one node with a dedicated reverse pass.
+* `wishart_cholesky` and `inv_wishart_cholesky` densities use the factors
+  directly (one triangular solve) instead of forming and refactoring the
+  covariance matrices.
+* The stiff ODE solver solves the forward sensitivity stages with one
+  factorization of the state block instead of the full augmented system.
+
 # bayescompR 0.1.0
 
 First release.

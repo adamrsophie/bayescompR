@@ -242,7 +242,7 @@ rt_dist_call <- function(fname, f, mask, ...) {
 rt_target_add <- function(ctx, v) {
   if (is.null(ctx)) stop_semantic("target can only be incremented in a log density context")
   vv <- val(v)
-  if (any(is.nan(vv))) stop_domain("target increment is NaN")
+  if (anyNA(vv)) stop_domain("target increment is NaN")
   n <- ctx$n_target + 1L
   # detach the list before writing so R modifies it in place instead of
   # copying it on every increment, and grow it by doubling
@@ -330,34 +330,53 @@ rt_normalized <- function(expr, ctx) {
 }
 
 # truncated density normalization
+# log of the probability mass of [lo, hi] under the distribution with
+# arguments `a` (a list)
+trunc_norm <- function(a, lo, hi, lcdf, lccdf, discrete, fam) {
+  lo_adj <- if (!is.null(lo) && discrete) lo - 1L else lo
+  if (!is.null(lo) && !is.null(hi)) {
+    if (val(lo) > val(hi)) stop_domain(sprintf("truncation of %s: lower bound is greater than upper bound", fam))
+    l_lo <- do.call(lcdf, c(list(lo_adj), a))
+    if (!is.null(lccdf) && all(val(l_lo) > -log(2))) {
+      # an interval in the upper tail, where both lower tail probabilities
+      # round to one: the difference of the upper tail probabilities
+      u_lo <- do.call(lccdf, c(list(lo_adj), a))
+      u_hi <- do.call(lccdf, c(list(hi), a))
+      if (all(val(u_hi) == -Inf)) return(u_lo)
+      return(ad_log_diff_exp(u_lo, u_hi))
+    }
+    l_hi <- do.call(lcdf, c(list(hi), a))
+    # a lower bound at the edge of the support: F(lo) = 0, and its
+    # gradient (often 0 / 0 there) must not enter
+    if (all(val(l_lo) == -Inf)) return(l_hi)
+    return(ad_log_diff_exp(l_hi, l_lo))
+  }
+  if (!is.null(lo)) return(do.call(lccdf, c(list(lo_adj), a)))
+  do.call(lcdf, c(list(hi), a))
+}
+
 rt_truncate <- function(ctx, y, lo, hi, lcdf, lccdf, args, discrete, fam) {
   vy <- as.vector(val(y))
-  N <- length(vy)
+  # one normalizer per term of the vectorized density: a scalar outcome with
+  # vector parameters is broadcast
+  N <- max(length(vy), vapply(args, function(a) length(val(a)), 1L))
   vlo <- if (is.null(lo)) NULL else val(lo)
   vhi <- if (is.null(hi)) NULL else val(hi)
   if ((!is.null(vlo) && any(vy < vlo)) || (!is.null(vhi) && any(vy > vhi))) {
     rt_target_add(ctx, -Inf)
     return(invisible(NULL))
   }
-  lo_adj <- if (!is.null(lo) && discrete) lo - 1L else lo
   scalar_args <- all(vapply(args, function(a) length(val(a)) == 1L, TRUE))
   if (!scalar_args && (isTRUE(attr(lcdf, "user")) || isTRUE(attr(lccdf, "user"))))
     stop_unsupported(sprintf("truncation of %s with a user defined cumulative function needs scalar parameters", fam))
-  one <- function(a) {
-    if (!is.null(lo) && !is.null(hi)) {
-      if (!is.null(vlo) && !is.null(vhi) && vlo > vhi) stop_domain(sprintf("truncation of %s: lower bound is greater than upper bound", fam))
-      l_lo <- do.call(lcdf, c(list(lo_adj), a))
-      l_hi <- do.call(lcdf, c(list(hi), a))
-      # a lower bound at the edge of the support: F(lo) = 0, and its
-      # gradient (often 0 / 0 there) must not enter
-      if (all(val(l_lo) == -Inf)) return(l_hi)
-      return(ad_log_diff_exp(l_hi, l_lo))
-    }
-    if (!is.null(lo)) return(do.call(lccdf, c(list(lo_adj), a)))
-    do.call(lcdf, c(list(hi), a))
-  }
+  one <- function(a) trunc_norm(a, lo, hi, lcdf, lccdf, discrete, fam)
   if (scalar_args) {
     rt_target_add(ctx, -N * one(args))
+  } else if (is.null(lo) || is.null(hi)) {
+    # one bound: the vectorized cumulative function of the scalar bound and
+    # the vector parameters is the sum of the N normalizers, one node
+    # instead of one per element
+    rt_target_add(ctx, -one(args))
   } else {
     for (i in seq_len(N)) {
       ai <- lapply(args, function(a) if (length(val(a)) == 1L) a else ad_select(flat(a), i))
@@ -419,31 +438,11 @@ profile_table <- function() {
 # a parameter dependent value that lost its derivative node (floor(), an
 # assigned constant) as a constant node, so propto keeps its density terms
 rt_keep <- function(x) {
-  if (inherits(x, "bcad") || !is.numeric(x) || is.null(.ad$tape)) return(x)
+  if (inherits(x, "bcad") || !is.numeric(x)) return(x)
+  # proportional values without a tape (see propto_value_fun): the
+  # argument is marked as differentiable for the density only
+  if (.ad$vmark) return(structure(list(v = x, id = 0L), class = "bcad"))
+  if (is.null(.ad$tape)) return(x)
   ad_leaf(x)
 }
 
-# pointwise log likelihood and predictive draws of one density statement on
-# data (see cg_pointwise())
-rt_pointwise <- function(ctx, label, full, rng, split, truncated, y, ...) {
-  if (truncated) stop_unsupported(sprintf("pointwise terms of the truncated statement on '%s' are not available", label))
-  args <- c(list(y), list(...))
-  vals <- lapply(args, function(a) val(a))
-  pw <- ctx$pw
-  if (!split) {
-    pw$ll[[length(pw$ll) + 1L]] <- as.numeric(do.call(full, vals))
-    pw$names[[length(pw$names) + 1L]] <- label
-    if (isTRUE(pw$rng)) pw$yrep[[length(pw$yrep) + 1L]] <- if (is.null(rng)) rep(NA_real_, length(vals[[1L]])) else as.numeric(do.call(rng, vals[-1L]))
-    return(invisible())
-  }
-  n <- max(lengths(vals))
-  el <- function(v, i) if (length(v) == 1L) v else v[[i]]
-  ll <- vapply(seq_len(n), function(i) as.numeric(do.call(full, lapply(vals, el, i = i))), 0)
-  k0 <- pw$count[[label]] %||% 0L
-  pw$count[[label]] <- k0 + n
-  pw$ll[[length(pw$ll) + 1L]] <- ll
-  pw$names[[length(pw$names) + 1L]] <- sprintf("%s[%d]", label, k0 + seq_len(n))
-  if (isTRUE(pw$rng)) pw$yrep[[length(pw$yrep) + 1L]] <-
-    if (is.null(rng)) rep(NA_real_, n) else vapply(seq_len(n), function(i) as.numeric(do.call(rng, lapply(vals[-1L], el, i = i))), 0)
-  invisible()
-}

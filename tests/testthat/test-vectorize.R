@@ -25,14 +25,48 @@ test_that("independent loops are vectorized with the same density and gradient",
   same_as_loop(paste(dd, "parameters { real a; } model { vector[N] mu = rep_vector(a, N); for (n in 1:N) mu[n] += 2 * x[n]; y ~ normal(mu, 1); }"), d, 0.3, 1L)
   same_as_loop(paste(dd, "parameters { real a; } transformed parameters { vector[N] m; for (n in 1:N) m[n] = inv_logit(a + y[n]); } model { y ~ normal(m, 1); }"), d, 0.3, 1L)
   same_as_loop(paste(dd, "parameters { real a; real<lower=0> s; } model { for (j in 1:2) for (n in 1:N) y[n] ~ normal(a * j - x[n] / s, s); }"), d, c(0.1, 0.2), 1L)
-  same_as_loop(paste(dd, "parameters { real a; } model { for (n in 1:N) { real m = a * x[n]; y[n] ~ normal(m, 1); } }"), d, 0.2, 0L)
+  same_as_loop(paste(dd, "parameters { real a; } model { for (n in 1:N) { real m = a * x[n]; y[n] ~ normal(m, 1); } }"), d, 0.2, 1L)
+})
+
+test_that("scalar locals, dot products, scalar target increments and profile blocks are vectorized", {
+  set.seed(2)
+  N <- 30; X <- matrix(rnorm(N * 3), N); g <- sample(4, N, TRUE)
+  d <- list(N = N, X = X, g = g, y = rnorm(N), x = rnorm(N))
+  dd <- "data { int N; matrix[N, 3] X; array[N] int g; vector[N] y; vector[N] x; } parameters { real a; vector[3] b; vector[4] u; real<lower=0> s; } model {"
+  u <- seq(-0.4, 0.4, length.out = 9)
+  for (body in c("for (n in 1:N) { real mu = a + b[1] * x[n] + u[g[n]]; y[n] ~ normal(mu, s); }",
+                 "for (n in 1:N) { real e = y[n] - a; real z = e / s; target += -0.5 * square(z) - log(s); }",
+                 "for (n in 1:N) y[n] ~ normal(a + dot_product(X[n], b), s);",
+                 "for (n in 1:N) target += -0.5 * square((y[n] - a - X[n] * b) / s);",
+                 "for (n in 1:N) target += normal_lccdf(y[n] | a + x[n], s);",
+                 "profile(\"lik\") { for (n in 1:N) y[n] ~ normal(a + X[n] * b, s); }",
+                 "for (n in 1:0) { real mu = a; y[n] ~ normal(mu, s); }"))
+    same_as_loop(paste(dd, body, "}"), d, u, 1L)
+  # truncation with bounds that do not depend on the loop
+  for (body in c("for (n in 1:N) y[n] ~ normal(a + x[n], s) T[-3, ];", "for (n in 1:N) y[n] ~ normal(a + x[n], s) T[, 4];",
+                 "for (n in 1:N) y[n] ~ normal(a + x[n], s) T[-3, 4];", "for (n in 1:N) y[n] ~ normal(0, s) T[-5, ];"))
+    same_as_loop(paste(dd, body, "}"), d, u, 1L)
+  same_as_loop(paste(dd, "for (n in 1:N) y[n] ~ normal(a, s) T[x[n] - 5, ]; }"), d, u, 0L)
+  # a shared vector argument (cutpoints, logits) that does not depend on the loop
+  dc <- c(d, list(c = sample(4, N, TRUE)))
+  dd2 <- "data { int N; vector[N] x; array[N] int c; } parameters { real a; ordered[3] k; vector[4] v; } model {"
+  u2 <- c(0.1, -0.5, 0.2, 0.3, 0.1, -0.2, 0.4, 0)
+  for (body in c("for (n in 1:N) c[n] ~ ordered_logistic(a * x[n], k);", "for (n in 1:N) c[n] ~ ordered_probit(a * x[n], k);",
+                 "for (n in 1:N) c[n] ~ categorical_logit(v);", "for (n in 1:N) target += categorical_logit_lpmf(c[n] | v);"))
+    same_as_loop(paste(dd2, body, "}"), dc, u2, 1L)
+  # a vector in an elementwise position broadcasts the outcome: not rewritten
+  same_as_loop(paste(dd2, "for (n in 1:N) x[n] ~ normal(v, 1); }"), dc, u2, 0L)
+  # a local the body assigns again, or one without a value, stays a loop
+  same_as_loop(paste(dd, "for (n in 1:N) { real mu = a; mu += x[n]; y[n] ~ normal(mu, s); } }"), d, u, 0L)
+  same_as_loop(paste(dd, "for (n in 1:N) { real mu; mu = a; y[n] ~ normal(mu, s); } }"), d, u, 0L)
+  # a local whose value reads a variable the body assigns later
+  same_as_loop(paste(dd, "vector[N] w = x * a; for (n in 1:N) { real m = w[n]; w[n] = 2 * m; y[n] ~ normal(m, s); } }"), d, u, 0L)
 })
 
 test_that("loops that are not independent stay loops", {
   d <- list(N = 4L, y = c(1, 2, 3, 4), k = c(1L, 2L, 3L, 4L))
   dd <- "data { int N; vector[N] y; array[N] int k; }"
   same_as_loop(paste(dd, "parameters { real a; } model { vector[N] mu; mu[1] = a; for (n in 2:N) mu[n] = mu[n - 1] * 0.5 + a; y ~ normal(mu, 1); }"), d, 0.2, 0L)
-  same_as_loop(paste(dd, "parameters { real<lower=0> s; } model { for (n in 1:N) y[n] ~ normal(0, s) T[-5, ]; }"), d, 0.2, 0L)
   same_as_loop(paste(dd, "parameters { real a; } model { for (n in 1:N) k[n] ~ poisson(exp(a + k[n] / 2)); }"), d, 0.2, 0L) |> suppressWarnings()
   same_as_loop(paste(dd, "parameters { real a; } model { for (n in 1:N) y[n] ~ normal(a * n, 1); }"), d, 0.2, 0L)
 })
@@ -42,6 +76,10 @@ test_that("empty and out of range loops behave as loops", {
   same_as_loop("data { int N; vector[N] y; } parameters { real a; } model { for (n in 3:2) y[n] ~ normal(a, 1); }", list(N = 3L, y = 1:3), 0.1, 1L)
   m <- bayescomp_model("data { int N; vector[N] y; } parameters { real a; } model { for (n in 1:(N + 1)) y[n] ~ normal(a, 1); }", data = list(N = 3L, y = 1:3))
   expect_error(bayescomp_log_prob(m, 0.1), "index out of range")
+  # truncated statements in an empty loop add nothing
+  for (b in c("T[0, ]", "T[-1, 3]"))
+    same_as_loop(sprintf("data { int N; vector[N] y; vector[N] x; } parameters { real a; real<lower=0> s; } model { s ~ normal(0, 1); for (n in 1:0) y[n] ~ normal(a + x[n], s) %s; }", b),
+                 list(N = 2L, y = c(0.5, 1), x = c(0, 1)), c(0.1, 0.2), 1L)
 })
 
 test_that("element writes in a loop that cannot be vectorized use linear memory", {
@@ -109,4 +147,56 @@ test_that("loops with lagged indices and parentheses are vectorized exactly", {
                           model { a ~ normal(0, 1); }")
   expect_equal(attr(rec$ir, "vectorized_loops") %||% 0L, 0L)
   expect_equal(bayescomp_constrain(rec, 1)$v, 0.5^(0:4))
+})
+
+test_that("loops whose invariant expressions read the target or have effects stay loops", {
+  d <- list(N = 2, y = c(1, 2))
+  dd <- "data { int N; vector[N] y; } parameters { real mu; }"
+  m <- same_as_loop(paste(dd, "model { mu ~ normal(0, 1); for (n in 1:N) y[n] ~ normal(target(), 1); }"), d, 0.2, loops = 0L)
+  expect_equal(as.vector(bayescomp_grad_log_prob(m, 0.2, propto = TRUE)), -1.430241, tolerance = 1e-6)
+  same_as_loop(paste("functions { real shift_lp(real a) { target += -a; return a; } }", dd,
+                     "model { mu ~ normal(0, 1); for (n in 1:N) y[n] ~ normal(shift_lp(mu), 1); }"), d, 0.2, loops = 0L)
+  # an invariant expression without effects is still lifted out of the loop
+  same_as_loop(paste(dd, "model { mu ~ normal(0, 1); for (n in 1:N) y[n] ~ normal(exp(mu), 1); }"), d, 0.2, loops = 1L)
+})
+
+test_that("two index reads with loop dependent positions are gathered", {
+  set.seed(3)
+  N <- 24; J <- 6; T <- 4
+  d <- list(N = N, J = J, T = T, id = sample(J, N, TRUE), t = sample(T, N, TRUE), y = rpois(N, 2), x = rnorm(N))
+  dd <- "data { int N; int J; int T; array[N] int id; array[N] int t; array[N] int y; vector[N] x; }"
+  u <- seq(-0.5, 0.5, length.out = 1 + J * T)
+  for (p in c("matrix[T, J] B;", "array[T, J] real B;"))
+    same_as_loop(paste(dd, "parameters { real a;", p, "} model { for (n in 1:N) y[n] ~ poisson_log(a + B[t[n], id[n]]); }"), d, u, 1L)
+  for (p in c("array[J] vector[T] b;", "array[J] row_vector[T] b;")) {
+    same_as_loop(paste(dd, "parameters { real a;", p, "} model { for (n in 1:N) y[n] ~ poisson_log(a + b[id[n]][t[n]]); }"), d, u, 1L)
+    # one position fixed, or the loop variable itself
+    same_as_loop(paste(dd, "parameters { real a;", p, "} model { for (n in 1:N) y[n] ~ poisson_log(a + x[n] * b[id[n]][2]); }"), d, u, 1L)
+    same_as_loop(paste(dd, "parameters { real a;", p, "} model { for (n in 1:T) target += normal_lpdf(x[n] | b[3][n], 1); }"), d, u, 1L)
+  }
+  same_as_loop(paste(dd, "parameters { real a; matrix[T, J] B; } model { for (n in 1:J) target += normal_lpdf(x[n] | B[2, n] + a, 1); }"), d, u, 1L)
+  # an index out of range is still an error
+  bad <- d; bad$t[3] <- T + 1L
+  m <- bayescomp_model(paste(dd, "parameters { matrix[T, J] B; } model { for (n in 1:N) y[n] ~ poisson_log(B[t[n], id[n]]); }"), data = bad)
+  expect_equal(attr(m$ir, "vectorized_loops"), 1L)
+  expect_error(bayescomp_log_prob(m, numeric(J * T)), "index out of range")
+  # the internal gather is not part of the language
+  expect_error(bayescomp_model("parameters { matrix[2, 2] B; } model { target += sum(gather2__(B, {1}, {2})); }"),
+               "unknown function")
+})
+
+test_that("an element of a loop invariant matrix times a group vector is one product", {
+  set.seed(4)
+  N <- 24; J <- 6; T <- 3
+  d <- list(N = N, J = J, T = T, id = sample(J, N, TRUE), t = sample(T, N, TRUE), y = rpois(N, 2))
+  dd <- "data { int N; int J; int T; array[N] int id; array[N] int t; array[N] int y; }
+    parameters { real<lower=0, upper=0.9> rho; vector<lower=0>[T] s; array[J] vector[T] z; }
+    transformed parameters { matrix[T, T] L = cholesky_decompose(add_diag(rep_matrix(rho, T, T), 1 - rho)); }"
+  u <- seq(-0.5, 0.5, length.out = 1 + T + J * T)
+  for (body in c("for (n in 1:N) y[n] ~ poisson_log((L * z[id[n]])[t[n]]);",
+                 "for (n in 1:N) y[n] ~ poisson_log(1 + (diag_pre_multiply(s, L) * z[id[n]])[t[n]]);",
+                 "for (n in 1:N) y[n] ~ poisson_log((L * z[id[n]])[2]);"))
+    same_as_loop(paste(dd, "model {", body, "}"), d, u, 1L)
+  # a matrix that changes with the loop stays a loop
+  same_as_loop(paste(dd, "model { for (n in 1:N) y[n] ~ poisson_log((n * L * z[id[n]])[t[n]]); }"), d, u, 0L)
 })

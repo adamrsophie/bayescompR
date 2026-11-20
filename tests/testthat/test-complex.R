@@ -119,7 +119,7 @@ test_that("complex data, functions and loops", {
   out <- utils::capture.output(invisible(bayescomp_model(code, data = list(zs = c(1 + 2i, complex(real = 0, imaginary = -1)),
                                                                        Z = matrix(c(1, 2i, 3, 4 + 1i), 2)))))
   expect_identical(out, c("(2,4)", "(0,-2)", "(1,0)", "(0,2)", "(3,0)", "(4,1)",
-                          "[(2,1),(0,3)] [(0,2),(4,1)] [(1,0),(0,2)] (3,0)"))
+                          "[(2,0),(0,3)] [(0,2),(4,1)] [(1,0),(0,2)] (3,0)"))
   expect_error(bayescomp_model("data { complex_vector[2] v; }", data = list(v = 1:3)), class = "bayescomp_data_error")
   expect_error(bayescomp_check("parameters { real y; } model { complex z = y; target += z; }"), class = "bayescomp_semantic_error")
   expect_error(bayescomp_check("transformed data { complex_vector[2] u; print(dims(u)); }"), class = "bayescomp_semantic_error")

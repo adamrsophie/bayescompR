@@ -71,3 +71,24 @@ test_that("finite and infinite bounds can be mixed elementwise", {
   }, 0)
   expect_equal(as.vector(g), fd, tolerance = 1e-6)
 })
+
+test_that("covariance transforms do not exponentiate off diagonal entries", {
+  m <- bayescomp_model("parameters { cholesky_factor_cov[2] L; } model { to_vector(L) ~ std_normal(); }")
+  g <- bayescomp_grad_log_prob(m, c(0, 1000, 0))
+  expect_equal(as.vector(g), c(0, -1000, 0))
+  m <- bayescomp_model("parameters { cov_matrix[2] S; } model { target += -0.5 * square(S[1, 2]) * 1e-12; }")
+  expect_true(all(is.finite(bayescomp_grad_log_prob(m, c(0, 500, 0)))))
+})
+
+test_that("the lower triangular layout matches the row by row order of the free vector", {
+  ref <- function(M, N) {
+    rows <- cols <- dp <- integer(0); pos <- 0L
+    for (m in seq_len(N)) {
+      for (j in seq_len(m)) { pos <- pos + 1L; rows <- c(rows, m); cols <- c(cols, j) }
+      dp <- c(dp, pos)
+    }
+    if (M > N) for (m in (N + 1L):M) for (j in seq_len(N)) { pos <- pos + 1L; rows <- c(rows, m); cols <- c(cols, j) }
+    list(flat = as.integer((cols - 1L) * M + rows), diag_pos = dp)
+  }
+  for (s in list(c(1, 1), c(3, 3), c(5, 2), c(4, 1))) expect_identical(tri_layout(s[1], s[2]), ref(s[1], s[2]))
+})

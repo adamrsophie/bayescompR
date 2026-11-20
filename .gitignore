@@ -16,3 +16,5 @@ vignettes/*.R
 figure/
 receipts/
 review-receipts/
+validation/bugs/cache/
+validation/bugs/validation-results.csv

@@ -12,6 +12,15 @@ derived from data or text of those projects:
   CmdStan's `bin/stansummary` and `bin/diagnose` and of the CmdStan CSV
   and JSON output files (CmdStan 2.40).
 
+The BUGS engine (R/bugs_*.R) contains no source code from JAGS, OpenBUGS,
+MultiBUGS or NIMBLE. The distributions, functions and their
+parameterizations follow the user manuals of JAGS 5.0, OpenBUGS 3.2.3 and
+NIMBLE 1.x. The table of alternative parameter names of NIMBLE
+distributions (`.bugs_named` in R/bugs_codegen.R) follows NIMBLE's
+distribution definitions; NIMBLE is copyright Perry de Valpine, Christopher
+Paciorek, Daniel Turek and others, distributed under the BSD 3-Clause
+License reproduced below.
+
 stanc3 and CmdStan are copyright the Stan Development Team and are
 distributed under the BSD 3-Clause License:
 

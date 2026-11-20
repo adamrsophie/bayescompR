@@ -11,7 +11,8 @@ bayescomp_pdmp(
   iter_warmup = 500L,
   iter_sampling = 1000L,
   refresh_rate = NULL,
-  dt = 0.05,
+  grid_size = 10L,
+  dt = NULL,
   init = 2,
   seed = NULL,
   cores = getOption("mc.cores", 1L),
@@ -30,15 +31,32 @@ between saved draws.}
 \item{refresh_rate}{Velocity refreshment rate for \code{"bps"} (needed for
 ergodicity) and an optional small refreshment for \code{"zigzag"}.}
 
-\item{dt}{Integration step for the event rate, relative to the
-trajectory time between draws.}
+\item{grid_size}{Number of grid intervals of the rate bound over one
+horizon; each costs one gradient.}
+
+\item{dt}{Deprecated and ignored; event times no longer use a fixed
+integration step.}
 }
 \value{
-A \code{bayescomp_fit} with method \code{"pdmp"} and element \code{events}
-(mean events per unit time per chain).
+A \code{bayescomp_fit} with method \code{"pdmp"} and elements \code{events}
+(mean events per unit time per chain) and \code{bound_violations} (proposals
+whose rate exceeded the grid bound, per chain; each makes that event
+inexact, so a large count calls for a larger \code{grid_size}).
 }
 \description{
 Piecewise deterministic samplers
+}
+\details{
+The bouncy particle sampler mixes slowly on heavy tailed
+targets: in the tails the gradient is weak, so the process drifts back
+slowly and single excursions can last hundreds of time units. On a 2-d
+Student t target with 3 degrees of freedom, one chain of 3000 draws
+spent a quarter of its time beyond radius 10, where the target has
+0.4\% of its mass; averaged over 10 seeds the tail probabilities still
+matched the target within their Monte Carlo error, so the output is
+unbiased but needs long runs. Zig-Zag estimates varied about a third
+as much across seeds there; prefer it, or \code{\link[=bayescomp_sample]{bayescomp_sample()}}, for such
+targets, and compare chains before trusting tail quantiles.
 }
 \examples{
 m <- bayescomp_model("parameters { real mu; } model { mu ~ normal(0, 1); }")
@@ -51,4 +69,6 @@ Zig-Zag process and super efficient sampling for Bayesian analysis of
 big data. \emph{Annals of Statistics} 47, 1288 to 1320. Bouchard-Cote, A.,
 Vollmer, S. J. and Doucet, A. (2018). The bouncy particle sampler.
 \emph{Journal of the American Statistical Association} 113, 855 to 867.
+Andral, C. and Kamatani, K. (2024). Automated techniques for efficient
+sampling of piecewise-deterministic Markov processes. arXiv:2408.03682.
 }

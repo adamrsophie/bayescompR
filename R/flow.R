@@ -114,7 +114,7 @@ bayescomp_flow_vi <- function(model, layers = 6L, iter = 2000L, grad_samples = 8
       qs[s, ] <- f$z
       log_g[s] <- -0.5 * sum(E[s, ]^2) - 0.5 * n * log(2 * pi) - f$ld
     }
-    log_p <- apply(qs, 1L, function(q) lpg(q)$value)
+    log_p <- apply(qs, 1L, attr(lpg, "value"))
     lw <- log_p - log_g
     lw[!is.finite(lw)] <- -Inf
     ps <- psis_smooth(lw)

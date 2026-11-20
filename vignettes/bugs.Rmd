@@ -1,0 +1,150 @@
+---
+title: "Running JAGS, OpenBUGS and NIMBLE models"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Running JAGS, OpenBUGS and NIMBLE models}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(eval = identical(Sys.getenv("NOT_CRAN"), "true"), collapse = TRUE, comment = "#>")
+```
+
+bayescompR runs models written in the BUGS language without JAGS, OpenBUGS,
+WinBUGS, MultiBUGS or NIMBLE. The model is compiled and sampled in R. Code
+written for R2jags, rjags, R2OpenBUGS or NIMBLE runs after replacing
+`library(R2jags)` (or the others) with `library(bayescompR)`. The draws come
+from the same posterior as the original programs give; the random numbers
+differ.
+
+```{r setup}
+library(bayescompR)
+```
+
+## R2jags
+
+```{r}
+model <- function() {
+  for (i in 1:N) {
+    r[i] ~ dbin(p[i], n[i])
+    logit(p[i]) <- alpha + beta * x[i]
+  }
+  alpha ~ dnorm(0, 1.0E-4)
+  beta ~ dnorm(0, 1.0E-4)
+}
+data <- list(r = c(1, 4, 9, 13), n = c(20, 20, 20, 20), x = c(-1, 0, 1, 2), N = 4)
+fit <- jags(data, NULL, c("alpha", "beta"), model, n.chains = 3, n.iter = 2000, jags.seed = 1)
+fit
+```
+
+`fit$BUGSoutput` holds `sims.list`, `sims.array`, `sims.matrix`, `summary`,
+`mean`, `sd`, `median`, `last.values`, `DIC` and `pD`, as in R2jags. DIC
+uses R2jags's penalty: half the mean within-chain variance of the deviance.
+
+## rjags
+
+```{r}
+m <- jags.model(textConnection("model {
+  for (i in 1:N) { y[i] ~ dnorm(mu, tau) }
+  mu ~ dnorm(0, 1.0E-4)
+  tau ~ dgamma(0.01, 0.01)
+}"), data = list(y = c(1.2, 0.8, 1.9, 1.1, 1.4), N = 5), n.chains = 2, seed = 1)
+update(m, 1000)
+s <- coda.samples(m, c("mu", "tau"), n.iter = 2000)
+summary(do.call(rbind, s))
+```
+
+`coda.samples()` returns an `mcmc.list`, so the functions of the coda
+package work on it.
+
+## R2OpenBUGS, WinBUGS and MultiBUGS
+
+`bugs()` takes the arguments of `R2OpenBUGS::bugs()`. Model, data and initial
+values can be files in OpenBUGS's formats, including rectangular data:
+
+```{r}
+dir <- tempfile(); dir.create(dir)
+writeLines("model {
+  for (i in 1:N) { y[i] ~ dpois(lambda[i])  log(lambda[i]) <- a + b * x[i] }
+  a ~ dnorm(0, 0.001)
+  b ~ dnorm(0, 0.001)
+}", file.path(dir, "model.txt"))
+writeLines("list(N = 5)", file.path(dir, "data1.txt"))
+writeLines("x[] y[]\n-2 1\n-1 2\n0 4\n1 6\n2 11\nEND", file.path(dir, "data2.txt"))
+fit <- bugs(c("data1.txt", "data2.txt"), NULL, c("a", "b"), n.iter = 2000, model.file = "model.txt",
+            n.chains = 2, working.directory = dir)
+fit$summary
+```
+
+Initial values not given are drawn from the priors, as OpenBUGS's gen inits
+does. DIC uses OpenBUGS's `pD`: the mean deviance minus the deviance at the
+posterior means.
+
+## NIMBLE
+
+```{r}
+code <- nimbleCode({
+  for (i in 1:N) y[i] ~ dnorm(mu, sd = sigma)
+  mu ~ dnorm(0, sd = 100)
+  sigma ~ dunif(0, 10)
+})
+out <- nimbleMCMC(code, constants = list(N = 5), data = list(y = c(1.1, 0.4, 1.8, 0.9, 1.3)),
+                  niter = 3000, nburnin = 1000, nchains = 2, setSeed = 1, summary = TRUE)
+out$summary$all.chains
+```
+
+`nimbleModel()`, `configureMCMC()`, `buildMCMC()`, `compileNimble()` and
+`runMCMC()` work too. `compileNimble()` returns its argument: nothing is
+compiled to C++.
+
+## Samplers
+
+Each unobserved node is updated in turn, given the others:
+
+* conjugate updates for gamma (precisions, rates), beta, Dirichlet and
+  Wishart nodes, and for normal nodes whose children are linear in them
+  (regression coefficients and random effects), drawn as one block;
+* metropolized Gibbs for discrete nodes with a small support: the
+  conditional probabilities are enumerated and a value other than the
+  current one is proposed, which moves more often than plain Gibbs;
+* elliptical slice sampling for multivariate normal nodes that are not
+  partly observed, moving the whole vector at once;
+* slice sampling for the other nodes, with widths adapted during the
+  burn-in to four times the mean jump; and
+* special updates for latent multinomial counts.
+
+Nodes that do not depend on each other are updated together, which keeps
+large hierarchical models fast in R.
+
+## What is supported
+
+The language of JAGS 5 and OpenBUGS 3.2: stochastic and logical nodes, link
+functions on the left side, `for` loops, truncation with `T()`, censoring
+with `C()` and `I()`, `cut()`, data transformations (a `data` block, or
+logical nodes of data only), missing values, and all distributions and
+functions of the two manuals that do not need a program of their own.
+NIMBLE's dialect adds named parameters (`dnorm(mu, sd = s)`) and its
+alternative parameterizations.
+
+Not supported:
+
+* user-defined `nimbleFunction`s and custom samplers;
+* ordering constraints and cyclic models (`dsum`-type stochastic sums), as in
+  the Inhalers, Jama, StVeit and Ice examples of OpenBUGS;
+* graph functionals such as `cumulative()` and `D()` (ordinary
+  differential equations);
+* Wishart nodes that are not conjugate;
+* stochastic nodes inside `data` blocks; and
+* `pD = TRUE` in `jags()` (the DIC of `dic.samples()`).
+
+## Validation
+
+`validation/bugs/validate-examples.R` in the source repository runs 45 of
+the OpenBUGS Examples (volumes 1 to 3) and compares the posterior means of
+271 nodes with the estimates OpenBUGS 3.2.3 reports for them. A mean passes
+when it is within 4 combined Monte Carlo standard errors of OpenBUGS's
+estimate or within a tenth of its posterior standard deviation. All 45
+models pass. Fire, Stagnantc and t-df have no reported estimates, and Ice,
+Inhalers, Jama, StVeit and Sixcomp use features listed above as not
+supported.

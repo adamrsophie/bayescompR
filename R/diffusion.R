@@ -49,7 +49,7 @@ bayescomp_diffusion <- function(model, num_samples = 300L, steps = 40L, horizon 
   t0 <- proc.time()[["elapsed"]]
   info <- NULL
   res <- run_chains(model, 1L, seed, 1L, function(id) {
-    lp <- lp_value_fun(model)
+    lp <- lp_value_fun(model, propto = TRUE)
     ref <- gaussian_reference(model, reference, reference_scale)
     # log density of the standardized target, up to a constant
     lz <- function(z) lp(ref$mu + as.vector(ref$L %*% z))

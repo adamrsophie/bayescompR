@@ -17,7 +17,7 @@ test_that("MALA, Metropolis and slice sampling target the posterior", {
   skip_on_cran()
   m <- bayescomp_model(target_code)
   n <- if (long_tests()) 1000L else 300L
-  for (a in c("mala", "metropolis", "slice")) {
+  for (a in c("mala", "barker", "metropolis", "slice")) {
     k <- if (a == "metropolis") 4L * n else n  # Metropolis steps are cheap and mix slowly
     fit <- bayescomp_sample(m, chains = 2, iter_warmup = k, iter_sampling = k, algorithm = a, seed = 7, refresh = 0)
     check_moments(fit)
@@ -25,6 +25,36 @@ test_that("MALA, Metropolis and slice sampling target the posterior", {
   fit <- bayescomp_sample(m, chains = 2, iter_warmup = 2L * n, iter_sampling = 2L * n, algorithm = "metropolis",
                           block = FALSE, seed = 7, refresh = 0)
   check_moments(fit)
+})
+
+test_that("WALNUTS targets the posterior", {
+  skip_on_cran()
+  m <- bayescomp_model(target_code)
+  n <- if (long_tests()) 1000L else 300L
+  fit <- bayescomp_sample(m, chains = 2, iter_warmup = n, iter_sampling = n, algorithm = "walnuts", seed = 7, refresh = 0)
+  check_moments(fit)
+})
+
+test_that("antithetic chain pairs are valid and negatively correlated", {
+  skip_on_cran()
+  m <- bayescomp_model("parameters { vector[3] x; } model { x ~ normal(1, 2); }")
+  expect_error(bayescomp_sample(m, chains = 3, antithetic = TRUE), "even number")
+  fit <- bayescomp_sample(m, chains = 2, iter_warmup = 300, iter_sampling = 500, algorithm = "hmc",
+                          antithetic = TRUE, seed = 7, refresh = 0)
+  x <- fit$draws[, , "x[1]"]
+  expect_lt(abs(mean(x) - 1), 0.3)
+  expect_lt(stats::cor(x[, 1] - 1, x[, 2] - 1), -0.5)
+})
+
+test_that("radial moves keep the target and resume exactly", {
+  skip_on_cran()
+  m <- bayescomp_model(target_code)
+  for (a in c("nuts", "mala")) {
+    fit <- bayescomp_sample(m, chains = 2, iter_warmup = 300, iter_sampling = 300, algorithm = a,
+                            radial_moves = TRUE, seed = 7, refresh = 0)
+    check_moments(fit)
+  }
+  expect_true(is.numeric(fit$final[[1L]]$radial_sd))
 })
 
 test_that("value only density matches the gradient density up to a constant", {

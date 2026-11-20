@@ -182,17 +182,15 @@ bayescomp_model <- function(code = NULL, data = list(), file = NULL, seed = NULL
 # value only log density: the same code without a tape
 model_lp <- function(model, jacobian, propto, print = FALSE) {
   nat <- model$native
-  if (!is.null(nat)) return(function(u) nat$log_density_gradient(u, jacobian, propto)$value)
+  if (!is.null(nat)) {
+    if (!is.null(nat[["log_density"]])) return(function(u) nat[["log_density"]](u, jacobian, propto))
+    return(function(u) nat$log_density_gradient(u, jacobian, propto)$value)
+  }
   f <- model_fun(model, "log_prob")
   # with propto, which terms are kept depends on which arguments are
-  # parameters, so the tape still records (only the backward sweep is
-  # skipped); without it the code runs with no tape at all
-  if (propto) return(function(u) {
-    ctx <- new_ctx(jacobian = jacobian, print = print, propto = TRUE)
-    old <- tape_start()
-    on.exit(tape_restore(old))
-    as.numeric(val(f(ad_leaf(as.numeric(u)), ctx)))
-  })
+  # parameters, so values keep their "bcad" class without being recorded;
+  # without it the code runs with no tape at all
+  if (propto) return(propto_value_fun(model, f, jacobian, print))
   function(u) {
     ctx <- new_ctx(jacobian = jacobian, print = print, propto = FALSE)
     old <- .ad$tape
@@ -200,6 +198,36 @@ model_lp <- function(model, jacobian, propto, print = FALSE) {
     on.exit(.ad$tape <- old)
     as.numeric(val(f(as.numeric(u), ctx)))
   }
+}
+
+# Proportional value of the log density without recording a tape. Stan
+# keeps a density term when an argument is a parameter dependent value, and
+# in the model block codegen wraps every such argument in rt_keep(): with no
+# tape and .ad$vmark set, the program runs on plain numbers and only those
+# arguments are marked, so each density drops what Stan drops. User
+# functions (whose arguments are not wrapped inside) and solvers (whose
+# value without sensitivities uses other steps) run instead with values
+# that keep their class but are not recorded.
+propto_value_fun <- function(model, f, jacobian, print) {
+  marks <- !length(model$compiled$funs) && !length(model$ir$externals) && !ir_has_hof(model$ir$blocks)
+  function(u) {
+    ctx <- new_ctx(jacobian = jacobian, print = print, propto = TRUE)
+    if (marks) {
+      old <- .ad$tape; om <- .ad$vmark
+      .ad$tape <- NULL; .ad$vmark <- TRUE
+      on.exit({ .ad$tape <- old; .ad$vmark <- om })
+      return(as.numeric(val(f(as.numeric(u), ctx))))
+    }
+    old <- tape_start(values_only = TRUE)
+    on.exit(tape_restore(old))
+    as.numeric(val(f(ad_leaf(as.numeric(u)), ctx)))
+  }
+}
+ir_has_hof <- function(e) {
+  if (!is.list(e)) return(FALSE)
+  if (identical(e$kind, "call") && (!is.null(e$hof) || !is.null(e$laplace))) return(TRUE)
+  for (k in names(e) %||% seq_along(e)) if (!k %in% c("loc", "type", "sig") && is.list(e[[k]]) && ir_has_hof(e[[k]])) return(TRUE)
+  FALSE
 }
 
 model_lpg <- function(model, jacobian, propto, print = FALSE) {
@@ -353,7 +381,7 @@ decl_info <- function(d, env) {
   info
 }
 
-instantiate <- function(m, data, generate = FALSE) {
+instantiate <- function(m, data, generate = FALSE, unchecked = character()) {
   ns <- environment(rt_decl)
   fenv <- new.env(parent = ns)
   for (f in m$funs) assign(f$name, make_function(f$formals, f$body, fenv), envir = fenv)
@@ -383,7 +411,7 @@ instantiate <- function(m, data, generate = FALSE) {
     env$.decls <- decls
     args <- eval(cg_cons_args(d$type), env)
     msg <- check_variable(v, info, args)
-    if (!is.null(msg)) stop_data(sprintf("variable '%s' %s", d$name, msg))
+    if (!is.null(msg) && !d$name %in% unchecked) stop_data(sprintf("variable '%s' %s", d$name, msg))
   }
   if (generate) return(gen)
   extra <- setdiff(names(data), vapply(m$data_decls, `[[`, "", "name"))
@@ -492,7 +520,17 @@ model_fun <- function(model, which) {
       log_prob = alist(.u = , .ctx = ),
       write = alist(.u = , .ctx = , .tp = , .gq = ),
       unconstrain = alist(.vals = ))
-    f <- make_function(fm, body, model$env)
+    g <- make_function(fm, body, model$env)
+    # data dependent factorizations made during the call belong to this
+    # instance (see normal_glm_prep())
+    store <- model$env$.glm_store
+    if (is.null(store)) store <- model$env$.glm_store <- new.env(parent = emptyenv())
+    f <- function(...) {
+      prev <- .glm_cache$cur
+      .glm_cache$cur <- store
+      on.exit(.glm_cache$cur <- prev)
+      g(...)
+    }
     assign(key, f, envir = model$env)
   }
   f
@@ -540,6 +578,92 @@ bayescomp_grad_log_prob <- function(model, upars, jacobian = TRUE, propto = FALS
   }
   r <- lp_grad(model, check_upars(model, upars), jacobian, propto)
   structure(r$grad, log_prob = r$value)
+}
+
+#' Hessian of the log density
+#'
+#' `bayescomp_hessian()` returns the Hessian of the log density at
+#' unconstrained values and `bayescomp_hessian_vector()` its product with a
+#' vector, without forming the matrix. Both take central finite differences
+#' of the reverse mode gradient, not nested automatic differentiation, so
+#' they work with every backend that gives gradients. The Hessian takes 2
+#' gradients per parameter and the product 2 gradients; the log density at
+#' `upars` comes from one more evaluation without gradient.
+#'
+#' The step for parameter `i` is `h * max(1, abs(upars[i]))` (for the
+#' product, `h * max(1, max(abs(upars)))` along the unit direction of `v`),
+#' rounded to a step that is exactly representable at `upars`. The error is
+#' the truncation error, of order `h^2` times the third derivatives, plus a
+#' rounding error of order `.Machine$double.eps` times the size of the
+#' gradient divided by the step; the default balances the two for well
+#' scaled models. Comparing results for two values of `h` shows whether
+#' they are resolved.
+#'
+#' @inheritParams bayescomp_log_prob
+#' @param upars Unconstrained parameter values (a numeric vector), or
+#'   constrained values as for [bayescomp_log_prob()].
+#' @param v A finite numeric vector with one entry per unconstrained
+#'   parameter.
+#' @param h Relative finite difference step, one finite positive number.
+#' @return The symmetrized Hessian matrix, or the product vector, with the
+#'   log density in attribute `"log_prob"`.
+#' @examples
+#' m <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 2); }")
+#' bayescomp_hessian(m, c(0.1, 0.2))
+#' bayescomp_hessian_vector(m, c(0.1, 0.2), c(1, 0))
+#' @export
+bayescomp_hessian <- function(model, upars, jacobian = TRUE, propto = FALSE, h = 1e-5) {
+  u <- check_upars(model, as_upars(model, upars))
+  check_fd_step(h)
+  lpg <- model_lpg(model, jacobian, propto, TRUE)
+  n <- length(u)
+  H <- matrix(0, n, n)
+  for (i in seq_len(n)) {
+    e <- numeric(n)
+    e[i] <- h * max(1, abs(u[i]))
+    st <- fd_points(u, e)
+    H[, i] <- (lpg(st$up)$grad - lpg(st$down)$grad) / st$width[i]
+  }
+  structure(0.5 * (H + t(H)), log_prob = bayescomp_log_prob(model, u, jacobian = jacobian, propto = propto))
+}
+
+#' @rdname bayescomp_hessian
+#' @export
+bayescomp_hessian_vector <- function(model, upars, v, jacobian = TRUE, propto = FALSE, h = 1e-5) {
+  u <- check_upars(model, as_upars(model, upars))
+  check_fd_step(h)
+  if (!is.numeric(v) || length(v) != length(u) || !all(is.finite(v)))
+    stop(sprintf("'v' must be a finite numeric vector of length %d", length(u)), call. = FALSE)
+  lp <- bayescomp_log_prob(model, u, jacobian = jacobian, propto = propto)
+  # the norm of v scaled by its largest entry, so that it neither overflows
+  # nor underflows
+  sc <- if (length(v)) max(abs(v)) else 0
+  if (sc == 0) return(structure(numeric(length(u)), log_prob = lp))
+  w <- v / sc
+  nw <- sqrt(sum(w * w))
+  d <- w / nw
+  lpg <- model_lpg(model, jacobian, propto, TRUE)
+  # the step is scaled by the coordinates the direction moves, not by an
+  # unrelated large one
+  st <- fd_points(u, h * max(1, max(abs(u[d != 0]))) * d)
+  # the difference along d over the length of the represented step
+  len <- sqrt(sum(((st$up - st$down) / 2)^2))
+  structure((lpg(st$up)$grad - lpg(st$down)$grad) / (2 * len) * nw * sc, log_prob = lp)
+}
+
+check_fd_step <- function(h) {
+  if (!(is.numeric(h) && length(h) == 1L && is.finite(h) && h > 0))
+    stop("'h' must be one finite positive number", call. = FALSE)
+}
+
+# u + e and u - e and, per coordinate, the represented width (up - down)
+fd_points <- function(u, e) {
+  up <- u + e
+  down <- u - e
+  width <- up - down
+  if (all(width[e != 0] == 0) || !all(is.finite(c(up, down))))
+    stop("the finite difference step is not representable at these values; give another 'h'", call. = FALSE)
+  list(up = up, down = down, width = width)
 }
 
 # constrained values (a list or a file) to unconstrained ones

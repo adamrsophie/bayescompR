@@ -67,3 +67,13 @@ test_that("socket cluster chains see the caller's arguments and match forked cha
   b <- bayescomp_sample(m, chains = 2, cores = 1, iter_warmup = 50, iter_sampling = 50, init = pf, seed = 1, refresh = 0)
   expect_identical(a$draws, b$draws)
 })
+
+test_that("resuming a finished fit continues the chains exactly", {
+  m <- bayescomp_model("parameters { vector[2] x; } model { x ~ normal(0, 1); }")
+  for (th in c(1L, 2L)) {
+    a <- bayescomp_sample(m, chains = 2, iter_warmup = 30, iter_sampling = 20, seed = 3, refresh = 0, thin = th)
+    b <- bayescomp_sample(m, chains = 2, iter_warmup = 30, iter_sampling = 10, seed = 3, refresh = 0, thin = th)
+    c2 <- bayescomp_sample(m, chains = 2, iter_sampling = 10, seed = 8, refresh = 0, resume = b, thin = th)
+    for (k in 1:2) expect_equal(rbind(b$unconstrained[[k]], c2$unconstrained[[k]]), a$unconstrained[[k]])
+  }
+})

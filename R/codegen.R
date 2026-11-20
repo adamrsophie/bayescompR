@@ -23,12 +23,7 @@ promote_to <- function(code, from, to) {
   code
 }
 
-lib_impl <- function(name, types) {
-  for (sg in .lib[[name]]) {
-    if (length(sg$args) == length(types) && all(mapply(pat_ok, sg$args, types))) return(sg$impl)
-  }
-  stop("internal error: no library implementation for ", name)
-}
+lib_impl <- function(name, types) lib_sig(name, types)$impl
 
 # ---- expressions -------------------------------------------------------------------
 
@@ -167,6 +162,8 @@ cg_call <- function(e) {
   args <- lapply(e$args, cg_expr)
   if (isTRUE(sg$user)) {
     args <- Map(function(code, a, t) promote_to(code, a$type, t), args, e$args, sg$args)
+    # a density inside the function keeps its terms for these arguments
+    args <- cg_keep_args(unname(args), e$args, params = FALSE)
     call <- cl_list(as.name(sg$mangled), c(unname(args), list(CTX)))
     # a user density called by its normalized name runs with propto off
     if (grepl("_(lpdf|lpmf)$", e$name)) call <- cl(rt_normalized, call, CTX)
@@ -278,25 +275,175 @@ cg_print_items <- function(items) {
     else cg_expr(it)))
 }
 
+# Sampling statements and target += density calls with pointwise output.
+# Each returns list(main = statements, pw = the pointwise recorder or NULL).
+cg_tilde <- function(st, once = FALSE) {
+  lhs <- cg_expr(st$lhs)
+  args <- lapply(st$args, cg_expr)
+  sg <- st$sig
+  call <- if (isTRUE(sg$user)) {
+    aa <- Map(function(code, a, t) promote_to(code, a$type, t), c(list(lhs), args), c(list(st$lhs), st$args), sg$args)
+    aa <- cg_keep_args(unname(aa), c(list(st$lhs), st$args), params = FALSE)
+    cl_list(as.name(sg$mangled), c(unname(aa), list(CTX)))
+  } else {
+    types <- c(list(st$lhs$type), lapply(st$args, `[[`, "type"))
+    full <- lib_impl(sub("_lup", "_lp", st$fname), types)
+    kept <- cg_keep_args(c(list(lhs), unname(args)), c(list(st$lhs), st$args))
+    cl(as.name("if"), cl(as.name("isTRUE"), cl(as.name("$"), CTX, as.name("propto"))),
+       cg_size_guard(st$fname, sg, types, cl_list(sg$impl, kept)),
+       cg_size_guard(st$fname, sg, types, cl_list(full, c(list(lhs), unname(args)))))
+  }
+  out <- list(cl(rt_target_add, CTX, call))
+  trc <- NULL
+  if (!is.null(st$trunc)) {
+    tr <- st$trunc
+    mkfun <- function(sig) {
+      if (is.null(sig)) return(NULL)
+      # a user function also takes the evaluation context; the closure is
+      # made where .ctx is in scope
+      if (isTRUE(sig$user))
+        return(cl(structure, cl_list(as.name("function"), list(as.pairlist(alist(... = )),
+                                                              cl_list(as.name(sig$mangled), list(as.name("..."), CTX)))),
+                  user = TRUE))
+      # the sampling statement has already checked the parameters
+      attr(sig$impl, "unchecked") %||% sig$impl
+    }
+    lcdf_f <- mkfun(tr$lcdf_sig)
+    lccdf_f <- mkfun(tr$lccdf_sig)
+    lo_c <- if (is.null(tr$lo)) NULL else cg_expr(tr$lo)
+    hi_c <- if (is.null(tr$hi)) NULL else cg_expr(tr$hi)
+    trc <- cl(list, lo = lo_c, hi = hi_c, lcdf = lcdf_f, lccdf = lccdf_f, discrete = isTRUE(tr$discrete), fam = tr$fam)
+    tcall <- cl(rt_truncate, CTX, lhs, lo_c, hi_c, lcdf_f, lccdf_f, cl_list(as.name("list"), unname(args)), isTRUE(tr$discrete), tr$fam)
+  }
+  uv <- NULL
+  if (once && isTRUE(sg$user)) {
+    # the normalized value of the user defined density is the term
+    uv <- pw_value_sym()
+    out <- list(cl(as.name("<-"), uv, call), cl(rt_target_add, CTX, uv))
+  }
+  pw <- cg_pointwise(st$fname, st$lhs, st$args, lhs, args, sg, trc, uv)
+  # after the statement, which checks the arguments first
+  list(main = c(out, if (!is.null(st$trunc)) list(tcall)), pw = pw)
+}
+cg_target_add <- function(st, once = FALSE) {
+  v <- st$value
+  if (!(identical(v$kind, "call") && length(v$args) && grepl("_(lpdf|lpmf|lupdf|lupmf)$", v$name)))
+    return(list(main = list(cl(rt_target_add, CTX, cg_expr(v)))))
+  call <- cg_expr(v)
+  uv <- NULL
+  out <- list(cl(rt_target_add, CTX, call))
+  if (once && isTRUE(v$sig$user)) {
+    uv <- pw_value_sym()
+    out <- list(cl(as.name("<-"), uv, call), cl(rt_target_add, CTX, uv))
+  }
+  list(main = out, pw = cg_pointwise(v$name, v$args[[1L]], v$args[-1L], cg_expr(v$args[[1L]]), lapply(v$args[-1L], cg_expr), v$sig, NULL, uv))
+}
+pw_value_sym <- function() {
+  .unpack_n$n <- .unpack_n$n + 1L
+  as.name(paste0(".pwv", .unpack_n$n))
+}
+# With pointwise output the arguments (and truncation bounds) of the
+# statement are evaluated once, in order, into temporaries that both the
+# statement and the recorder read, so that the recorder sees the values the
+# statement used even when an argument reads target() or has effects.
+# Ordinary evaluation runs the statement unchanged.
+pw_label <- function(e) {
+  while (identical(e$kind, "index") || identical(e$kind, "paren")) e <- e$x %||% e$a
+  if (identical(e$kind, "var")) e$name else "y"
+}
+cg_pw_once <- function(st, gen, fields) {
+  r <- gen(st)
+  if (is.null(r$pw)) return(r$main)
+  assigns <- list()
+  tmp <- function(e, keep_label = FALSE) {
+    if (is.null(e) || e$kind %in% c("int", "real", "var", "code")) return(e)
+    # the observation keeps the name of the variable it indexes
+    if (keep_label) e$pw_label <- pw_label(e)
+    .unpack_n$n <- .unpack_n$n + 1L
+    sym <- as.name(paste0(".pwa", .unpack_n$n))
+    assigns[[length(assigns) + 1L]] <<- cl(as.name("<-"), sym, cg_expr(e))
+    e$kind <- "code"
+    e$code <- sym
+    e
+  }
+  st2 <- st
+  if ("value" %in% fields) st2$value$args <- lapply(st$value$args, tmp)
+  else {
+    st2$lhs <- tmp(st$lhs, keep_label = TRUE)
+    st2$args <- lapply(st$args, tmp)
+    if (!is.null(st$trunc)) {
+      if (!is.null(st$trunc$lo)) st2$trunc$lo <- tmp(st$trunc$lo)
+      if (!is.null(st$trunc$hi)) st2$trunc$hi <- tmp(st$trunc$hi)
+    }
+  }
+  r2 <- gen(st2, TRUE)
+  list(cl(as.name("if"), cl(as.name("is.null"), cl(as.name("$"), CTX, as.name("pw"))),
+          blk(r$main), blk(c(assigns, r2$main, list(r2$pw)))))
+}
+
+
 # A density statement on data in the model block also records its pointwise
 # terms when the context asks for them (bayescomp_log_lik() and
 # bayescomp_posterior_predict()): the normalized density of each element
 # and, when the distribution has one, a draw from its _rng.
-cg_pointwise <- function(fname, lhs_e, arg_es, lhs, args, sg, truncated) {
-  if (!identical(.cg$block, "model") || !isTRUE(lhs_e$data_only) || isTRUE(sg$user)) return(NULL)
-  root <- lhs_e
-  while (identical(root$kind, "index") || identical(root$kind, "paren")) root <- root$x %||% root$a
-  label <- if (identical(root$kind, "var")) root$name else "y"
+#
+# The observation unit comes from the signature: arguments declared `reals`
+# or `ints` are elementwise and every element of the left side is one
+# observation; other arguments (simplexes, cutpoints, covariance matrices)
+# are shared by all of them. A left side that is not elementwise (a vector
+# of a multivariate density, a matrix) is one joint observation. GLMs are
+# rewritten to their univariate family with the linear predictor, so each
+# row of x is one observation as in the equivalent unfused model.
+cg_pointwise <- function(fname, lhs_e, arg_es, lhs, args, sg, trunc, uv = NULL) {
+  if (!identical(.cg$block, "model") || !isTRUE(lhs_e$data_only)) return(NULL)
+  label <- lhs_e$pw_label %||% pw_label(lhs_e)
+  pw_call <- function(spec, uf = NULL, a = c(list(lhs), unname(args)))
+    cl(as.name("if"), cl(as.name("!"), cl(as.name("is.null"), cl(as.name("$"), CTX, as.name("pw")))),
+       cl_list(rt_pointwise, c(list(CTX, label, spec, uf, trunc), a)))
+  if (isTRUE(sg$user)) {
+    # a user defined density is one joint observation per statement
+    if (!is.null(trunc)) return(pw_call(list(unsupported = "truncated user defined")))
+    aa <- Map(function(code, a, t) promote_to(code, a$type, t), c(list(lhs), args), c(list(lhs_e), arg_es), sg$args)
+    uf <- cl_list(as.name("function"), list(as.pairlist(alist(... = )),
+                                            if (is.null(uv)) cl_list(as.name(sg$mangled), list(as.name("..."), CTX)) else uv))
+    return(pw_call(list(), uf, unname(aa)))
+  }
   types <- c(list(lhs_e$type), lapply(arg_es, `[[`, "type"))
   base <- sub("_(lpdf|lpmf|lupdf|lupmf)$", "", fname)
-  full <- tryCatch(lib_impl(sub("_lup", "_lp", fname), types), error = function(e) NULL)
-  if (is.null(full)) return(NULL)
-  rng <- tryCatch(lib_impl(paste0(base, "_rng"), types[-1L]), error = function(e) NULL)
-  # elementwise only for scalar and one dimensional arguments
-  split <- all(vapply(types, function(t) (t$nd == 0L && t$base %in% c("int", "real", "vector", "row_vector")) ||
-                                           (t$nd == 1L && t$base %in% c("int", "real")), TRUE))
-  cl(as.name("if"), cl(as.name("!"), cl(as.name("is.null"), cl(as.name("$"), CTX, as.name("pw")))),
-     cl_list(rt_pointwise, c(list(CTX, label, full, rng, split, truncated, lhs), unname(args))))
+  suffix <- if (grepl("pmf$", fname)) "_lpmf" else "_lpdf"
+  glm <- pw_glm[[base]]
+  fam <- glm$family %||% base
+  sig <- if (is.null(glm)) tryCatch(lib_sig(paste0(base, suffix), types), error = function(e) NULL) else .lib[[paste0(fam, suffix)]][[1L]]
+  if (is.null(sig)) return(NULL)
+  rng <- if (is.null(glm)) tryCatch(lib_impl(paste0(base, "_rng"), types[-1L]), error = function(e) NULL) else glm$rng %||% .lib[[paste0(fam, "_rng")]][[1L]]$impl
+  vec <- glm$el %||% (sig$args %in% c("reals", "ints", "real", "int"))
+  # elementwise when the signature vectorizes the left side and every
+  # vectorized argument is a scalar or a one dimensional container (a GLM's
+  # linear predictor always is). Other arguments are shared, or with one
+  # vector per observation (cutpoints as array[N] vector) give row i to
+  # observation i.
+  if (is.null(glm)) {
+    shape_ok <- vapply(types, function(t) (t$nd == 0L && t$base %in% c("int", "real", "vector", "row_vector")) ||
+                                            (t$nd == 1L && t$base %in% c("int", "real")), TRUE)
+    rows <- !vec & vapply(types, function(t) t$nd == 1L && t$base %in% c("vector", "row_vector"), TRUE)
+    shared_ok <- vapply(types, function(t) t$nd == 0L, TRUE) | rows
+    split <- vec[1L] && all(shape_ok[vec]) && all(shared_ok[!vec])
+  } else {
+    rows <- logical(length(vec))
+    split <- TRUE
+  }
+  allvec <- all(sig$args %in% c("reals", "ints", "real", "int"))
+  spec <- list(full = sig$impl, rng = rng, glm = glm$convert, el = if (split) vec, rows = rows,
+               kern = if (split && allvec) pw_kernels[[fam]], vrng = split && allvec,
+               unsupported = if (!is.null(trunc) && !split) "truncated multivariate")
+  pw_call(spec)
+}
+
+lib_sig <- function(name, types) {
+  for (sg in .lib[[name]]) {
+    if (length(sg$args) == length(types) && all(mapply(pat_ok, sg$args, types))) return(sg)
+  }
+  stop("internal error: no library implementation for ", name)
 }
 
 # block being generated, read by cg_call() for _lupdf calls
@@ -306,12 +453,20 @@ cg_pointwise <- function(fname, lhs_e, arg_es, lhs, args, sg, truncated) {
 # variable, which in the model block is every real valued expression that is
 # not data only, also after floor() or an assignment of a constant. Such
 # arguments are wrapped so the density sees them as differentiable.
-cg_keep_args <- function(codes, exprs) {
+# `params = FALSE` leaves parameters unwrapped: right for arguments of user
+# functions, which are only evaluated with parameters that are "bcad"
+# (propto_value_fun does not use marks for programs with user functions)
+cg_keep_args <- function(codes, exprs, params = TRUE) {
   if (!identical(.cg$block, "model")) return(codes)
   Map(function(code, e) {
     t <- e$type
-    if (isTRUE(e$data_only) || identical(t$base, "int") || is.null(t$base)) code else cl(rt_keep, code)
+    if (isTRUE(e$data_only) || identical(t$base, "int") || is.null(t$base) || (!params && reads_parameter(e))) code
+    else cl(rt_keep, code)
   }, codes, exprs)
+}
+reads_parameter <- function(e) {
+  while (identical(e$kind, "index")) e <- e$x
+  identical(e$kind, "var") && identical(e$origin, "parameters")
 }
 
 cg_stmt <- function(st, ctx) {
@@ -367,7 +522,7 @@ cg_stmt <- function(st, ctx) {
       if (st$op != "=") {
         bop <- substr(st$op, 1L, nchar(st$op) - 1L)
         fake <- list(kind = "binop", op = bop, a = lhs, b = rhs, type = binop_type(bop, lhs$type, rhs$type))
-        rcode <- cg_binop(fake)
+        rcode <- cg_expr(fake)
         rtype <- fake$type
       } else {
         rtype <- rhs$type
@@ -389,53 +544,8 @@ cg_stmt <- function(st, ctx) {
       }
       c(out, set_items(st$lhs, tmp, st$rhs$type))
     },
-    tilde = {
-      lhs <- cg_expr(st$lhs)
-      args <- lapply(st$args, cg_expr)
-      sg <- st$sig
-      call <- if (isTRUE(sg$user)) {
-        aa <- Map(function(code, a, t) promote_to(code, a$type, t), c(list(lhs), args), c(list(st$lhs), st$args), sg$args)
-        cl_list(as.name(sg$mangled), c(unname(aa), list(CTX)))
-      } else {
-        types <- c(list(st$lhs$type), lapply(st$args, `[[`, "type"))
-        full <- lib_impl(sub("_lup", "_lp", st$fname), types)
-        kept <- cg_keep_args(c(list(lhs), unname(args)), c(list(st$lhs), st$args))
-        cl(as.name("if"), cl(as.name("isTRUE"), cl(as.name("$"), CTX, as.name("propto"))),
-           cg_size_guard(st$fname, sg, types, cl_list(sg$impl, kept)),
-           cg_size_guard(st$fname, sg, types, cl_list(full, c(list(lhs), unname(args)))))
-      }
-      out <- list(cl(rt_target_add, CTX, call))
-      pw <- cg_pointwise(st$fname, st$lhs, st$args, lhs, args, sg, truncated = !is.null(st$trunc))
-      if (!is.null(pw)) out <- c(list(pw), out)
-      if (!is.null(st$trunc)) {
-        tr <- st$trunc
-        mkfun <- function(sig) {
-          if (is.null(sig)) return(NULL)
-          # a user function also takes the evaluation context; the closure is
-          # made where .ctx is in scope
-          if (isTRUE(sig$user))
-            return(cl(structure, cl_list(as.name("function"), list(as.pairlist(alist(... = )),
-                                                                  cl_list(as.name(sig$mangled), list(as.name("..."), CTX)))),
-                      user = TRUE))
-          # the sampling statement has already checked the parameters
-          attr(sig$impl, "unchecked") %||% sig$impl
-        }
-        lcdf_f <- mkfun(tr$lcdf_sig)
-        lccdf_f <- mkfun(tr$lccdf_sig)
-        out <- c(out, list(cl(rt_truncate, CTX, lhs,
-                              if (is.null(tr$lo)) NULL else cg_expr(tr$lo),
-                              if (is.null(tr$hi)) NULL else cg_expr(tr$hi),
-                              lcdf_f, lccdf_f, cl_list(as.name("list"), unname(args)),
-                              isTRUE(tr$discrete), tr$fam)))
-      }
-      out
-    },
-    target_add = {
-      v <- st$value
-      pw <- if (identical(v$kind, "call") && length(v$args) && grepl("_(lpdf|lpmf|lupdf|lupmf)$", v$name))
-        cg_pointwise(v$name, v$args[[1L]], v$args[-1L], cg_expr(v$args[[1L]]), lapply(v$args[-1L], cg_expr), v$sig, FALSE)
-      c(if (!is.null(pw)) list(pw), list(cl(rt_target_add, CTX, cg_expr(st$value))))
-    },
+    tilde = cg_pw_once(st, cg_tilde, c("lhs", "args")),
+    target_add = cg_pw_once(st, cg_target_add, "value"),
     jacobian_add = list(cl(as.name("if"), cl(as.name("isTRUE"), cl(as.name("$"), CTX, as.name("jacobian"))),
                            cl(rt_target_add, CTX, cg_expr(st$value)))),
     "if" = {
@@ -444,8 +554,14 @@ cg_stmt <- function(st, ctx) {
       else list(cl(as.name("if"), cl(truthy, cg_expr(st$cond)), th, blk(cg_stmt(st$els, ctx))))
     },
     "while" = list(cl(as.name("while"), cl(truthy, cg_expr(st$cond)), blk(cg_stmt(st$body, ctx)))),
-    "for" = list(cl(as.name("for"), vsym(st$var), cl(rt_range, cg_expr(st$lo), cg_expr(st$hi)),
-                    blk(cg_stmt(st$body, ctx)))),
+    "for" = if (loop_bound_varies(st$hi, st$body)) {
+      # the bound is tested again before every iteration
+      i <- vsym(st$var)
+      list(cl(as.name("<-"), i, cl(as.name("-"), cg_expr(st$lo), 1L)),
+           cl(as.name("while"), cl(as.name("{"), cl(as.name("<-"), i, cl(as.name("+"), i, 1L)), cl(as.name("<="), i, cg_expr(st$hi))),
+              blk(cg_stmt(st$body, ctx))))
+    } else list(cl(as.name("for"), vsym(st$var), cl(rt_range, cg_expr(st$lo), cg_expr(st$hi)),
+                   blk(cg_stmt(st$body, ctx)))),
     foreach = list(cl(as.name("for"), vsym(st$var), cl(rt_foreach, cg_expr(st$iter), st$iter$type$nd, st$iter$type$base),
                       blk(cg_stmt(st$body, ctx)))),
     "break" = list(quote(break)),
@@ -512,7 +628,7 @@ hoist_ir <- function(ir) {
     if (hoistable(e)) {
       nm <- sprintf(".H%d", length(hoisted) + 1L)
       hoisted[[length(hoisted) + 1L]] <<- list(name = nm, expr = e)
-      return(list(kind = "code", code = as.name(nm), type = e$type, data_only = TRUE, loc = e$loc))
+      return(list(kind = "code", code = as.name(nm), type = e$type, data_only = TRUE, loc = e$loc, pw_label = pw_label(e)))
     }
     node(e)
   }

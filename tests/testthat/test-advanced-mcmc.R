@@ -18,7 +18,7 @@ test_that("elliptical slice sampling targets the posterior", {
 test_that("ensemble samplers target the posterior", {
   skip_on_cran()
   m <- bayescomp_model(target2)
-  for (meth in c("de", "stretch")) {
+  for (meth in c("de", "stretch", "side", "slice")) {
     fit <- bayescomp_ensemble(m, method = meth, iter_warmup = 400, iter_sampling = 400, seed = 2)
     moments_ok(fit, 0.3)
     expect_true(all(fit$acceptance > 0.05))
@@ -102,6 +102,7 @@ test_that("piecewise deterministic samplers target the posterior", {
     fit <- bayescomp_pdmp(m, meth, chains = 2, iter_warmup = 150, iter_sampling = 500, seed = 1)
     moments_ok(fit, 0.25)
     expect_true(all(fit$events > 0))
+    expect_true(all(fit$bound_violations < 5))
   }
 })
 

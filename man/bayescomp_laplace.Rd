@@ -11,6 +11,7 @@ bayescomp_laplace(
   draws = 1000L,
   seed = NULL,
   calculate_lp = TRUE,
+  num_modes = 1L,
   refresh = 0L
 )
 }
@@ -30,6 +31,12 @@ the name of a file with the mode: a Stan CSV file from an optimization
 
 \item{calculate_lp}{Evaluate the log density of the draws (\code{log_p__});
 with \code{FALSE} it is \code{NaN}, as in CmdStan.}
+
+\item{num_modes}{Number of optimizer starts from random initial values
+when \code{mode} is not given. With more than one, the distinct modes found
+form a mixture of Gaussians weighted by \verb{exp(lp) |Sigma|^(1/2)} at each
+mode, so a multimodal posterior is covered by one approximation;
+\code{log_g__} is then the log density of the mixture.}
 
 \item{refresh}{Report the stages, the optimizer's iterations and every
 \code{refresh} draws (0, the default, is quiet).}

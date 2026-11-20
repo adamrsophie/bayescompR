@@ -178,8 +178,10 @@ rmhmc_step <- function(q, gq, eps, L, geom, gradV, fp, tol = 1e-6) {
   H0 <- Hfun(gq, p)
   fail <- list(q = q, gq = gq, acc = 0, div = TRUE, H = H0)
   x <- q; gx <- gq
+  # the derivative closure at the end of one step is the one the next step
+  # starts from, so it is built L + 1 times rather than 2L
+  dH <- rmhmc_dHdq_fun(x, gx, geom)
   for (l in seq_len(L)) {
-    dH <- rmhmc_dHdq_fun(x, gx, geom)
     if (is.null(dH)) return(fail)
     ph <- p
     ok <- FALSE
@@ -205,9 +207,9 @@ rmhmc_step <- function(q, gq, eps, L, geom, gradV, fp, tol = 1e-6) {
     if (!ok) return(fail)
     gn <- geom(xn)
     if (!is.finite(gn$V)) return(fail)
-    dH2 <- rmhmc_dHdq_fun(xn, gn, geom)
-    if (is.null(dH2)) return(fail)
-    p <- ph - 0.5 * eps * dH2(ph)
+    dH <- rmhmc_dHdq_fun(xn, gn, geom)
+    if (is.null(dH)) return(fail)
+    p <- ph - 0.5 * eps * dH(ph)
     x <- xn; gx <- gn
     if (any(!is.finite(p))) return(fail)
   }

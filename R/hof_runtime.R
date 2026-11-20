@@ -98,8 +98,9 @@ ode_dopri <- function(Fn, t0, y0, ts, rtol, atol, maxsteps, name) {
   d0 <- sqrt(mean((y / (atol + rtol * abs(y)))^2)); d1 <- sqrt(mean((k1 / (atol + rtol * abs(y)))^2))
   h <- if (d0 < 1e-5 || d1 < 1e-5) 1e-6 else 0.01 * d0 / d1
   h <- min(h, abs(tend - t0))
-  steps <- 0L
   for (j in seq_along(ts)) {
+    # as Stan, max_num_steps limits the steps between consecutive output times
+    steps <- 0L
     while (t < ts[j]) {
       steps <- steps + 1L
       if (steps > maxsteps)
@@ -140,6 +141,24 @@ ros_tab <- list(
   M = c(2, 0, 1, 1), E = c(0, 0, 0, 1), alpha = c(0, 0, 1, 1), gamma = c(0.5, 1.5, 0, 0),
   newf = c(TRUE, FALSE, TRUE, TRUE), g = 0.5, order = 3)
 
+# Solver for the stage matrix I / (h gamma) - J. A forward sensitivity
+# system has the block lower triangular Jacobian [Jy 0; B I(x)Jy]: every
+# diagonal block is the state Jacobian, so one N x N factorization of
+# D = I / (h gamma) - Jy solves D k_y = b_y and D K_S = B_S + B k_y for all
+# sensitivity columns at once.
+ros_stage_solver <- function(JT, hg) {
+  if (is.null(JT$Jy)) {
+    W <- qr(diag(nrow(JT$J)) / hg - JT$J)
+    return(function(r) qr.coef(W, r))
+  }
+  N <- nrow(JT$Jy)
+  D <- qr(diag(N) / hg - JT$Jy)
+  function(r) {
+    ky <- qr.coef(D, r[seq_len(N)])
+    c(ky, as.vector(qr.coef(D, matrix(r[-seq_len(N)] + as.vector(JT$B %*% ky), N))))
+  }
+}
+
 ode_ros <- function(Fn, t0, y0, ts, rtol, atol, maxsteps, name, jacfn) {
   tb <- ros_tab
   n <- length(y0)
@@ -149,17 +168,17 @@ ode_ros <- function(Fn, t0, y0, ts, rtol, atol, maxsteps, name, jacfn) {
   tend <- ts[length(ts)]
   sc <- atol + rtol * abs(y)
   h <- min(abs(tend - t0), 0.01 * max(1e-6, sqrt(mean((y / sc)^2))) / max(1e-6, sqrt(mean((F0 / sc)^2))))
-  steps <- 0L
   JT <- jacfn(t, y, F0)
   K <- matrix(0, n, 4L)
   for (j in seq_along(ts)) {
+    steps <- 0L
     while (t < ts[j]) {
       steps <- steps + 1L
       if (steps > maxsteps)
         stop_domain(sprintf("%s: Failed to integrate to next output time (%s) in less than max_num_steps steps", name, format_scalar(ts[j])))
       hh <- min(h, ts[j] - t)
       last <- hh >= ts[j] - t
-      W <- qr(diag(n) / (hh * tb$g) - JT$J)
+      W <- ros_stage_solver(JT, hh * tb$g)
       Fi <- F0
       for (st in 1:4) {
         if (st > 1L && tb$newf[st]) {
@@ -168,7 +187,7 @@ ode_ros <- function(Fn, t0, y0, ts, rtol, atol, maxsteps, name, jacfn) {
         }
         rhs <- Fi + hh * tb$gamma[st] * JT$T
         if (st > 1L) rhs <- rhs + as.vector(K[, seq_len(st - 1L), drop = FALSE] %*% tb$C[st, seq_len(st - 1L)]) / hh
-        K[, st] <- qr.coef(W, rhs)
+        K[, st] <- W(rhs)
       }
       ynew <- y + as.vector(K %*% tb$M)
       err <- ode_norm(as.vector(K %*% tb$E), y, ynew, rtol, atol)
@@ -241,19 +260,18 @@ ode_solve <- function(callf, y0, t0, ts, args, rtol, atol, maxsteps, method, nam
     if (sens_y0) S0[, seq_len(N)] <- diag(N)
     # Jacobian of the augmented system: the state block and the identical
     # sensitivity diagonal blocks exactly, the dependence of the
-    # sensitivity equations on the state by finite differences
+    # sensitivity equations on the state (the first block column B) by
+    # finite differences. Only the blocks are kept (see ros_stage_solver()).
     jac_aug <- function(t, Yv, F0) {
-      M <- N * (P + 1L)
       y <- Yv[seq_len(N)]
       Jy <- hof_jac(function(z) callf(t, z, pv), y)$J
-      J <- matrix(0, M, M)
-      for (b in 0:P) J[b * N + seq_len(N), b * N + seq_len(N)] <- Jy
+      B <- matrix(0, N * P, N)
       for (k in seq_len(N)) {
         dk <- sqrt(.Machine$double.eps) * max(abs(y[k]), 1)
         Yk <- Yv; Yk[k] <- Yk[k] + dk
-        J[-seq_len(N), k] <- (aug(t, Yk)[-seq_len(N)] - F0[-seq_len(N)]) / dk
+        B[, k] <- (aug(t, Yk)[-seq_len(N)] - F0[-seq_len(N)]) / dk
       }
-      list(J = J, T = fd_t(aug, t, Yv, F0))
+      list(Jy = Jy, B = B, T = fd_t(aug, t, Yv, F0))
     }
     # the tolerances apply to the states and their sensitivities
     Y0 <- c(y0v, as.vector(S0))
@@ -381,6 +399,25 @@ rt_solve_legacy <- function(f, fixed, va, ctx, opts) {
 
 # ---- 1D integration -----------------------------------------------------------------------------
 
+# Gradient of the integrand in theta at one integration point. Each gradient
+# component has its own adaptive quadrature, but they mostly visit the same
+# points, so the whole gradient is kept per point (x, xc) for this integral
+# at this theta. Integrands cannot call _rng or _lp functions, so the
+# gradient at a point is fixed. Storage is capped at 1e6 doubles; points
+# past the cap are recomputed.
+quad_grad <- function(one, thv) {
+  memo <- new.env(hash = TRUE, parent = emptyenv())
+  room <- max(1L, 1e6 %/% max(1L, length(thv)))
+  function(x, xc) {
+    key <- sprintf("%a %a", x, xc)
+    g <- memo[[key]]
+    if (!is.null(g)) return(g)
+    g <- ad_value_grad(function(z) one(x, xc, z), thv)$grad
+    if (room > 0L) { assign(key, g, envir = memo); room <<- room - 1L }
+    g
+  }
+}
+
 # integrate_1d(f, a, b, theta, x_r, x_i[, rel_tol]) with f(x, xc, theta, x_r, x_i);
 # xc is the signed distance to the nearest finite limit (NaN when a limit is
 # infinite), as in Stan; intervals crossing zero are split there
@@ -418,10 +455,8 @@ rt_integrate_1d <- function(f, fixed, va, ctx, opts) {
   gb <- if (inherits(b, "bcad")) as.numeric(val(one(bv, 0, thv))) else NULL
   gth <- NULL
   if (inherits(theta, "bcad")) {
-    gth <- vapply(seq_along(thv), function(k) quad(function(x, xc) {
-      r <- ad_value_grad(function(z) one(x, xc, z), thv)
-      r$grad[k]
-    }), 0)
+    gr <- quad_grad(one, thv)
+    gth <- vapply(seq_along(thv), function(k) quad(function(x, xc) gr(x, xc)[k]), 0)
   }
   ad_node(value, list(a, b, theta), function(g) list(if (!is.null(ga)) g * ga, if (!is.null(gb)) g * gb, if (!is.null(gth)) g * gth))
 }
@@ -464,7 +499,8 @@ rt_integrate_1d_v <- function(f, fixed, va, ctx, opts) {
   if (!any_ad(a, b) && !length(fl$parents)) return(value)
   ga <- if (inherits(a, "bcad")) -as.numeric(val(one(av, 0, thv))) else NULL
   gb <- if (inherits(b, "bcad")) as.numeric(val(one(bv, 0, thv))) else NULL
-  gth <- if (length(thv)) vapply(seq_along(thv), function(k) quad(function(x, xc) ad_value_grad(function(z) one(x, xc, z), thv)$grad[k]), 0) else numeric(0)
+  gr <- quad_grad(one, thv)
+  gth <- vapply(seq_along(thv), function(k) quad(function(x, xc) gr(x, xc)[k]), 0)
   ad_node(value, c(list(a, b), fl$parents), function(g) c(list(if (!is.null(ga)) g * ga, if (!is.null(gb)) g * gb),
                                                            lapply(hof_split(gth, fl$parents), function(d) g * d)))
 }
@@ -592,8 +628,8 @@ dae_solve <- function(callf, yy0, yp0, t0, ts, args, rtol, atol, maxsteps, name)
   if (sens_y0) S[, seq_len(N)] <- diag(N)
   t <- t0v
   h <- min(tv[length(tv)] - t0v, 0.01 * max(1, abs(t0v)))
-  steps <- 0L
   for (k in seq_along(tv)) {
+    steps <- 0L
     while (t < tv[k]) {
       steps <- steps + 1L
       if (steps > maxsteps)

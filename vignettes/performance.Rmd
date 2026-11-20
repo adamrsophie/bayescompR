@@ -89,18 +89,22 @@ Each iteration of a loop creates several tape nodes, so a loop over 500
 observations creates thousands per gradient where a vectorized statement
 creates a handful. In compiled Stan the difference is small; in bayescompR
 it is two orders of magnitude. Lagged reads such as `z[t] ~ normal(phi *
-z[t - 1], s)` are vectorized too, since the loop only reads `z`. Loops
-with dependence between iterations, where an iteration reads what an
-earlier one wrote (`mu[n] = r * mu[n - 1]`), truncation or nested blocks with local
-variables are not vectorized; they still run, and element writes in them
-use memory linear in the length of the vector.
+z[t - 1], s)` are vectorized too, since the loop only reads `z`. So are
+loop bodies that declare scalar locals with a value (`real mu = ...;`),
+`dot_product(X[n], b)`, `target +=` of any scalar, truncation with bounds
+that do not depend on the loop, and shared vector arguments such as the
+cutpoints in `y[n] ~ ordered_logistic(eta[n], c)`. Loops with dependence
+between iterations, where an iteration reads what an earlier one wrote
+(`mu[n] = r * mu[n - 1]`), conditions on parameters, or locals assigned
+again are not vectorized; they still run, and element writes in them use
+memory linear in the length of the vector.
 
 Guidelines:
 
 * Write vectorized sampling statements and functions (`y ~ normal(mu, s)`
   with vector `mu`) where you can. The compiler vectorizes simple loops
-  over observations, but not loops with local variables, conditions or
-  dependence between iterations.
+  over observations, but not loops with conditions or dependence between
+  iterations.
 * Use the GLM densities (`normal_id_glm`, `bernoulli_logit_glm`,
   `poisson_log_glm`, `neg_binomial_2_log_glm`, `categorical_logit_glm`,
   `ordered_logistic_glm`) for regressions.
@@ -118,6 +122,37 @@ Guidelines:
 Metropolis and slice sampling evaluate the log density without the tape,
 which is cheaper than a gradient. They need many more evaluations, but on
 small models with expensive gradients they can be competitive.
+
+## Dense metric
+
+NUTS adapts a diagonal metric by default. When parameters are strongly
+correlated (regression coefficients with collinear predictors, the
+intercept and slope of an uncentered predictor), the diagonal metric
+forces small steps and long trajectories. `metric = "dense_e"` adapts the
+full covariance during warmup and can cut the number of gradients per
+draw several times; each leapfrog step then costs one extra matrix product
+with the Cholesky factor, which is small next to a gradient in R unless
+the model has hundreds of parameters.
+
+A regression on an uncentered predictor has a strongly correlated intercept
+and slope:
+
+```{r}
+set.seed(1)
+xu <- rnorm(100, 10, 1)
+reg <- bayescomp_model("data { int N; vector[N] x; vector[N] y; }
+  parameters { real a; real b; real<lower=0> s; } model { y ~ normal(a + b * x, s); }",
+  data = list(N = 100, x = xu, y = 1 + 0.5 * xu + rnorm(100)))
+steps <- function(metric) {
+  fit <- bayescomp_sample(reg, metric = metric, chains = 2, seed = 1, refresh = 0)
+  mean(fit$sampler_diagnostics[, , "n_leapfrog__"])   # leapfrog steps per draw
+}
+c(diag_e = steps("diag_e"), dense_e = steps("dense_e"))
+```
+
+Here the dense metric needs about a ninth of the gradients, and the whole
+run takes about a fourth of the time. Centering the predictor in
+`transformed data` removes the correlation and helps both metrics.
 
 ## Parallel chains
 

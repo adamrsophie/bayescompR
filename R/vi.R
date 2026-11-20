@@ -42,6 +42,8 @@ bayescomp_variational <- function(model, algorithm = c("meanfield", "fullrank"),
   trace <- NULL
   res <- run_chains(model, 1L, seed, 1L, function(id) {
     lpg <- safe_lp(model, jacobian = TRUE)
+    # the ELBO and the output draws need values only, not gradients
+    lv <- attr(lpg, "value")
     mu0 <- find_init(model, init, 1L)
     full <- algorithm == "fullrank"
     vp0 <- list(mu = mu0, omega = rep(0, n), L = diag(n))
@@ -54,7 +56,7 @@ bayescomp_variational <- function(model, algorithm = c("meanfield", "fullrank"),
     }
     elbo <- function(vp) {
       th <- transform(vp, draw_z(elbo_samples))
-      lp <- apply(th, 1L, function(q) lpg(q)$value)
+      lp <- apply(th, 1L, lv)
       # as Stan's calc_ELBO: draws whose log density is not finite are
       # dropped, and the ELBO fails only when every draw is dropped
       if (!any(is.finite(lp))) return(-Inf)
@@ -131,7 +133,7 @@ bayescomp_variational <- function(model, algorithm = c("meanfield", "fullrank"),
     # as CmdStan: log_g__ unnormalized in the standard normal draws, log_p__
     # with all constants
     log_g <- -0.5 * rowSums(z^2)
-    log_p <- apply(qs, 1L, function(q) lpg(q)$value)
+    log_p <- apply(qs, 1L, lv)
     log_p <- log_p + propto_shift(model, qs, log_p)
     gq <- chain_write_draws(model, qs, FALSE)
     trace <<- list(elbo = r$trace, eta = eta, iterations = r$iter, converged = r$converged,
@@ -450,3 +452,55 @@ pathfinder_best_normal <- function(lpg, u0, ctl = pathfinder_control()) {
   list(mu = r$mu, L = t(chol(lbfgs_normal_cov(r$approx))))
 }
 
+
+#' Check an approximate posterior with short MCMC runs
+#'
+#' Starts short NUTS chains from draws of an approximate fit (Pathfinder,
+#' variational, Laplace) and measures how far they move: if the
+#' approximation were exact, chains started from it would stay
+#' distributed as it is, so a drift of the means or a change of the spread
+#' shows where it is wrong (the idea behind TADDAA of Wang, Kasprzak and
+#' Huggins 2023, without its error bounds).
+#'
+#' @param fit A `bayescomp_fit` from an approximate method.
+#' @param model The model of the fit (by default the one stored in it).
+#' @param chains Number of short chains.
+#' @param iter Warmup and sampling iterations of each chain.
+#' @param tolerance Flag variables whose mean moves by more than this many
+#'   approximate posterior sds, or whose sd changes by more than this
+#'   fraction, beyond three Monte Carlo standard errors of the short run.
+#' @param seed Random seed.
+#' @return A data frame with one row per variable: `mean_approx`,
+#'   `mean_mcmc`, `std_shift` (mean change in approximate sds), `sd_ratio`
+#'   and `flag`; attribute `"mcmc"` holds the short run.
+#' @examples
+#' \donttest{
+#' m <- bayescomp_model("parameters { real<lower=0> s; } model { s ~ gamma(2, 1); }")
+#' fit <- bayescomp_laplace(m, seed = 1)
+#' bayescomp_check_approximation(fit, chains = 4, iter = 100, seed = 1)
+#' }
+#' @export
+bayescomp_check_approximation <- function(fit, model = fit$model, chains = 8L, iter = 200L, tolerance = 0.2, seed = NULL) {
+  if (!inherits(fit, "bayescomp_fit") || is.null(fit$unconstrained)) stop("'fit' must be a fit with unconstrained draws", call. = FALSE)
+  check_model(model)
+  run <- bayescomp_sample(model, chains = chains, iter_warmup = iter, iter_sampling = iter, init = fit,
+                          seed = seed, refresh = 0L)
+  da <- bayescomp_draws(fit, format = "matrix")
+  dm <- bayescomp_draws(run, format = "matrix")
+  v <- intersect(colnames(da)[!grepl("__$", colnames(da))], colnames(dm))
+  ma <- colMeans(da[, v, drop = FALSE]); sa <- apply(da[, v, drop = FALSE], 2L, stats::sd)
+  mm <- colMeans(dm[, v, drop = FALSE]); sm <- apply(dm[, v, drop = FALSE], 2L, stats::sd)
+  shift <- (mm - ma) / ifelse(sa > 0, sa, NA_real_)
+  ratio <- sm / ifelse(sa > 0, sa, NA_real_)
+  # Monte Carlo error of the short run, in approximate sds: a variable is
+  # flagged only when it moves beyond the tolerance by more than 3 MCSE
+  sm_draws <- summary(run, variables = v)
+  mcse <- sm_draws$mcse_mean / ifelse(sa > 0, sa, NA_real_)
+  ess <- pmax(sm_draws$ess_bulk, 2)
+  se_log_ratio <- sqrt(1 / (2 * (ess - 1)))
+  out <- data.frame(variable = v, mean_approx = ma, mean_mcmc = mm, std_shift = shift, sd_ratio = ratio,
+                    flag = abs(shift) - 3 * mcse > tolerance | abs(log(ratio)) - 3 * se_log_ratio > log1p(tolerance),
+                    row.names = NULL)
+  attr(out, "mcmc") <- run
+  out
+}

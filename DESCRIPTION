@@ -1,6 +1,6 @@
 Package: bayescompR
 Title: Pure R Implementation of the 'Stan' Modeling Language
-Version: 0.1.0
+Version: 0.1.0.9000
 Authors@R:
     c(person("Adam R", "Sophie", email = "adamrsophie@gmail.com",
              role = c("aut", "cre", "cph")),
@@ -53,6 +53,7 @@ Suggests:
     knitr,
     loo,
     posterior,
+    ranger,
     rmarkdown,
     rstantools,
     testthat (>= 3.0.0)
@@ -84,6 +85,7 @@ Collate:
     'tuples.R'
     'hof.R'
     'hof_runtime.R'
+    'capabilities.R'
     'laplace.R'
     'semantic.R'
     'runtime.R'
@@ -116,4 +118,12 @@ Collate:
     'sbi.R'
     'diffusion.R'
     'ir.R'
+    'bugs_parse.R'
+    'bugs_data.R'
+    'bugs_dist.R'
+    'bugs_codegen.R'
+    'bugs_compile.R'
+    'bugs_mcmc.R'
+    'bugs_api.R'
+    'bugs_nimble.R'
 Config/roxygen2/version: 8.1.1

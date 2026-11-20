@@ -24,8 +24,18 @@
 #     the loop) and `x[idx[n]]` with `x` a vector, row vector or one
 #     dimensional array, `X[n] * b` with `X` a matrix and `b` a vector, and
 #     `X[n, k]`,
+#   * `X[i, j]` with `X` a matrix or two dimensional real array, and
+#     `b[i][j]` with `b` an array of vectors or row vectors, where each of
+#     i and j is a position as above or does not depend on the loop; the
+#     elements are read with the internal function `gather2__`,
+#   * `(A * x[g[n]])[k]` with `A` a matrix and `x` an array of vectors that
+#     do not depend on the loop, read as element [k, g[n]] of the single
+#     product `A * to_matrix(x)`,
 #   * arithmetic (`+ - * / ^`, unary minus) on scalars,
-#   * elementwise functions of one scalar (exp, log, inv_logit, ...).
+#   * elementwise functions of one scalar (exp, log, inv_logit, ...),
+#   * `dot_product(X[n], b)`.
+# Scalar locals declared with a value in the body are replaced by that
+# value; `target +=` of any scalar adds the sum of the vector.
 # A variable assigned in the loop may only be read as `v[n]` in the loop.
 
 vec_unary <- c("exp", "log", "log1p", "expm1", "log2", "log10", "exp2", "inv_logit", "logit", "log_inv_logit",
@@ -51,13 +61,13 @@ vectorize_program <- function(ast, ir, external = character()) {
   }
   all <- rewrite(NULL)
   if (!all$done) return(ir)
-  ok <- tryCatch(stan_check(all$ast, external = external), bayescomp_error = function(e) NULL)
+  ok <- tryCatch(stan_check(all$ast, external = external, internal = TRUE), bayescomp_error = function(e) NULL)
   if (!is.null(ok)) return(vec_mark(ok, all$done))
   # one of the rewrites does not check: add them one at a time
   allow <- integer(0); best <- ir
   for (k in seq_len(all$found)) {
     r <- rewrite(c(allow, k))
-    chk <- tryCatch(stan_check(r$ast, external = external), bayescomp_error = function(e) NULL)
+    chk <- tryCatch(stan_check(r$ast, external = external, internal = TRUE), bayescomp_error = function(e) NULL)
     if (!is.null(chk)) { allow <- c(allow, k); best <- chk }
   }
   vec_mark(best, length(allow))
@@ -88,7 +98,8 @@ vec_stmts <- function(as, ts, st) {
       } else {
         a$body <- vec_block(vec_stmts(vec_as_list(a$body), vec_as_list(t$body), st), a$body$loc %||% a$loc)
       }
-    } else if (identical(a$kind, "block_stmt") && identical(t$kind, "block_stmt") && is.null(a$profile)) {
+    } else if (identical(a$kind, "block_stmt") && identical(t$kind, "block_stmt")) {
+      # also the body of a profile block, which stays a profile block
       a$body <- vec_stmts(a$body, t$body, st)
     } else if (identical(a$kind, "if") && identical(t$kind, "if")) {
       for (k in c("then", "els")) if (!is.null(a[[k]]) && !is.null(t[[k]]))
@@ -110,7 +121,40 @@ vec_mentions <- function(e, v) {
   FALSE
 }
 
+# does an AST call target(), a random number generator, an _lp function
+# (which can change the target) or a _jacobian function?
+vec_effectful <- function(e) {
+  if (!is.list(e)) return(FALSE)
+  if (identical(e$kind, "call") && is.character(e$name) &&
+      (identical(e$name, "target") || grepl("_rng$|_lp$|_jacobian$", e$name))) return(TRUE)
+  for (k in names(e) %||% seq_along(e)) {
+    if (k %in% c("loc", "type", "sig")) next
+    if (is.list(e[[k]]) && vec_effectful(e[[k]])) return(TRUE)
+  }
+  FALSE
+}
+
 vec_is_n <- function(e, n) identical(e$kind, "var") && identical(e$name, n)
+
+# names of the variables an AST reads
+ir_var_names <- function(e) {
+  if (!is.list(e)) return(character())
+  out <- if (identical(e$kind, "var") && is.character(e$name)) e$name else character()
+  for (k in names(e) %||% seq_along(e)) if (!k %in% c("loc", "type", "sig") && is.list(e[[k]])) out <- c(out, ir_var_names(e[[k]]))
+  unique(out)
+}
+
+# does a statement assign to any of the variables `vs`?
+ir_assigns_any <- function(st, vs) {
+  if (!is.list(st)) return(FALSE)
+  if (identical(st$kind, "assign") && any(vapply(vs, function(v) vec_mentions(st$lhs, v), TRUE))) return(TRUE)
+  for (k in names(st) %||% seq_along(st)) if (!k %in% c("loc", "type", "sig") && is.list(st[[k]]) && ir_assigns_any(st[[k]], vs)) return(TRUE)
+  FALSE
+}
+
+# Stan tests the upper bound of a for loop before every iteration; it can
+# change when it reads target() or a variable the body assigns
+loop_bound_varies <- function(hi, body) vec_effectful(hi) || ir_assigns_any(body, ir_var_names(hi))
 
 vec_scalar <- function(t) is.list(t) && identical(t$nd %||% 0L, 0L) && isTRUE(t$base %in% c("int", "real"))
 
@@ -118,8 +162,17 @@ vec_for <- function(a, t) {
   n <- a$var
   if (!identical(t$iter, NULL) || is.null(a$lo) || is.null(a$hi)) return(NULL)
   if (vec_mentions(a$lo, n) || vec_mentions(a$hi, n)) return(NULL)
+  # the bounds are evaluated once (and again by the guard below), which is
+  # only the same as the loop when they cannot change between evaluations
+  if (vec_effectful(a$lo) || vec_effectful(a$hi) || loop_bound_varies(a$hi, a$body) ||
+      ir_assigns_any(a$body, ir_var_names(a$lo))) return(NULL)
   abody <- vec_as_list(a$body); tbody <- vec_as_list(t$body)
   if (!length(abody) || length(abody) != length(tbody)) return(NULL)
+  # scalar locals of the body are replaced by their values
+  inl <- vec_inline_locals(abody, tbody, n)
+  if (is.null(inl)) return(NULL)
+  abody <- inl$a; tbody <- inl$t
+  if (!length(abody)) return(NULL)
   # variables written in the loop
   written <- character()
   for (k in seq_along(abody)) {
@@ -147,7 +200,35 @@ vec_for <- function(a, t) {
     if (is.null(s)) return(NULL)
     out[[k]] <- s
   }
-  out
+  # a loop with no iterations evaluates nothing, not even expressions that do
+  # not use the loop variable
+  cond <- list(kind = "binop", op = "<=", a = a$lo, b = a$hi, loc = a$loc)
+  list(list(kind = "if", cond = cond, then = vec_block(out, a$loc), els = NULL, loc = a$loc))
+}
+
+# `real mu = e;` in a loop body: later statements read e instead, so the
+# body is a sequence of statements the rewrite handles. Only for a scalar
+# with a value without effects, when the later statements assign neither
+# the local nor a variable its value reads.
+vec_inline_locals <- function(as, ts, n) {
+  i <- 1L
+  while (i <= length(as)) {
+    a <- as[[i]]; t <- ts[[i]]
+    if (!identical(a$kind, "decl")) { i <- i + 1L; next }
+    if (is.null(a$init) || is.null(t$init) || !vec_scalar(t$vtype) || vec_effectful(a$init)) return(NULL)
+    rest <- seq_along(as)[-seq_len(i)]
+    if (any(vapply(as[rest], ir_assigns_any, TRUE, vs = c(a$name, ir_var_names(a$init))))) return(NULL)
+    ra <- list(kind = "paren", a = a$init, loc = a$init$loc)
+    for (k in rest) { as[[k]] <- vec_subst(as[[k]], a$name, ra); ts[[k]] <- vec_subst(ts[[k]], a$name, t$init) }
+    as <- as[-i]; ts <- ts[-i]
+  }
+  list(a = as, t = ts)
+}
+vec_subst <- function(e, v, r) {
+  if (!is.list(e)) return(e)
+  if (identical(e$kind, "var") && identical(e$name, v)) return(r)
+  for (k in names(e) %||% seq_along(e)) if (!k %in% c("loc", "type", "sig") && is.list(e[[k]])) e[[k]] <- vec_subst(e[[k]], v, r)
+  e
 }
 
 vec_range <- function(ctx) list(kind = "range", lo = ctx$lo, hi = ctx$hi, loc = ctx$loc)
@@ -162,8 +243,12 @@ vec_size <- function(ctx) {
 vec_stmt <- function(a, t, ctx) {
   switch(a$kind,
     tilde = {
-      if (!is.null(a$trunc) || !vec_scalar(t$lhs$type)) return(NULL)
-      if (!all(vapply(t$args, function(x) vec_scalar(x$type), TRUE))) return(NULL)
+      # a user defined density may have unrelated scalar and vector overloads
+      if (isTRUE(t$sig$user) || !vec_scalar(t$lhs$type)) return(NULL)
+      # truncation bounds are scalars evaluated once
+      if (!is.null(a$trunc) && any(vapply(list(a$trunc$lo, a$trunc$hi), function(b) vec_mentions(b, ctx$n) || vec_effectful(b), TRUE)))
+        return(NULL)
+      if (!all(vec_args_ok(a$args, t$args, t$sig$args[-1L], ctx$n))) return(NULL)
       lhs <- vec_expr(a$lhs, t$lhs, ctx)
       if (is.null(lhs)) return(NULL)
       args <- Map(function(x, y) vec_expr(x, y, ctx), a$args, t$args)
@@ -175,9 +260,16 @@ vec_stmt <- function(a, t, ctx) {
     },
     target_add = {
       v <- a$value; tv <- t$value
-      if (!identical(v$kind, "call") || !identical(tv$kind, "call") || isTRUE(tv$sig$user)) return(NULL)
-      if (!grepl("_(lpdf|lpmf|lupdf|lupmf)$", v$name) || length(v$args) != length(tv$args)) return(NULL)
-      if (!all(vapply(tv$args, function(x) vec_scalar(x$type), TRUE))) return(NULL)
+      if (!(identical(v$kind, "call") && grepl("_(lpdf|lpmf|lupdf|lupmf|lcdf|lccdf)$", v$name))) {
+        # any other scalar: target += of the vector adds its sum
+        if (!vec_scalar(tv$type)) return(NULL)
+        r <- vec_expr(v, tv, ctx)
+        if (is.null(r) || !r$dep || identical(r$kind, "mat")) return(NULL)
+        a$value <- vec_out(r, ctx, arith = TRUE)
+        return(a)
+      }
+      if (!identical(tv$kind, "call") || isTRUE(tv$sig$user) || length(v$args) != length(tv$args)) return(NULL)
+      if (!all(vec_args_ok(v$args, tv$args, tv$sig$args, ctx$n))) return(NULL)
       args <- Map(function(x, y) vec_expr(x, y, ctx), v$args, tv$args)
       if (any(vapply(args, is.null, TRUE)) || !any(vapply(args, `[[`, TRUE, "dep"))) return(NULL)
       v$args <- lapply(args, vec_out, ctx = ctx, arith = FALSE)
@@ -199,6 +291,17 @@ vec_stmt <- function(a, t, ctx) {
     NULL)
 }
 
+# arguments a vectorized density accepts: scalars, and in a position the
+# signature shares between elements (cutpoints, a simplex) a vector that
+# does not depend on the loop. In an elementwise position ("reals") a vector
+# would broadcast the outcome instead.
+vec_args_ok <- function(as, ts, pos, n) {
+  Map(function(a, t, p) vec_scalar(t$type) ||
+        (!is.null(p) && !p %in% c("reals", "ints", "real", "int") && identical(t$type$base, "vector") &&
+         (t$type$nd %||% 0L) == 0L && !vec_mentions(a, n) && !vec_effectful(a)),
+      as, ts, as.list(pos)[seq_along(ts)]) |> unlist()
+}
+
 # the final form of a vectorized expression; in arithmetic and as an
 # assigned value, arrays become vectors
 vec_out <- function(r, ctx, arith) {
@@ -212,7 +315,13 @@ vec_out <- function(r, ctx, arith) {
 # (rows of a matrix, only valid on the left of a matrix product)
 vec_expr <- function(a, t, ctx) {
   n <- ctx$n
-  if (!vec_mentions(a, n)) return(list(ast = a, dep = FALSE, kind = "scalar"))
+  if (!vec_mentions(a, n)) {
+    # an expression that does not use the loop variable is evaluated once
+    # instead of once per iteration, which is only the same when it has no
+    # effects and does not read state the loop changes
+    if (vec_effectful(a)) return(NULL)
+    return(list(ast = a, dep = FALSE, kind = "scalar"))
+  }
   # the typed program has no parentheses
   if (identical(a$kind, "paren") && !identical(t$kind, "paren")) {
     r <- vec_expr(a$a, t, ctx)
@@ -257,6 +366,14 @@ vec_expr <- function(a, t, ctx) {
       list(ast = a, dep = TRUE, kind = "vec")
     },
     call = {
+      # dot_product(X[n], b): a row of a matrix times a vector
+      if (identical(a$name, "dot_product") && length(a$args) == 2L && !isTRUE(t$sig$user)) {
+        ra <- vec_expr(a$args[[1L]], t$args[[1L]], ctx)
+        tb <- t$args[[2L]]$type
+        if (is.null(ra) || !identical(ra$kind, "mat") || vec_mentions(a$args[[2L]], n) || vec_effectful(a$args[[2L]]) ||
+            !identical(tb$base, "vector") || (tb$nd %||% 0L) != 0L) return(NULL)
+        return(list(ast = list(kind = "binop", op = "*", a = ra$ast, b = a$args[[2L]], loc = a$loc), dep = TRUE, kind = "vec"))
+      }
       if (!a$name %in% vec_unary || length(a$args) != 1L || isTRUE(t$sig$user) || !vec_scalar(t$type)) return(NULL)
       r <- vec_expr(a$args[[1L]], t$args[[1L]], ctx)
       if (is.null(r) || identical(r$kind, "mat")) return(NULL)
@@ -268,28 +385,15 @@ vec_expr <- function(a, t, ctx) {
 
 vec_index <- function(a, t, ctx) {
   n <- ctx$n
-  if (vec_mentions(a$x, n)) return(NULL)
+  # b[i][j] on a one dimensional array of vectors is b[i, j]
+  if (identical(a$x$kind, "index") && identical(t$x$kind, "index") && vec_mentions(a$x, n) && length(a$idx) == 1L &&
+      length(a$x$idx) == 1L &&
+      identical((t$x$x$type$nd %||% 0L), 1L) && t$x$x$type$base %in% c("vector", "row_vector"))
+    return(vec_gather2(a$x$x, t$x$x, c(a$x$idx, a$idx), c(t$x$idx, t$idx), ctx))
+  if (vec_mentions(a$x, n)) return(vec_index_product(a, t, ctx))
   xt <- t$x$type
   nd <- xt$nd %||% 0L
-  # the vectorized position: the loop variable itself, or idx[n] for an
-  # integer array idx that does not depend on the loop
-  pos <- function(ia, it) {
-    if (!identical(ia$kind, "single")) return(NULL)
-    e <- ia$e
-    if (vec_is_n(e, n)) return(vec_range(ctx))
-    # x[n + c] or x[n - c] with an integer c that does not depend on the loop
-    if (identical(e$kind, "binop") && e$op %in% c("+", "-") && identical(it$e$kind, "binop") && vec_is_n(e$a, n) &&
-        !vec_mentions(e$b, n) && identical(it$e$b$type$base, "int") && (it$e$b$type$nd %||% 0L) == 0L) {
-      sh <- function(x) list(kind = "binop", op = e$op, a = list(kind = "paren", a = x, loc = e$loc),
-                             b = list(kind = "paren", a = e$b, loc = e$loc), loc = e$loc)
-      return(list(kind = "range", lo = sh(ctx$lo), hi = sh(ctx$hi), loc = ctx$loc))
-    }
-    if (identical(e$kind, "index") && identical(it$e$kind, "index") && !vec_mentions(e$x, n) &&
-        identical(it$e$x$type$base, "int") && (it$e$x$type$nd %||% 0L) == 1L && length(e$idx) == 1L &&
-        identical(e$idx[[1L]]$kind, "single") && vec_is_n(e$idx[[1L]]$e, n))
-      return(list(kind = "single", e = list(kind = "index", x = e$x, idx = list(vec_range(ctx)), loc = e$loc), loc = ia$loc))
-    NULL
-  }
+  pos <- function(ia, it) vec_pos(ia, it, ctx)
   if (length(a$idx) == 1L) {
     p <- pos(a$idx[[1L]], t$idx[[1L]])
     if (is.null(p)) return(NULL)
@@ -304,10 +408,80 @@ vec_index <- function(a, t, ctx) {
   if (length(a$idx) == 2L && nd == 0L && identical(xt$base, "matrix")) {
     p <- pos(a$idx[[1L]], t$idx[[1L]])
     k <- a$idx[[2L]]
-    if (is.null(p) || !identical(k$kind, "single") || vec_mentions(k, n) || !identical(t$idx[[2L]]$e$type$base, "int") ||
-        (t$idx[[2L]]$e$type$nd %||% 0L) != 0L) return(NULL)
-    a$idx <- list(p, k)
-    return(list(ast = a, dep = TRUE, kind = "vec"))
+    if (!is.null(p) && identical(k$kind, "single") && !vec_mentions(k, n) && identical(t$idx[[2L]]$e$type$base, "int") &&
+        (t$idx[[2L]]$e$type$nd %||% 0L) == 0L) {
+      a$idx <- list(p, k)
+      return(list(ast = a, dep = TRUE, kind = "vec"))
+    }
   }
+  if (length(a$idx) == 2L) return(vec_gather2(a$x, t$x, a$idx, t$idx, ctx))
   NULL
+}
+
+# the vectorized position: the loop variable itself, or idx[n] for an
+# integer array idx that does not depend on the loop
+vec_pos <- function(ia, it, ctx) {
+  n <- ctx$n
+  if (!identical(ia$kind, "single")) return(NULL)
+  e <- ia$e
+  if (vec_is_n(e, n)) return(vec_range(ctx))
+  # x[n + c] or x[n - c] with an integer c that does not depend on the loop
+  if (identical(e$kind, "binop") && e$op %in% c("+", "-") && identical(it$e$kind, "binop") && vec_is_n(e$a, n) &&
+      !vec_mentions(e$b, n) && identical(it$e$b$type$base, "int") && (it$e$b$type$nd %||% 0L) == 0L) {
+    sh <- function(x) list(kind = "binop", op = e$op, a = list(kind = "paren", a = x, loc = e$loc),
+                           b = list(kind = "paren", a = e$b, loc = e$loc), loc = e$loc)
+    return(list(kind = "range", lo = sh(ctx$lo), hi = sh(ctx$hi), loc = ctx$loc))
+  }
+  if (identical(e$kind, "index") && identical(it$e$kind, "index") && !vec_mentions(e$x, n) &&
+      identical(it$e$x$type$base, "int") && (it$e$x$type$nd %||% 0L) == 1L && length(e$idx) == 1L &&
+      identical(e$idx[[1L]]$kind, "single") && vec_is_n(e$idx[[1L]]$e, n))
+    return(list(kind = "single", e = list(kind = "index", x = e$x, idx = list(vec_range(ctx)), loc = e$loc), loc = ia$loc))
+  NULL
+}
+
+# x[i, j] (or x[i][j]) where the positions depend on the loop: the elements
+# are gathered by gather2__ with one integer array per position. A position
+# that does not depend on the loop is repeated.
+vec_gather2 <- function(x, tx, idx, tidx, ctx) {
+  n <- ctx$n
+  if (vec_mentions(x, n) || vec_effectful(x)) return(NULL)
+  xt <- tx$type; nd <- xt$nd %||% 0L
+  if (!((nd == 0L && identical(xt$base, "matrix")) || (nd == 2L && identical(xt$base, "real")) ||
+        (nd == 1L && xt$base %in% c("vector", "row_vector")))) return(NULL)
+  arr <- function(ia, it) {
+    if (!identical(ia$kind, "single") || !identical(it$e$type$base, "int") || (it$e$type$nd %||% 0L) != 0L) return(NULL)
+    if (!vec_mentions(ia$e, n)) {
+      if (vec_effectful(ia$e)) return(NULL)
+      return(vec_call("rep_array", list(ia$e, vec_size(ctx)), ctx$loc))
+    }
+    p <- vec_pos(ia, it, ctx)
+    if (is.null(p)) return(NULL)
+    if (identical(p$kind, "single")) return(p$e)
+    vec_call("linspaced_int_array", list(vec_size(ctx), p$lo, p$hi), ctx$loc)
+  }
+  ij <- Map(arr, idx, tidx)
+  if (any(vapply(ij, is.null, TRUE))) return(NULL)
+  list(ast = vec_call("gather2__", c(list(x), ij), ctx$loc), dep = TRUE, kind = "vec")
+}
+
+# (A * x[g])[k] with A a matrix that does not depend on the loop and x an
+# array of vectors: the products for all groups are one matrix product,
+# A * to_matrix(x) (whose columns are A * x[j]), and the loop reads its
+# elements [k, g]. This costs one product per group instead of one per
+# iteration.
+vec_index_product <- function(a, t, ctx) {
+  n <- ctx$n
+  ax <- a$x
+  while (identical(ax$kind, "paren")) ax <- ax$a
+  tx <- t$x
+  while (identical(tx$kind, "paren")) tx <- tx$a
+  if (length(a$idx) != 1L || !identical(ax$kind, "binop") || !identical(tx$kind, "binop") || ax$op != "*") return(NULL)
+  A <- ax$a; tA <- tx$a; xg <- ax$b; txg <- tx$b
+  if (vec_mentions(A, n) || vec_effectful(A) || !identical(tA$type$base, "matrix") || (tA$type$nd %||% 0L) != 0L) return(NULL)
+  if (!identical(xg$kind, "index") || !identical(txg$kind, "index") || length(xg$idx) != 1L) return(NULL)
+  xt <- txg$x$type
+  if (!identical(xt$base, "vector") || (xt$nd %||% 0L) != 1L || vec_mentions(xg$x, n) || vec_effectful(xg$x)) return(NULL)
+  P <- list(kind = "binop", op = "*", a = A, b = vec_call("to_matrix", list(xg$x), ctx$loc), loc = ax$loc)
+  tP <- list(kind = "binop", type = ty("matrix", 0L))
+  vec_gather2(P, tP, c(a$idx, xg$idx), c(t$idx, txg$idx), ctx)
 }

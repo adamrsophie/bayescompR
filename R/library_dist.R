@@ -23,13 +23,15 @@ bsum <- function(term, N) {
 # One tape node for a whole density with analytic partials (the analogue of
 # Stan's operands_and_partials). `parts()` returns one partial derivative
 # array per operand, of length 1 or N; contributions are summed down to the
-# operand's shape. Only differentiable operands receive adjoints.
+# operand's shape. Only differentiable operands receive adjoints. A
+# `parts(need)` with an argument gets a logical vector marking the operands
+# that are differentiable and may skip the partials of the others (NULL).
 fused <- function(value, ops, parts, N) {
-  keep <- integer(0)
-  for (k in seq_along(ops)) if (inherits(ops[[k]], "bcad")) keep <- c(keep, k)
+  need <- vapply(ops, inherits, TRUE, what = "bcad")
+  keep <- which(need)
   if (!length(keep)) return(value)
   ad_node(value, ops[keep], function(g) {
-    pp <- parts()
+    pp <- if (length(formals(parts))) parts(need) else parts()
     out <- vector("list", length(keep))
     for (j in seq_along(keep)) {
       k <- keep[j]
@@ -165,8 +167,10 @@ lp_normal <- function(y, mu, sigma, propto) {
   if (inc(propto, sigma)) lp <- lp - (if (length(vs) == 1L) N * log(vs) else sum(log(vs)))
   if (inc(propto, y, mu, sigma)) lp <- lp - 0.5 * sum(z * z) * (if (length(z) == 1L) N else 1)
   if (!any_ad(y, mu, sigma)) return(lp)
-  dy <- -z * inv_s
-  fused(lp, list(y, mu, sigma), function() list(dy, -dy, z * z * inv_s - inv_s), N)
+  fused(lp, list(y, mu, sigma), function(need) {
+    dy <- if (need[1L] || need[2L]) -z * inv_s
+    list(dy, if (need[2L]) -dy, if (need[3L]) z * z * inv_s - inv_s)
+  }, N)
 }
 defdist("normal", c("reals", "reals", "reals"), lp_normal,
   lcdf = function(y, mu, s) ad_sum_v(ad_log_Phi((as_dbl(y) - as_dbl(mu)) / as_dbl(s)), y, mu, s),
@@ -202,8 +206,101 @@ defdist("std_normal", "reals", lp_std_normal,
 def("std_normal_rng", character(0), "real", function() stats::rnorm(1), rng = TRUE)
 
 lp_normal_id_glm <- function(y, x, alpha, beta, sigma, propto) {
+  lp <- normal_glm_prepared(y, x, alpha, beta, sigma, propto)
+  if (!is.null(lp)) return(lp)
   mu <- glm_linpred("normal_id_glm_lpdf", x, alpha, beta)
   lp_normal(y, mu, sigma, propto)
+}
+
+# With fixed data y and x, a scalar intercept and a scalar scale, the sum of
+# squares is ||R theta[piv] - c||^2 + r2 for the pivoted QR factorization of
+# A = [1 | x - xbar] and c, r2 from Q'(y - ybar), where theta holds the
+# intercept of the centered model, alpha - ybar + xbar' beta, and beta. Each evaluation is then O(P^2) instead of
+# O(N P). The path depends only on the data, never on what was evaluated
+# before, so results do not change with call history.
+# The factorizations are owned by the model instance (see model_fun()), so
+# models made for many data subsets (SG-MCMC minibatches, EP sites) each
+# keep their own; calls outside a model use a shared store.
+# The store keeps the pairs in the order they were first seen, within a
+# memory budget of glm_cache_doubles numbers (the data and the factor
+# counted), evicting the oldest. A lookup starts after the last hit, so a
+# model that evaluates its statements in the same order each time finds
+# each pair at the first comparison, however many statements it has.
+.glm_cache <- new.env(parent = emptyenv())
+glm_cache_doubles <- 2^24
+normal_glm_prep <- function(y, x) {
+  store <- .glm_cache$cur %||% .glm_cache
+  ent <- store$entries
+  n <- length(ent)
+  if (n) {
+    p0 <- store$pos %||% 0L
+    for (k in seq_len(n)) {
+      i <- (p0 + k - 1L) %% n + 1L
+      e <- ent[[i]]
+      if (identical(e$x, x) && identical(e$y, y)) {
+        store$pos <- i
+        return(e$prep)
+      }
+    }
+  }
+  N <- nrow(x); P1 <- ncol(x) + 1L
+  prep <- NULL
+  if (N > P1 && all(is.finite(x)) && all(is.finite(y))) {
+    # centering y and the columns of x keeps the factorization and the
+    # projected residual at the scale of the deviations, not of the data
+    # (data far from the origin would otherwise cancel)
+    xbar <- colMeans(x); ybar <- mean(y)
+    q <- qr(cbind(1, sweep(x, 2L, xbar)))
+    if (q$rank == P1) {
+      qty <- qr.qty(q, as.numeric(y) - ybar)
+      prep <- list(R = qr.R(q), piv = q$pivot, c = qty[seq_len(P1)], rr = sqrt(sum(qty[-seq_len(P1)]^2)),
+                   ynorm = sqrt(sum(qty^2)), xbar = xbar, ybar = ybar, N = N)
+    }
+  }
+  size <- length(x) + length(y) + P1 * P1
+  if (size <= glm_cache_doubles) {
+    used <- (store$used %||% 0) + size
+    while (used > glm_cache_doubles && length(ent)) {
+      used <- used - ent[[1L]]$size
+      ent <- ent[-1L]
+    }
+    store$entries <- c(ent, list(list(x = x, y = y, prep = prep, size = size)))
+    store$used <- used
+    store$pos <- length(store$entries)
+  }
+  prep
+}
+normal_glm_prepared <- function(y, x, alpha, beta, sigma, propto) {
+  vx <- val(x); vy <- val(y); va <- val(alpha); vb <- val(beta); vs <- val(sigma)
+  if (inherits(x, "bcad") || inherits(y, "bcad") || !is.matrix(vx) || !is.numeric(vy) ||
+      length(vy) != nrow(vx) || length(va) != 1L || length(vs) != 1L || ncol(vx) != length(vb) ||
+      !all(is.finite(va)) || !all(is.finite(vb))) return(NULL)
+  pr <- normal_glm_prep(vy, vx)
+  if (is.null(pr)) return(NULL)
+  chk_positive_finite("normal_lpdf", "Scale parameter", sigma)
+  N <- pr$N
+  vbv <- as.vector(vb)
+  # intercept of the centered model
+  th <- c(va - pr$ybar + sum(pr$xbar * vbv), vbv)[pr$piv]
+  # standardized residuals, so tiny and huge scales neither underflow nor
+  # overflow when squared
+  fit <- as.vector(pr$R %*% th)
+  # the projection carries rounding error of order eps times the size of the
+  # fitted and observed values; when that is not negligible against the scale
+  # (an almost exact fit with a tiny scale), use the observation level sum
+  err <- 64 * .Machine$double.eps * (sqrt(sum(fit * fit)) + pr$ynorm)
+  if (!(err <= 1e-6 * vs)) return(NULL)
+  z <- (fit - pr$c) / vs
+  z2 <- sum(z * z) + (pr$rr / vs)^2
+  lp <- 0
+  if (!propto) lp <- lp - N * 0.9189385332046727
+  if (inc(propto, sigma)) lp <- lp - N * log(vs)
+  if (inc(propto, alpha, beta, sigma)) lp <- lp - 0.5 * z2
+  ad_node(lp, list(alpha, beta, sigma), function(g) {
+    gt <- numeric(length(th))
+    gt[pr$piv] <- -as.vector(crossprod(pr$R, z)) / vs
+    list(g * gt[1L], unbroadcast(g * (gt[-1L] + pr$xbar * gt[1L]), vb), g * (z2 - N) / vs)
+  })
 }
 glm_linpred <- function(f, x, alpha, beta) {
   vx <- val(x)
@@ -213,14 +310,32 @@ glm_linpred <- function(f, x, alpha, beta) {
     return(eta)
   }
   if (ncol(vx) != nelem(beta)) stop_shape(sprintf("%s: columns of x (%d) must match the size of beta (%d)", f, ncol(vx), nelem(beta)))
-  eta <- op_mat_vec(x, beta)
-  eta + flat(as_dbl(alpha))
+  # one node for x beta + alpha
+  va <- val(alpha); vb <- val(beta)
+  if (length(va) != 1L && length(va) != nrow(vx))
+    stop_shape(sprintf("%s: size of alpha (%d) must be 1 or match the rows of x (%d)", f, length(va), nrow(vx)))
+  eta <- as.vector(vx %*% as.vector(vb)) + as.vector(va)
+  ad_node(eta, list(x, alpha, beta), function(g) {
+    g <- rep_len(as.numeric(g), length(eta))
+    list(if (inherits(x, "bcad")) outer(g, as.vector(vb)),
+         if (inherits(alpha, "bcad")) unbroadcast(g, va),
+         if (inherits(beta, "bcad")) unbroadcast(as.vector(crossprod(vx, g)), vb))
+  })
 }
-for (xt in c("matrix", "row_vector", "vector")) {
-  def("normal_id_glm_lpdf", c("reals", xt, "reals", "vector", "reals"), "real", function(...) lp_normal_id_glm(..., propto = FALSE), density = TRUE, dist = "normal_id_glm")
-  def("normal_id_glm_lupdf", c("reals", xt, "reals", "vector", "reals"), "real", function(...) lp_normal_id_glm(..., propto = TRUE), density = TRUE, dist = "normal_id_glm")
-}
+for (xt in c("matrix", "row_vector", "vector")) local({
+  # a vector x is one predictor (an N x 1 matrix), not one observation
+  col <- if (xt == "vector") function(x) ad_reshape(as_dbl(x), c(nelem(x), 1L)) else identity
+  def("normal_id_glm_lpdf", c("reals", xt, "reals", "vector", "reals"), "real", function(y, x, ...) lp_normal_id_glm(y, col(x), ..., propto = FALSE), density = TRUE, dist = "normal_id_glm")
+  def("normal_id_glm_lupdf", c("reals", xt, "reals", "vector", "reals"), "real", function(y, x, ...) lp_normal_id_glm(y, col(x), ..., propto = TRUE), density = TRUE, dist = "normal_id_glm")
+})
 
+# log1p(z^2 / nu) without overflow of z^2
+log1p_sq <- function(z, nu = 1) {
+  out <- log1p(z * z / nu)
+  big <- is.infinite(out) & is.finite(z)
+  if (any(big)) out[big] <- 2 * log(abs(z[big])) - log(rep_len(nu, length(z))[big])
+  out
+}
 lp_student_t <- function(y, nu, mu, sigma, propto) {
   f <- "student_t_lpdf"
   chk_not_nan(f, "Random variable", y); chk_positive_finite(f, "Degrees of freedom parameter", nu)
@@ -235,14 +350,17 @@ lp_student_t <- function(y, nu, mu, sigma, propto) {
   if (inc(propto, nu)) lp <- lp + rep1(lgamma((vn + 1) / 2) - lgamma(vn / 2) - 0.5 * log(vn))
   if (!propto) lp <- lp - N * 0.5 * log(pi)
   if (inc(propto, sigma)) lp <- lp - rep1(log(vs))
-  if (inc(propto, y, nu, mu, sigma)) lp <- lp - rep1((vn + 1) / 2 * log1p(r))
+  l1r <- log1p_sq(z, vn)
+  if (inc(propto, y, nu, mu, sigma)) lp <- lp - rep1((vn + 1) / 2 * l1r)
   if (!any_ad(y, nu, mu, sigma)) return(lp)
-  fused(lp, list(y, nu, mu, sigma), function() {
-    dy <- -(vn + 1) * z / (vs * vn * (1 + r))
+  fused(lp, list(y, nu, mu, sigma), function(need) {
+    # r / (1 + r) and z / (nu + z^2), which stay finite when z^2 overflows
+    rq <- 1 / (1 + 1 / r)
+    dy <- if (need[1L] || need[3L]) -(vn + 1) * z / (vs * (vn + z * z))
     list(dy,
-         0.5 * digamma((vn + 1) / 2) - 0.5 * digamma(vn / 2) - 0.5 / vn - 0.5 * log1p(r) + (vn + 1) / 2 * r / (vn * (1 + r)),
-         -dy,
-         -1 / vs + (vn + 1) * r / (vs * (1 + r)))
+         if (need[2L]) 0.5 * digamma((vn + 1) / 2) - 0.5 * digamma(vn / 2) - 0.5 / vn - 0.5 * l1r + (vn + 1) / 2 * rq / vn,
+         if (need[3L]) -dy,
+         if (need[4L]) -1 / vs + (vn + 1) * rq / vs)
   }, N)
 }
 pt_ls <- function(y, nu, mu, s, lower, logp) {
@@ -301,11 +419,11 @@ lp_cauchy <- function(y, mu, sigma, propto) {
   lp <- 0
   if (!propto) lp <- lp - N * log(pi)
   if (inc(propto, sigma)) lp <- lp - rep1(log(vs))
-  if (inc(propto, y, mu, sigma)) lp <- lp - rep1(log1p(z * z))
+  if (inc(propto, y, mu, sigma)) lp <- lp - rep1(log1p_sq(z))
   if (!any_ad(y, mu, sigma)) return(lp)
-  fused(lp, list(y, mu, sigma), function() {
-    dy <- -2 * z / (vs * (1 + z * z))
-    list(dy, -dy, -1 / vs + 2 * z * z / (vs * (1 + z * z)))
+  fused(lp, list(y, mu, sigma), function(need) {
+    dy <- if (need[1L] || need[2L]) -2 * z / (vs * (1 + z * z))
+    list(dy, if (need[2L]) -dy, if (need[3L]) -1 / vs + 2 / (vs * (1 + 1 / (z * z))))
   }, N)
 }
 # log of the Cauchy cdf (lower) or ccdf at z; in the far tail 0.5 - atan(z) / pi
@@ -425,7 +543,7 @@ lp_lognormal <- function(y, mu, sigma, propto) {
   if (inc(propto, y)) lp <- lp - rep1(ly)
   if (inc(propto, y, mu, sigma)) lp <- lp - 0.5 * rep1(z * z)
   if (!any_ad(y, mu, sigma)) return(lp)
-  fused(lp, list(y, mu, sigma), function() list(-1 / vy - z / (vs * vy), z / vs, -1 / vs + z * z / vs), N)
+  fused(lp, list(y, mu, sigma), function(need) list(if (need[1L]) -1 / vy - z / (vs * vy), if (need[2L]) z / vs, if (need[3L]) -1 / vs + z * z / vs), N)
 }
 ln_z <- function(y, mu, s) (log(as_dbl(y)) - as_dbl(mu)) / as_dbl(s)
 defdist("lognormal", c("reals", "reals", "reals"), lp_lognormal,
@@ -519,7 +637,7 @@ defdist("exponential", c("reals", "reals"), lp_exponential,
 
 lp_gamma <- function(y, alpha, beta, propto) {
   f <- "gamma_lpdf"
-  chk_not_nan(f, "Random variable", y); chk_positive_finite(f, "Shape parameter", alpha); chk_positive_finite(f, "Inverse scale parameter", beta)
+  chk_positive_finite(f, "Random variable", y); chk_positive_finite(f, "Shape parameter", alpha); chk_positive_finite(f, "Inverse scale parameter", beta)
   N <- vlen_check(f, y, alpha, beta)
   if (N == 0L) return(0)
   vy <- as.vector(val(y)); va <- as.vector(val(alpha)); vb <- as.vector(val(beta))
@@ -532,7 +650,7 @@ lp_gamma <- function(y, alpha, beta, propto) {
   if (inc(propto, y, alpha)) lp <- lp + rep1(zmul(va - 1, ly))
   if (inc(propto, y, beta)) lp <- lp - rep1(vb * vy)
   if (!any_ad(y, alpha, beta)) return(lp)
-  fused(lp, list(y, alpha, beta), function() list(zmul(va - 1, 1 / vy) - vb, -digamma(va) + log(vb) + ly, va / vb - vy), N)
+  fused(lp, list(y, alpha, beta), function(need) list(if (need[1L]) zmul(va - 1, 1 / vy) - vb, if (need[2L]) -digamma(va) + log(vb) + ly, if (need[3L]) va / vb - vy), N)
 }
 defdist("gamma", c("reals", "reals", "reals"), lp_gamma,
   lcdf = function(y, a, b) gamma_cdf_ad(y, a, b, TRUE),
@@ -594,7 +712,7 @@ defdist("frechet", c("reals", "reals", "reals"), lp_frechet,
 
 lp_rayleigh <- function(y, sigma, propto) {
   f <- "rayleigh_lpdf"
-  chk_nonnegative(f, "Random variable", y); chk_positive(f, "Scale parameter", sigma)
+  chk_positive(f, "Random variable", y); chk_positive(f, "Scale parameter", sigma)
   y <- flat(as_dbl(y)); sigma <- flat(as_dbl(sigma))
   N <- vlen_check(f, y, sigma)
   lp <- 0
@@ -657,10 +775,10 @@ lp_beta <- function(theta, a, b, propto) {
   if (inc(propto, theta, a)) lp <- lp + rep1(zmul(va - 1, lt))
   if (inc(propto, theta, b)) lp <- lp + rep1(zmul(vb - 1, l1t))
   if (!any_ad(theta, a, b)) return(lp)
-  fused(lp, list(theta, a, b), function() {
-    dab <- digamma(va + vb)
-    list(zmul(va - 1, 1 / vt) - zmul(vb - 1, 1 / (1 - vt)),
-         -digamma(va) + dab + lt, -digamma(vb) + dab + l1t)
+  fused(lp, list(theta, a, b), function(need) {
+    dab <- if (need[2L] || need[3L]) digamma(va + vb)
+    list(if (need[1L]) zmul(va - 1, 1 / vt) - zmul(vb - 1, 1 / (1 - vt)),
+         if (need[2L]) -digamma(va) + dab + lt, if (need[3L]) -digamma(vb) + dab + l1t)
   }, N)
 }
 # x * log(y) with 0 * log(0) = 0
@@ -799,7 +917,7 @@ defdist("skew_double_exponential", c("reals", "reals", "reals", "reals"), lp_ske
 
 lp_loglogistic <- function(y, alpha, beta, propto) {
   f <- "loglogistic_lpdf"
-  chk_nonnegative(f, "Random variable", y); chk_positive_finite(f, "Scale parameter", alpha); chk_positive_finite(f, "Shape parameter", beta)
+  chk_positive_finite(f, "Random variable", y); chk_positive_finite(f, "Scale parameter", alpha); chk_positive_finite(f, "Shape parameter", beta)
   y <- flat(as_dbl(y)); alpha <- flat(as_dbl(alpha)); beta <- flat(as_dbl(beta))
   N <- vlen_check(f, y, alpha, beta)
   lp <- 0
@@ -995,13 +1113,22 @@ lp_categorical_logit <- function(y, beta, propto) {
 defdist("categorical_logit", c("ints", "vector"), lp_categorical_logit, discrete = TRUE,
   rng = function(b) sample.int(length(val(b)), 1L, prob = exp(val(b) - max(val(b)))))
 cat_logit_glm <- function(y, x, alpha, beta, propto) {
+  f <- "categorical_logit_glm_lpmf"
+  if (!inc(propto, x, alpha, beta)) return(0)
   vx <- val(x)
   X <- if (is.null(dim(vx))) ad_reshape(as_dbl(x), c(1L, length(vx))) else as_dbl(x)
+  K <- ncol(val(beta))
+  if (nelem(alpha) != K) stop_shape(sprintf("%s: size of alpha (%d) must match the columns of beta (%d)", f, nelem(alpha), K))
+  chk_finite(f, "Matrix of independent variables", x); chk_finite(f, "Intercept vector", alpha); chk_finite(f, "Matrix of weights", beta)
   eta <- op_mat_mat(X, beta)
-  n <- nrow(val(eta)); K <- ncol(val(eta))
+  n <- nrow(val(eta))
   eta <- eta + ad_gather(as_dbl(alpha), rep(seq_len(K), each = n), c(n, K))
-  yy <- rep_len(as.integer(y), n)
-  chk_int_range("categorical_logit_glm_lpmf", "categorical outcome", yy, 1L, K)
+  yy <- as.integer(y)
+  chk_int_range(f, "categorical outcome", yy, 1L, K)
+  # one row of x is shared by all outcomes
+  if (n == 1L) return(ad_sum(ad_gather(eta, yy)) - length(yy) * ad_row_log_sum_exp(eta))
+  if (length(yy) == 1L) yy <- rep(yy, n)
+  else if (length(yy) != n) stop_shape(sprintf("%s: size of the outcomes (%d) must be 1 or match the rows of x (%d)", f, length(yy), n))
   ad_sum(ad_gather(eta, (yy - 1L) * n + seq_len(n))) - ad_sum(ad_row_log_sum_exp(eta))
 }
 
@@ -1088,16 +1215,22 @@ lp_ordered_logistic <- function(k, eta, cuts, propto) {
 lp_ordered_probit <- function(k, eta, cuts, propto) {
   ordered_core("ordered_probit_lpmf", k, eta, cuts, ad_log_Phi, function(x) ad_log1m_Phi(x))
 }
+# one category per element of eta, with one cutpoint vector shared or one
+# per element (rows of an array of vectors)
+ordered_rng <- function(eta, c, cdf) {
+  ve <- as.vector(val(eta)); vc <- val(c)
+  C <- if (is.null(dim(vc))) matrix(vc, 1L) else vc
+  n <- max(length(ve), nrow(C))
+  r <- vapply(seq_len(n), function(i) {
+    p <- -diff(c(1, cdf(ve[if (length(ve) == 1L) 1L else i] - C[if (nrow(C) == 1L) 1L else i, ]), 0))
+    sample.int(length(p), 1L, prob = pmax(p, 0))
+  }, 0L)
+  r
+}
 defdist("ordered_logistic", c("ints", "reals", "vecarr"), lp_ordered_logistic, discrete = TRUE,
-  rng = function(eta, c) {
-    p <- -diff(c(1, stats::plogis(val(eta) - val(c)), 0))
-    sample.int(length(p), 1L, prob = pmax(p, 0))
-  })
+  rng = function(eta, c) ordered_rng(eta, c, stats::plogis))
 defdist("ordered_probit", c("ints", "reals", "vecarr"), lp_ordered_probit, discrete = TRUE,
-  rng = function(eta, c) {
-    p <- -diff(c(1, stats::pnorm(val(eta) - val(c)), 0))
-    sample.int(length(p), 1L, prob = pmax(p, 0))
-  })
+  rng = function(eta, c) ordered_rng(eta, c, stats::pnorm))
 
 lp_neg_binomial <- function(n, alpha, beta, propto) {
   f <- "neg_binomial_lpmf"
@@ -1116,31 +1249,68 @@ lp_neg_binomial <- function(n, alpha, beta, propto) {
 defdist("neg_binomial", c("ints", "reals", "reals"), lp_neg_binomial, discrete = TRUE,
   rng = function(a, b) vrng(function(n, a, b) as.integer(stats::rpois(n, stats::rgamma(n, a, b))), a, b))
 
-# lgamma(n + phi) - lgamma(phi) for counts n, accurate for large phi
-# (the direct difference cancels); the phi partial sums 1 / (phi + j)
-ad_lgamma_ratio <- function(nn, phi) {
-  vp <- rep_len(val(phi), length(nn))
-  v <- ifelse(nn == 0, 0, lgamma(pmax(nn, 1)) - lbeta(pmax(nn, 1), vp))
-  if (!is_ad(phi)) return(v)
-  d <- ifelse(nn <= 100, vapply(seq_along(nn), function(i) sum(1 / (vp[i] + seq_len(nn[i]) - 1)), 0),
-              digamma(nn + vp) - digamma(vp))
-  ad_node(v, list(phi), function(g) list(unbroadcast(g * d, val(phi))))
+# digamma(n + phi) - digamma(phi) = sum_{j < n} 1 / (phi + j): the sum for
+# small counts, a series in n / phi where phi is large against n (the
+# digamma difference cancels there), the digamma difference otherwise.
+# Each formula only for its own counts: ifelse() would evaluate the sum for
+# every count, a million terms for a count of a million.
+lgamma_ratio_dphi <- function(nn, vp) {
+  # the digamma difference cancels when the precision is large against
+  # the count; a series in n / phi is used there
+  ser <- nn / vp < 1e-4
+  d <- digamma(nn + vp) - digamma(vp)
+  if (any(ser)) {
+    n <- nn[ser]; p <- vp[ser]
+    d[ser] <- (n / p) * (1 - (n - 1) / (2 * p) + (n - 1) * (2 * n - 1) / (6 * p * p))
+  }
+  d
+}
+
+# negative binomial with log mean eta and precision phi as one node:
+#   lgamma(n + phi) - lgamma(phi) - lgamma(n + 1) + n eta
+#     - (n + phi) log(exp(eta) + phi) + phi log(phi)
+# with the partials written so they stay finite for tiny and huge phi and
+# large eta: d/deta = (n - mu) phi / (mu + phi) and d/dphi = the digamma
+# ratio - log1p(mu / phi) + (mu - n) / (mu + phi). With `mean_scale` the
+# location is the mean mu (d/dmu = d/deta / mu).
+nb2_lpmf <- function(f, n, loc, phi, propto, mean_scale) {
+  loc <- flat(as_dbl(loc)); phi <- flat(as_dbl(phi))
+  N <- vlen_check(f, n, loc, phi)
+  if (N == 0L) return(0)
+  nn <- rep_len(as.numeric(n), N)
+  vl <- rep_len(as.numeric(val(loc)), N); vp <- rep_len(as.numeric(val(phi)), N)
+  eta <- if (mean_scale) log(vl) else vl
+  lphi <- log(vp)
+  # log1p(mu / phi) and log(mu + phi), stable for any eta and phi
+  sp <- pmax(eta - lphi, 0) + log1p(exp(-abs(eta - lphi)))
+  lse <- lphi + sp
+  # mu / (mu + phi) and phi / (mu + phi)
+  wm <- stats::plogis(eta - lphi); wp <- stats::plogis(lphi - eta)
+  use_phi <- inc(propto, phi); use_both <- inc(propto, loc, phi)
+  v <- 0
+  if (use_phi) v <- v + sum(ifelse(nn == 0, 0, lgamma(pmax(nn, 1)) - lbeta(pmax(nn, 1), vp)))
+  if (!propto) v <- v - sum(lgamma(nn + 1))
+  if (use_both) v <- v + sum(nn * (eta - lse) - vp * sp)
+  if (!any_ad(loc, phi) || (!use_phi && !use_both)) return(v)
+  ad_node(v, list(loc, phi), function(g) {
+    gl <- if (is_ad(loc) && use_both) {
+      d <- nn * wp - vp * wm
+      if (mean_scale) d <- d / vl
+      unbroadcast(g * d, val(loc))
+    }
+    gp <- if (is_ad(phi)) {
+      d <- if (use_phi) lgamma_ratio_dphi(nn, vp) else numeric(N)
+      if (use_both) d <- d - sp + wm - nn * exp(-lse)
+      unbroadcast(g * d, val(phi))
+    }
+    list(gl, gp)
+  })
 }
 
 lp_neg_binomial_2 <- function(n, mu, phi, propto) {
   f <- "neg_binomial_2_lpmf"
   chk_int_range(f, "Failures variable", n, 0L); chk_positive_finite(f, "Location parameter", mu); chk_positive_finite(f, "Precision parameter", phi)
-  mu <- flat(as_dbl(mu)); phi <- flat(as_dbl(phi))
-  N <- vlen_check(f, n, mu, phi)
-  nn <- rep_len(as.numeric(n), N)
-  lp <- 0
-  if (inc(propto, phi)) lp <- lp + ad_sum(ad_lgamma_ratio(nn, phi))
-  if (!propto) lp <- lp - sum(lgamma(nn + 1))
-  if (inc(propto, mu, phi)) {
-    lmp <- log(mu + phi)
-    lp <- lp + ad_sum(flat(ad_mult_log(nn, mu) - nn * lmp - phi * log1p(mu / phi) + 0 * nn))
-  }
-  lp
+  nb2_lpmf(f, n, mu, phi, propto, mean_scale = TRUE)
 }
 nb2_cdf_ad <- function(n, mu, phi, lower) {
   mu <- flat(as_dbl(mu)); phi <- flat(as_dbl(phi))
@@ -1162,18 +1332,7 @@ defdist("neg_binomial_2", c("ints", "reals", "reals"), lp_neg_binomial_2, discre
 lp_neg_binomial_2_log <- function(n, eta, phi, propto) {
   f <- "neg_binomial_2_log_lpmf"
   chk_int_range(f, "Failures variable", n, 0L); chk_finite(f, "Log location parameter", eta); chk_positive_finite(f, "Precision parameter", phi)
-  eta <- flat(as_dbl(eta)); phi <- flat(as_dbl(phi))
-  N <- vlen_check(f, n, eta, phi)
-  nn <- rep_len(as.numeric(n), N)
-  lp <- 0
-  if (inc(propto, phi)) lp <- lp + ad_sum(ad_lgamma_ratio(nn, phi))
-  if (!propto) lp <- lp - sum(lgamma(nn + 1))
-  if (inc(propto, eta, phi)) {
-    lphi <- log(phi)
-    lse <- ad_log_sum_exp2(eta, lphi)
-    lp <- lp + ad_sum(flat(nn * (eta - lse) - phi * log1p(exp(eta - lphi)) + 0 * nn))
-  }
-  lp
+  nb2_lpmf(f, n, eta, phi, propto, mean_scale = FALSE)
 }
 defdist("neg_binomial_2_log", c("ints", "reals", "reals"), lp_neg_binomial_2_log, discrete = TRUE,
   rng = function(eta, phi) vrng(function(n, e, p) as.integer(stats::rnbinom(n, size = p, mu = exp(e))), eta, phi))
@@ -1386,31 +1545,35 @@ vec_rows <- function(x) {
 
 lp_dirichlet <- function(theta, alpha, propto) {
   f <- "dirichlet_lpdf"
-  th <- vec_rows(theta)
-  al <- vec_rows(alpha)
-  N <- max(length(th), length(al))
-  if (length(th) != 1L && length(al) != 1L && length(th) != length(al)) stop_shape(sprintf("%s: size mismatch", f))
-  for (a in al) chk_positive_finite(f, "prior sample sizes", a)
-  for (t in th) {
-    m <- simplex_check(val(t))
+  # columns of K x n matrices in the order of the original rows
+  tc <- vec_cols(theta)
+  ac <- vec_cols(alpha)
+  if (tc$n != 1L && ac$n != 1L && tc$n != ac$n) stop_shape(sprintf("%s: size mismatch", f))
+  if (tc$n == 0L || ac$n == 0L) return(0)
+  N <- max(tc$n, ac$n)
+  chk_positive_finite(f, "prior sample sizes", ac$M)
+  V <- matrix(val(tc$M), tc$K)
+  bad <- which(colSums(is.na(V) | V < 0, na.rm = TRUE) > 0 | !(abs(colSums(V) - 1) <= 1e-8))
+  for (j in bad) {
+    m <- simplex_check(V[, j])
     if (!is.null(m)) stop_domain(paste(f, ": probabilities", m))
   }
-  K <- nelem(th[[1L]])
-  for (x in c(th, al)) if (nelem(x) != K) stop_shape(sprintf("%s: size mismatch", f))
+  K <- tc$K
+  if (ac$K != K) stop_shape(sprintf("%s: size mismatch", f))
   lp <- 0
   if (N == 1L) {
-    t <- as_dbl(th[[1L]]); a <- as_dbl(al[[1L]])
+    t <- tc$M; a <- ac$M
     if (inc(propto, a)) lp <- lp + lgamma(ad_sum(a)) - ad_sum(lgamma(a))
     if (inc(propto, t, a)) lp <- lp + ad_sum(ad_mult_log(a - 1, t))
     return(lp)
   }
   # all observations at once (columns of K x N matrices)
-  A <- stack_cols(al, N, K)
+  A <- cols_to(ac, N)
   if (inc(propto, alpha)) {
-    lp <- lp + (if (length(al) == 1L) N * (lgamma(ad_sum(as_dbl(al[[1L]]))) - ad_sum(lgamma(as_dbl(al[[1L]]))))
-                else ad_sum(lgamma(ad_matmul(matrix(1, 1L, K), A))) - ad_sum(lgamma(A)))
+    lp <- lp + (if (ac$n == 1L) N * (lgamma(ad_sum(ac$M)) - ad_sum(lgamma(ac$M)))
+                else ad_sum(lgamma(ad_matmul(matrix(1, 1L, K), ac$M))) - ad_sum(lgamma(ac$M)))
   }
-  if (inc(propto, theta, alpha)) lp <- lp + ad_sum(ad_mult_log(A - 1, stack_cols(th, N, K)))
+  if (inc(propto, theta, alpha)) lp <- lp + ad_sum(ad_mult_log(A - 1, cols_to(tc, N)))
   lp
 }
 defdist("dirichlet", c("vectors", "vectors"), lp_dirichlet,
@@ -1420,52 +1583,72 @@ defdist("dirichlet", c("vectors", "vectors"), lp_dirichlet,
   }, rng_ret = "vector")
 .lib$dirichlet_rng[[1L]]$ret <- "vector"
 
+# A "vectors" argument as columns: a K vector for one vector (or a one row
+# array), else the K x n transpose of its n x K matrix of rows. The matrix is
+# transposed whole, never split into rows.
+vec_cols <- function(x) {
+  v <- val(x)
+  x <- as_dbl(x)
+  d <- dim(v)
+  if (is.null(d)) return(list(n = 1L, K = length(v), M = x))
+  if (d[1L] == 1L) return(list(n = 1L, K = d[2L], M = ad_reshape(x, NULL)))
+  list(n = d[1L], K = d[2L], M = ad_transpose(x))
+}
+# the columns of `cl` (from vec_cols) as a K x N matrix; one vector is
+# repeated, and its adjoint is the row sum of the matrix adjoint
+cols_to <- function(cl, N) {
+  if (cl$n != 1L) return(cl$M)
+  x <- cl$M
+  vx <- val(x)
+  y <- matrix(vx, length(vx), N)
+  if (!inherits(x, "bcad")) return(y)
+  ad_node(y, list(x), function(g) list(rowSums(g)))
+}
+
 mvn_core <- function(f, y, mu, logdet_half, solve_fn, propto, depends) {
-  ys <- vec_rows(y)
-  ms <- vec_rows(mu)
-  N <- max(length(ys), length(ms))
-  if (length(ys) != 1L && length(ms) != 1L && length(ys) != length(ms)) stop_shape(sprintf("%s: size mismatch between the random variable and the location", f))
-  K <- nelem(ys[[1L]])
+  yc <- vec_cols(y)
+  mc <- vec_cols(mu)
+  if (yc$n != 1L && mc$n != 1L && yc$n != mc$n) stop_shape(sprintf("%s: size mismatch between the random variable and the location", f))
+  if (yc$n == 0L || mc$n == 0L) return(0)
+  N <- max(yc$n, mc$n)
+  K <- yc$K
   lp <- 0
   if (!propto) lp <- lp - N * K * 0.5 * log(2 * pi)
   if (inc(propto, depends)) lp <- lp - N * logdet_half
-  for (x in ys) if (nelem(x) != K) stop_shape(sprintf("%s: size mismatch", f))
-  for (x in ms) if (nelem(x) != K) stop_shape(sprintf("%s: size mismatch", f))
-  for (x in ys) chk_not_nan(f, "Random variable", x)
-  for (x in ms) chk_finite(f, "Location parameter", x)
+  if (mc$K != K) stop_shape(sprintf("%s: size mismatch", f))
+  # the columns are checked in the order of the original rows
+  chk_not_nan(f, "Random variable", yc$M)
+  chk_finite(f, "Location parameter", mc$M)
   if (!inc(propto, y, mu, depends)) return(lp)
   # all observations at once: the K x N matrix of differences goes through
   # one solve
-  if (N == 1L) return(lp - 0.5 * solve_fn(as_dbl(ys[[1L]]) - as_dbl(ms[[1L]])))
-  # a data matrix of rows is transposed directly instead of split and restacked
-  cols <- function(x, xs) {
-    v <- val(x)
-    if (!inherits(x, "bcad") && is.matrix(v) && length(xs) == N) return(t(v))
-    stack_cols(xs, N, K)
-  }
-  lp - 0.5 * solve_fn(cols(y, ys) - cols(mu, ms))
-}
-# K x N matrix whose columns are the vectors xs (one vector is repeated)
-stack_cols <- function(xs, N, K) {
-  if (length(xs) == 1L) {
-    x <- as_dbl(xs[[1L]])
-    return(ad_gather(x, rep(seq_len(K), N), c(K, N)))
-  }
-  ad_reshape(ad_c(lapply(xs, as_dbl)), c(K, N))
+  if (N == 1L) return(lp - 0.5 * solve_fn(yc$M - mc$M))
+  lp - 0.5 * solve_fn(cols_to(yc, N) - cols_to(mc, N))
 }
 # Cholesky factor and half log determinant of a covariance or precision
 # matrix that is data: the last one is kept, so a fixed matrix is factored
 # once rather than at every evaluation
 .mvn_cache <- new.env(parent = emptyenv())
+# Cholesky factors of fixed (data) covariance matrices are kept for the
+# last few distinct matrices, so a model with several fixed covariances
+# factors each once.
+# ponytail: linear scan of mvn_cache_size entries; bind factors to call
+# sites in the compiler if models need many distinct fixed covariances
+mvn_cache_size <- 4L
 mvn_factor <- function(S) {
-  if (!inherits(S, "bcad") && identical(.mvn_cache$S, S)) return(.mvn_cache$r)
+  fixed <- !inherits(S, "bcad")
+  if (fixed) for (e in .mvn_cache$entries) if (identical(e$S, S)) return(e$r)
   L <- ad_cholesky(S)
   r <- list(L = L, ldh = ad_sum(log(.lib$diagonal[[1L]]$impl(L))))
-  if (!inherits(S, "bcad")) { .mvn_cache$S <- S; .mvn_cache$r <- r }
+  if (fixed) {
+    old <- .mvn_cache$entries
+    .mvn_cache$entries <- c(list(list(S = S, r = r)), old[seq_len(min(length(old), mvn_cache_size - 1L))])
+  }
   r
 }
 lp_multi_normal <- function(y, mu, Sigma, propto) {
   sym_check("multi_normal_lpdf", Sigma)
+  if (inherits(Sigma, "bcad")) return(lp_multi_normal_ad(y, mu, Sigma, propto))
   fc <- mvn_factor(Sigma)
   L <- fc$L
   ldh <- fc$ldh
@@ -1474,7 +1657,32 @@ lp_multi_normal <- function(y, mu, Sigma, propto) {
     ad_sum(z * z)
   }, propto, Sigma)
 }
+# A covariance that depends on parameters: the half log determinant and the
+# quadratic form are each one node with partials in Sigma (as Stan's
+# multi_normal), instead of the chain through the Cholesky adjoint.
+lp_multi_normal_ad <- function(y, mu, Sigma, propto) {
+  R <- tryCatch(chol(val(Sigma)), error = function(e) NULL)
+  if (is.null(R)) stop_domain("cholesky_decompose: matrix is not positive definite")
+  ldh <- ad_node(sum(log(diag(R))), list(Sigma), function(g) list(g * 0.5 * chol2inv(R)))
+  mvn_core("multi_normal_lpdf", y, mu, ldh, function(d) {
+    vd <- val(d)
+    z <- backsolve(R, if (is.null(dim(vd))) matrix(vd, ncol = 1L) else vd, transpose = TRUE)
+    alpha <- backsolve(R, z)
+    ad_node(sum(z * z), list(d, Sigma), function(g) list(2 * g * (if (is.null(dim(vd))) as.vector(alpha) else alpha),
+                                                          -g * (alpha %*% t(alpha))))
+  }, propto, Sigma)
+}
+# Stan's check_cholesky_factor: square, lower triangular, positive diagonal
+chk_cholesky_factor <- function(f, what, v) {
+  v <- val(v)
+  if (!is.matrix(v) || nrow(v) != ncol(v)) stop_shape(sprintf("%s: %s must be a square matrix", f, what))
+  if (!isTRUE(all(v[upper.tri(v)] == 0))) stop_domain(sprintf("%s: %s is not lower triangular", f, what))
+  if (!isTRUE(all(diag(v) > 0))) stop_domain(sprintf("%s: %s is not a valid Cholesky factor: its diagonal must be positive", f, what))
+}
 lp_multi_normal_cholesky <- function(y, mu, L, propto) {
+  # as in Stan, only the overload for arrays of vectors checks the factor
+  if (!is.null(dim(val(y))) || !is.null(dim(val(mu))))
+    chk_cholesky_factor("multi_normal_cholesky_lpdf", "Cholesky decomposition of a variance matrix", L)
   ldh <- ad_sum(log(.lib$diagonal[[1L]]$impl(L)))
   mvn_core("multi_normal_cholesky_lpdf", y, mu, ldh, function(d) {
     z <- ad_tri_solve(L, d, "multi_normal_cholesky_lpdf")
@@ -1509,15 +1717,19 @@ for (pair in list(c("multi_normal", "lp_multi_normal"), c("multi_normal_cholesky
   })
 }
 def("multi_normal_rng", c("vectors", "matrix"), mv_rng_ret, function(mu, S) mvn_rng(mu, t(chol(val(S)))), rng = TRUE)
-def("multi_normal_cholesky_rng", c("vectors", "matrix"), mv_rng_ret, function(mu, L) mvn_rng(mu, val(L)), rng = TRUE)
+def("multi_normal_cholesky_rng", c("vectors", "matrix"), mv_rng_ret, function(mu, L) {
+  chk_cholesky_factor("multi_normal_cholesky_rng", "Cholesky factor of covariance matrix", L)
+  mvn_rng(mu, val(L))
+}, rng = TRUE)
 
 mvt_core <- function(f, y, nu, mu, L, propto) {
-  ys <- vec_rows(y)
-  ms <- vec_rows(mu)
-  N <- max(length(ys), length(ms))
-  if (!(length(ys) %in% c(1L, N) && length(ms) %in% c(1L, N)))
-    stop_shape(sprintf("%s: %d random variables and %d locations", f, length(ys), length(ms)))
-  K <- nelem(ys[[1L]])
+  yc <- vec_cols(y)
+  mc <- vec_cols(mu)
+  N <- max(yc$n, mc$n)
+  if (!(yc$n %in% c(1L, N) && mc$n %in% c(1L, N)))
+    stop_shape(sprintf("%s: %d random variables and %d locations", f, yc$n, mc$n))
+  K <- yc$K
+  if (mc$K != K || nrow(val(L)) != K) stop_shape(sprintf("%s: size mismatch", f))
   chk_positive(f, "Degrees of freedom parameter", nu)
   nu <- as_dbl(nu)
   lp <- 0
@@ -1525,7 +1737,7 @@ mvt_core <- function(f, y, nu, mu, L, propto) {
   if (!propto) lp <- lp - N * K / 2 * log(pi)
   if (inc(propto, L)) lp <- lp - N * ad_sum(log(.lib$diagonal[[1L]]$impl(L)))
   # all observations through one triangular solve
-  D <- if (N == 1L) as_dbl(ys[[1L]]) - as_dbl(ms[[1L]]) else stack_cols(ys, N, K) - stack_cols(ms, N, K)
+  D <- if (N == 1L) yc$M - mc$M else cols_to(yc, N) - cols_to(mc, N)
   z <- ad_tri_solve(L, D, f)
   q <- if (N == 1L) ad_sum(z * z) else ad_reshape(ad_matmul(matrix(1, 1L, K), z * z), NULL)
   lp <- lp - (nu + K) / 2 * ad_sum(log1p(q / nu))
@@ -1661,22 +1873,43 @@ chol_jac <- function(L) {
   ld <- log(ad_gather(as_dbl(L), (seq_len(K) - 1L) * K + seq_len(K)))
   K * log(2) + ad_sum((K - seq_len(K) + 1) * ld)
 }
-lp_wishart_cholesky <- function(LW, nu, LS, propto) {
-  LW <- as_dbl(LW); LS <- as_dbl(LS)
-  W <- ad_matmul(LW, ad_transpose(LW))
-  S <- ad_matmul(LS, ad_transpose(LS))
-  lp_wishart(0.5 * (W + ad_transpose(W)), nu, 0.5 * (S + ad_transpose(S)), propto) + (if (inc(propto, LW)) chol_jac(LW) else 0)
+# Densities of Cholesky factors computed from the factors: log determinants
+# from their diagonals and the trace term as ||L1^-1 L2||_F^2 through one
+# triangular solve, instead of forming W and S and factoring them again.
+# As in Stan (check_cholesky_factor), both factors must be square, lower
+# triangular and have a positive diagonal; other matrices are domain
+# errors, so the density and its gradient are one function of the lower
+# triangles.
+wishart_chol_direct <- function(f, LW, nu, LS, propto, inverse) {
+  vW <- val(LW); vS <- val(LS)
+  chk <- function(v, what) chk_cholesky_factor(f, what, v)
+  chk(vW, "Cholesky random variable"); chk(vS, "Cholesky scale matrix")
+  if (nrow(vW) != nrow(vS)) stop_shape(sprintf("%s: size mismatch", f))
+  K <- nrow(vW)
+  if (val(nu) <= K - 1) stop_domain(sprintf("%s: Degrees of freedom must be greater than %d", f, K - 1L))
+  # only the lower triangles carry adjoints
+  lo <- which(lower.tri(vW, diag = TRUE))
+  low <- function(L) if (is_ad(L)) ad_scatter(matrix(0, K, K), lo, ad_gather(L, lo)) else L
+  nu <- as_dbl(nu); LW <- low(LW); LS <- low(LS)
+  dg <- (seq_len(K) - 1L) * K + seq_len(K)
+  ldS <- 2 * ad_sum(log(ad_gather(LS, dg)))
+  ldW <- 2 * ad_sum(log(ad_gather(LW, dg)))
+  lp <- 0
+  if (inc(propto, nu)) lp <- lp - nu * K / 2 * log(2) - .lib$lmgamma[[1L]]$impl(K, nu / 2)
+  if (inc(propto, nu, LS)) lp <- lp + (if (inverse) 1 else -1) * nu / 2 * ldS
+  if (inc(propto, nu, LW)) lp <- lp + (if (inverse) -(nu + K + 1) else nu - K - 1) / 2 * ldW
+  if (inc(propto, LW, LS)) {
+    M <- if (inverse) ad_tri_solve(LW, LS, f) else ad_tri_solve(LS, LW, f)
+    lp <- lp - 0.5 * ad_sum(M * M)
+  }
+  lp + (if (inc(propto, LW)) chol_jac(LW) else 0)
 }
+lp_wishart_cholesky <- function(LW, nu, LS, propto) wishart_chol_direct("wishart_cholesky_lpdf", LW, nu, LS, propto, FALSE)
 defdist("wishart_cholesky", c("matrix", "real", "matrix"), lp_wishart_cholesky)
 def("wishart_cholesky_rng", c("real", "matrix"), "matrix", function(nu, LS) {
   t(chol(stats::rWishart(1L, val(nu), val(LS) %*% t(val(LS)))[, , 1L]))
 }, rng = TRUE)
-lp_inv_wishart_cholesky <- function(LW, nu, LS, propto) {
-  LW <- as_dbl(LW); LS <- as_dbl(LS)
-  W <- ad_matmul(LW, ad_transpose(LW))
-  S <- ad_matmul(LS, ad_transpose(LS))
-  lp_inv_wishart(0.5 * (W + ad_transpose(W)), nu, 0.5 * (S + ad_transpose(S)), propto) + (if (inc(propto, LW)) chol_jac(LW) else 0)
-}
+lp_inv_wishart_cholesky <- function(LW, nu, LS, propto) wishart_chol_direct("inv_wishart_cholesky_lpdf", LW, nu, LS, propto, TRUE)
 defdist("inv_wishart_cholesky", c("matrix", "real", "matrix"), lp_inv_wishart_cholesky)
 def("inv_wishart_cholesky_rng", c("real", "matrix"), "matrix", function(nu, LS) {
   S <- val(LS) %*% t(val(LS))

@@ -35,8 +35,11 @@ sem_declare <- function(s, name, info, loc) {
 
 origin_data <- c("data", "transformed data")
 
-stan_check <- function(prog, external = character()) {
+stan_check <- function(prog, external = character(), internal = FALSE) {
   s <- sem_new()
+  # internal library functions (names ending in "__", which a program cannot
+  # declare) are only allowed in programs that bayescompR rewrote itself
+  s$internal <- internal
   ext <- list()
   b <- prog$blocks
   # functions: register signatures first (allows recursion and forward use)
@@ -243,8 +246,16 @@ sem_decl_type <- function(s, t, need_data, bn, loc) {
 sem_size_expr <- function(s, e, need_data) {
   te <- sem_expr(s, e)
   if (!is_int_ty(te$type)) stop_semantic(sprintf("size must be an integer, found %s", ty_str(te$type)), te$loc)
-  if (need_data && !te$data_only) stop_semantic("sizes of top level variables must only depend on data", te$loc)
+  # integer expressions count as data elsewhere, so the variables read are
+  # checked too (to_int(floor(theta)) is an integer that is not data)
+  if (need_data && (!te$data_only || reads_nondata(te))) stop_semantic("sizes of top level variables must only depend on data", te$loc)
   te
+}
+reads_nondata <- function(e) {
+  if (!is.list(e)) return(FALSE)
+  if (identical(e$kind, "var") && isTRUE(e$origin %in% c("parameters", "transformed parameters", "generated quantities", "model"))) return(TRUE)
+  for (k in names(e) %||% seq_along(e)) if (!k %in% c("loc", "type", "sig") && is.list(e[[k]]) && reads_nondata(e[[k]])) return(TRUE)
+  FALSE
 }
 
 # ---- statements ---------------------------------------------------------------------
@@ -326,6 +337,12 @@ sem_stmt <- function(s, st, top = FALSE) {
           if (is.null(rr))
             stop_semantic(sprintf("truncation requires %s, which is not available for these arguments", fn), st$loc)
           st$trunc[[paste0(nd, "_sig")]] <- rr$sig
+        }
+        if (!is.null(st$trunc$lo) && !is.null(st$trunc$hi)) {
+          # optional: two sided truncation in the upper tail uses the
+          # difference of upper tail probabilities
+          rr <- resolve_call(s, paste0(fam, "_lccdf"), c(list(st$trunc$lo$type), lapply(args, `[[`, "type")), quiet = TRUE)
+          if (!is.null(rr)) st$trunc$lccdf_sig <- rr$sig
         }
         st$trunc$fam <- fam
         st$trunc$discrete <- lhs$type$base == "int"
@@ -884,8 +901,9 @@ sem_call <- function(s, e) {
                           paste(describe_sigs(s, uname), collapse = "\n")), e$loc)
   }
   sg <- res$sig
-  if (!isTRUE(sg$user) && is.null(stan_signatures[[stan_sig_key(uname)]])) stop_semantic(sprintf("unknown function '%s'", nm), e$loc)
-  if (!isTRUE(sg$user) && !stan_sig_ok(uname, types)) {
+  lib_ok <- isTRUE(sg$user) || (isTRUE(s$internal) && endsWith(uname, "__"))
+  if (!lib_ok && is.null(stan_signatures[[stan_sig_key(uname)]])) stop_semantic(sprintf("unknown function '%s'", nm), e$loc)
+  if (!lib_ok && !stan_sig_ok(uname, types)) {
     stop_semantic(sprintf("no matching signature for %s(%s); Stan %s defines:\n%s", nm,
                           paste(vapply(types, ty_str, ""), collapse = ", "), stan_signatures_version,
                           paste(utils::head(stan_sig_strings(uname), 20L), collapse = "\n")), e$loc)

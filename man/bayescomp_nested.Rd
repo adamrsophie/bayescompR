@@ -7,7 +7,7 @@
 bayescomp_nested(
   model,
   num_live = 400L,
-  mcmc_steps = 20L,
+  mcmc_steps = NULL,
   dlogz = 0.01,
   max_iter = 50000L,
   n_name = "N",
@@ -21,7 +21,8 @@ bayescomp_nested(
 
 \item{num_live}{Number of live points.}
 
-\item{mcmc_steps}{Constrained Metropolis steps per replacement.}
+\item{mcmc_steps}{Slice sampling steps per replacement; the default is
+three times the number of parameters, at least 5.}
 
 \item{dlogz}{Stop when the evidence left in the live points is below
 this on the log scale.}
@@ -42,8 +43,10 @@ A \code{bayescomp_fit} with method \code{"nested"} and elements
 \description{
 Estimates the marginal likelihood by shrinking a set of live points
 through nested likelihood contours (Skilling 2006). New points are drawn
-from the prior restricted to the current contour with random walk
-Metropolis whose covariance comes from the live points. The prior must be
+from the prior restricted to the current contour by hit-and-run slice
+sampling along random directions whitened by the covariance of the live
+points (Handley, Hobson and Lasenby 2015; Yallup et al. 2026), which needs
+no step size and rejects nothing. The prior must be
 proper; it is the model evaluated on an empty data set, as in
 \code{\link[=bayescomp_sgmcmc]{bayescomp_sgmcmc()}}.
 }
@@ -58,5 +61,9 @@ fit$log_evidence
 }
 \references{
 Skilling, J. (2006). Nested sampling for general Bayesian
-computation. \emph{Bayesian Analysis} 1, 833 to 859.
+computation. \emph{Bayesian Analysis} 1, 833 to 859. Handley, W. J., Hobson,
+M. P. and Lasenby, A. N. (2015). PolyChord: next-generation nested
+sampling. \emph{Monthly Notices of the Royal Astronomical Society} 453, 4384
+to 4398. Yallup, D. et al. (2026). Nested slice sampling.
+arXiv:2601.23252.
 }

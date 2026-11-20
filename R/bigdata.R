@@ -6,13 +6,21 @@
 # subset, which covers the usual `int N; vector[N] y; matrix[N, K] X;`
 # layout. Supply `subset` for anything else.
 
-model_with_data <- function(model, data) {
+# The subset model uses the seed of the full model, so random numbers drawn
+# in transformed data (that do not depend on the subset) are the same in
+# every subset and in the full model.
+# `unchecked`: data variables whose constraints are not checked (the
+# observation count of the prior only model, 0 also when declared <lower=1>)
+model_with_data <- function(model, data, unchecked = character()) {
+  if (is.null(model$compiled$seed) && ir_calls_rng(model$ir$blocks[["transformed data"]]))
+    stop("transformed data draws random numbers; give the model a seed (bayescomp_model(seed = )) so that every data subset uses the same draws",
+         call. = FALSE)
   if (!identical(model$backend, "r")) {
     # recompile through the same backend so implementations never mix
-    out <- bayescomp_model(model$code, data = data, backend = model$backend,
+    out <- bayescomp_model(model$code, data = data, backend = model$backend, seed = model$compiled$seed,
                            allow_fallback = any(unlist(model$provenance) == "r"))
   } else {
-    inst <- instantiate(model$compiled, data)
+    inst <- with_seed(model$compiled$seed, instantiate(model$compiled, data, unchecked = unchecked))
     out <- model
     out$env <- inst$env; out$decls <- inst$decls; out$data <- data; out$params <- inst$params; out$dim <- inst$dim
   }
@@ -20,6 +28,13 @@ model_with_data <- function(model, data) {
     stop("the parameter dimension changes with the data subset; supply 'subset' or use a model whose parameter sizes do not depend on N",
          call. = FALSE)
   out
+}
+
+ir_calls_rng <- function(e) {
+  if (!is.list(e)) return(FALSE)
+  if (identical(e$kind, "call") && is.character(e$name) && grepl("_rng$", e$name)) return(TRUE)
+  for (k in names(e) %||% seq_along(e)) if (!k %in% c("loc", "type", "sig") && is.list(e[[k]]) && ir_calls_rng(e[[k]])) return(TRUE)
+  FALSE
 }
 
 default_subset <- function(n_name) {
@@ -46,7 +61,7 @@ split_setup <- function(model, n_name, subset) {
   N <- model$data[[n_name]]
   if (is.null(N) || length(N) != 1L) stop(sprintf("the data has no observation count '%s'", n_name), call. = FALSE)
   if (is.null(subset)) subset <- default_subset(n_name)
-  prior <- model_with_data(model, subset(model$data, integer(0)))
+  prior <- model_with_data(model, subset(model$data, integer(0)), unchecked = n_name)
   list(N = as.integer(N), subset = subset, prior = prior)
 }
 
@@ -70,6 +85,9 @@ split_setup <- function(model, n_name, subset) {
 #'   observations `idx` (with `idx = integer(0)` for the prior).
 #' @param chains,iter_warmup,iter_sampling,thin,init,seed,cores As in
 #'   [bayescomp_sample()].
+#' @param lp_every The exact `lp__` needs the full data, so it is computed
+#'   at every `lp_every`-th saved draw only and is `NA` at the others; `0`
+#'   never computes it. The draws do not depend on it.
 #' @return A `bayescomp_fit` with method `"sgmcmc"`.
 #' @references Welling, M. and Teh, Y. W. (2011). Bayesian learning via
 #'   stochastic gradient Langevin dynamics. *ICML*. Chen, T., Fox, E. and
@@ -85,9 +103,13 @@ split_setup <- function(model, n_name, subset) {
 #' @export
 bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32L, step_size = NULL,
                              friction = 0.1, n_name = "N", subset = NULL, chains = 4L, iter_warmup = 500L,
-                             iter_sampling = 2000L, thin = 1L, init = 2, seed = NULL, cores = getOption("mc.cores", 1L)) {
+                             iter_sampling = 2000L, thin = 1L, init = 2, seed = NULL, cores = getOption("mc.cores", 1L),
+                             lp_every = 1L) {
   check_model(model)
   method <- match.arg(method)
+  lp_every <- as_count(lp_every, "lp_every")
+  if (!is.null(step_size) && !(is.numeric(step_size) && length(step_size) == 1L && is.finite(step_size) && step_size > 0))
+    stop("'step_size' must be a positive number", call. = FALSE)
   n <- model$dim
   sp <- split_setup(model, n_name, subset)
   b <- min(as_count(batch_size, "batch_size", 1L), sp$N)
@@ -115,8 +137,9 @@ bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32
     eps <- step_size
     if (is.null(eps)) {
       # scale from the curvature at a nearby mode
-      o <- tryCatch(stats::optim(u, function(x) -full(x)$value, function(x) -full(x)$grad, method = "BFGS",
-                                 control = list(maxit = 200)), error = function(e) NULL)
+      ob <- joint_objective(full)
+      o <- tryCatch(stats::optim(u, ob$fn, ob$gr, method = "BFGS", control = list(maxit = 200)),
+                    error = function(e) NULL)
       if (!is.null(o)) u <- o$par
       H <- num_hessian_V(function(x) -full(x)$grad, u)
       lam <- tryCatch(max(eigen(H, symmetric = TRUE, only.values = TRUE)$values), error = function(e) NA)
@@ -147,7 +170,8 @@ bayescomp_sgmcmc <- function(model, method = c("sgld", "sghmc"), batch_size = 32
       if (it > nw && ((it - nw - 1L) %% thin == 0L)) {
         row <- row + 1L
         qs[row, ] <- u
-        dg[row, c("lp__", "stepsize__")] <- c(lp_full(u), eps)
+        dg[row, "lp__"] <- if (lp_every > 0L && (row - 1L) %% lp_every == 0L) lp_full(u) else NA_real_
+        dg[row, "stepsize__"] <- eps
       }
     }
     list(q = qs, gq = chain_write_draws(model, qs, FALSE), diag = dg, step_size = eps, inv_metric = NULL,
@@ -216,11 +240,12 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
         list(value = v, grad = g)
       }
       st <- tryCatch(solve(Qc, rc), error = function(e) m_old)
-      o <- stats::optim(st, function(x) { v <- f(x)$value; if (is.finite(v)) -v else 1e100 },
-                        function(x) -f(x)$grad, method = "BFGS", control = list(maxit = 500, reltol = 1e-12))
+      ob <- joint_objective(f, bad = 1e100)
+      o <- stats::optim(st, ob$fn, ob$gr, method = "BFGS", control = list(maxit = 500, reltol = 1e-12))
       H <- num_hessian_V(function(x) -f(x)$grad, o$par)
       list(m = o$par, P = H)
     }
+    site_ok <- logical(K)
     for (sweep in seq_len(iter)) {
       it_done <- sweep
       upd <- par_lapply(seq_len(K), function(k) {
@@ -234,6 +259,7 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
         rn <- (1 - damping) * rs[[k]] + damping * upd[[k]]$r
         if (!inherits(tryCatch(chol(Q - Qs[[k]] + Qn), error = function(e) e), "error")) {
           Qs[[k]] <- Qn; rs[[k]] <- rn; n_updates <- n_updates + 1L
+          site_ok[k] <- TRUE
         }
       }
       # without a single accepted site update the "fit" would be the initial guess
@@ -243,7 +269,9 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
       m <- solve(Q, r)
       dQ <- max(abs(Q - Q_old)) / max(abs(Q))
       Q_old <- Q
-      if (max(abs(m - m_old)) < tol && dQ < tol) { m_old <- m; converged <- TRUE; break }
+      # a site that never updated is not in the approximation, so the
+      # iteration has not converged however small the change
+      if (all(site_ok) && max(abs(m - m_old)) < tol && dQ < tol) { m_old <- m; converged <- TRUE; break }
       m_old <- m
     }
     Sig <- solve(Q); Sig <- 0.5 * (Sig + t(Sig))
@@ -251,8 +279,12 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
     qs <- sweep(matrix(stats::rnorm(S * n), S, n) %*% t(L), 2L, m_old, "+")
     full <- lp_value_fun(model)
     lp <- apply(qs, 1L, full)
-    if (!converged) warning(sprintf("expectation propagation did not converge in %d sweeps", it_done), call. = FALSE)
-    info <<- list(mean = m_old, cov = Sig, iterations = it_done, converged = converged, site_updates = n_updates)
+    if (!all(site_ok))
+      warning(sprintf("expectation propagation: the update of site%s %s never succeeded, so %s not in the approximation",
+                      if (sum(!site_ok) > 1L) "s" else "", paste(which(!site_ok), collapse = ", "),
+                      if (sum(!site_ok) > 1L) "they are" else "it is"), call. = FALSE)
+    else if (!converged) warning(sprintf("expectation propagation did not converge in %d sweeps", it_done), call. = FALSE)
+    info <<- list(mean = m_old, cov = Sig, iterations = it_done, converged = converged, site_updates = n_updates, sites_updated = site_ok)
     dg <- matrix(0, S, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
     dg[, "lp__"] <- lp
     list(q = qs, gq = chain_write_draws(model, qs, FALSE), diag = dg, step_size = NA_real_, inv_metric = Sig,
@@ -260,11 +292,33 @@ bayescomp_ep <- function(model, sites = 4L, iter = 50L, damping = 0.5, tol = 1e-
   })
   fit <- make_fit_extra(model, res, list(sites = K), "ep", seed, proc.time()[["elapsed"]] - t0)
   fit$mean <- info$mean; fit$cov <- info$cov; fit$iterations <- info$iterations
+  fit$converged <- info$converged; fit$sites_updated <- info$sites_updated
   fit
 }
 
 par_lapply <- function(X, f, cores = 1L) {
-  if (cores > 1L && length(X) > 1L && .Platform$OS.type != "windows")
-    parallel::mclapply(X, f, mc.cores = min(cores, length(X)))
-  else lapply(X, f)
+  if (cores > 1L && length(X) > 1L && .Platform$OS.type != "windows") {
+    # a seed per element drawn from the caller's stream (see bayescomp_smc)
+    base <- sample.int(.Machine$integer.max - length(X), 1L)
+    mc_checked(parallel::mclapply(seq_along(X), function(i) { set.seed(base + i); f(X[[i]]) },
+                                  mc.cores = min(cores, length(X)), mc.set.seed = FALSE))
+  } else lapply(X, f)
+}
+
+# stats::optim() asks for the value and the gradient separately, usually at
+# the same point. `f` returns both at once, so keep its last result and reuse
+# it when the next request is for the identical point. `bad` replaces a
+# nonfinite value; NULL keeps it.
+joint_objective <- function(f, bad = NULL) {
+  force(f)
+  last_x <- NULL; last <- NULL
+  at <- function(x) {
+    if (!identical(x, last_x)) { last <<- f(x); last_x <<- x }
+    last
+  }
+  list(fn = function(x) {
+         v <- -at(x)$value
+         if (!is.null(bad) && !is.finite(v)) bad else v
+       },
+       gr = function(x) -at(x)$grad)
 }

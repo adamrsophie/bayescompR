@@ -54,13 +54,15 @@ def("min", "int[]", "int", function(x) {
   if (!length(x)) stop_domain("min: integer array of size zero")
   min(x)
 })
+# the position of the extreme value; a NaN is the result, as in Stan
+which_ext <- function(v, w) if (anyNA(v)) which(is.na(v))[1L] else w(v)
 def("max", "container", "real", function(x) {
   if (!nelem(x)) return(-Inf)
-  ad_select(flat(as_dbl(x)), which.max(as.vector(val(x))))
+  ad_select(flat(as_dbl(x)), which_ext(as.vector(val(x)), which.max))
 })
 def("min", "container", "real", function(x) {
   if (!nelem(x)) return(Inf)
-  ad_select(flat(as_dbl(x)), which.min(as.vector(val(x))))
+  ad_select(flat(as_dbl(x)), which_ext(as.vector(val(x)), which.min))
 })
 def("norm1", "vecs1", "real", function(x) ad_sum(abs(as_dbl(x))))
 def("norm2", "vecs1", "real", function(x) sqrt(ad_sum(as_dbl(x) * as_dbl(x))))
@@ -249,6 +251,22 @@ def("linspaced_int_array", c("int", "int", "int"), "int[]", function(n, a, b) {
   by <- (b - a) %/% max(n - 1L, 1L)
   as.integer(a + by * (seq_len(n) - 1L))
 })
+# gather2__(x, i, j): the vector of x[i[k], j[k]] (or x[i[k]][j[k]]) for a
+# matrix or a two dimensional array of reals, vectors or row vectors. All of
+# these are stored with dim c(d1, d2), so one flat gather covers them. The
+# loop vectorizer emits it; the name cannot be declared in a program.
+gather2 <- function(x, i, j) {
+  d <- dim(val(x))
+  bad <- function(v, n) { k <- which(is.na(v) | v < 1L | v > n); if (length(k)) v[k[1L]] }
+  for (a in list(list(i, d[1L]), list(j, d[2L]))) {
+    b <- bad(a[[1L]], a[[2L]])
+    if (!is.null(b)) stop_domain(sprintf("index out of range: index %s for a dimension of size %d", b, a[[2L]]))
+  }
+  r <- ad_gather(x, as.integer(i + (j - 1L) * d[1L]))
+  if (is_ad(r)) r else as.numeric(r)
+}
+for (b in c("matrix", "real[,]", "vector[]", "row_vector[]"))
+  def("gather2__", c(b, "int[]", "int[]"), "vector", gather2)
 one_hot <- function(n, k) {
   if (n < 1L) stop_domain("one_hot: size must be positive")
   if (k < 1L || k > n) stop_domain(sprintf("one_hot: index %d out of range 1..%d", k, n))

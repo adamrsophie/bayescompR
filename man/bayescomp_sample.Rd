@@ -11,8 +11,8 @@ bayescomp_sample(
   iter_sampling = 1000L,
   seed = NULL,
   init = 2,
-  algorithm = c("nuts", "hmc", "mala", "metropolis", "slice", "elliptical_slice",
-    "fixed_param"),
+  algorithm = c("nuts", "walnuts", "hmc", "mala", "barker", "metropolis", "slice",
+    "elliptical_slice", "fixed_param"),
   metric = c("diag_e", "dense_e", "unit_e"),
   inv_metric = NULL,
   step_size = NULL,
@@ -20,6 +20,8 @@ bayescomp_sample(
   block = TRUE,
   max_treedepth = 10L,
   int_time = 2 * pi,
+  radial_moves = FALSE,
+  antithetic = FALSE,
   step_size_jitter = 0,
   adapt_engaged = TRUE,
   adapt_metric = TRUE,
@@ -59,7 +61,13 @@ are used as starting points, or the names of JSON or R dump files (one
 per chain, recycled). Parameters missing from a list or file are
 initialized at random.}
 
-\item{algorithm}{\code{"nuts"}, \code{"hmc"} (static integration time), \code{"mala"},
+\item{algorithm}{\code{"nuts"}, \code{"walnuts"} (NUTS whose macro steps are
+each split into as many leapfrog micro steps, a power of two, as keep
+the energy error of the step below 0.3, so that funnels and other
+targets with varying curvature need no reparameterization;
+Bou-Rabee et al. 2025), \code{"hmc"} (static integration time), \code{"mala"},
+\code{"barker"} (the Barker proposal, a gradient based random walk that is
+robust to the step size),
 \code{"metropolis"}, \code{"slice"}, \code{"elliptical_slice"} (generalized
 elliptical slice sampling around a Gaussian whose mean and covariance
 are estimated during warmup) or \code{"fixed_param"} (parameters stay at
@@ -88,13 +96,40 @@ update one coordinate at a time.}
 
 \item{int_time}{Integration time for static HMC.}
 
+\item{radial_moves}{After each transition, also propose scaling the
+distance to the warmup mean by \code{exp(g)}, \code{g} normal with a scale tuned
+toward acceptance 0.5 during warmup (Ostmeyer 2024). It costs one log
+density per iteration and helps heavy tailed targets, where the distance
+from the center mixes slowly: on a 10 dimensional Student t with 2
+degrees of freedom the bulk ESS of the log radius under NUTS rose from
+200 to 342.}
+
+\item{antithetic}{Run the chains in pairs that share their random
+numbers, the second chain of each pair drawing the negated momenta
+(antithetic HMC, Piponi, Hoffman and Sountsov 2020). Each chain is a
+valid chain on its own; the pairs are negatively correlated, so the
+average over chains of the mean of a near odd function, such as a
+coordinate of a near Gaussian posterior, has a much smaller variance.
+One warmup chain per pair adapts the step size and metric, and both
+chains of the pair start from its last state. The coupling holds best
+for \code{algorithm = "hmc"} with an \code{int_time} that is not a multiple of
+half the period of the posterior: on a 3-d normal the standard
+deviation of the posterior mean estimate fell tenfold with HMC and by
+30\% with NUTS, whose trees of different depths lose the coupling.
+Needs an even number of chains. ESS and MCSE treat the chains as
+independent and so overstate the error.}
+
 \item{step_size_jitter}{Uniform random jitter of the step size in each
 transition, as a fraction in [0, 1] (Stan's \code{stepsize_jitter}).}
 
 \item{adapt_engaged}{Adapt during warmup.}
 
 \item{adapt_metric}{Adapt the metric during warmup (when
-\code{adapt_engaged}); \code{FALSE} adapts the step size only.}
+\code{adapt_engaged}); \code{FALSE} adapts the step size only. \code{TRUE} estimates
+the inverse metric from the variance of the draws, as Stan does;
+\code{"fisher"} (diagonal metric, NUTS and HMC) uses
+\code{sqrt(var(draws) / var(gradients))}, which minimizes a Fisher
+divergence and adapts faster (Seyboldt et al. 2026, as in nutpie).}
 
 \item{adapt_gamma, adapt_kappa, adapt_t0}{Dual averaging constants.}
 
@@ -120,9 +155,23 @@ potential gradients of each saved draw (CmdStan's \code{diagnostic_file}) in
 element \code{diagnostics} of the fit; \code{\link[=bayescomp_write_csv]{bayescomp_write_csv()}} writes them.}
 
 \item{resume}{A fit from \code{bayescomp_sample()} to continue: each chain
-starts at its last draw with its adapted step size and metric, and runs
-\code{iter_sampling} further iterations without warmup. Bind the draws of the
-two fits with \code{posterior::bind_draws(..., along = "iteration")}.}
+starts at its state after the last transition with its adapted step
+size and metric, and runs \code{iter_sampling} further iterations without
+warmup. Transition controls that are not given again (\code{block},
+\code{max_treedepth}, \code{int_time}, \code{step_size_jitter}, \code{thin}, \code{show_print},
+\code{save_diagnostics}) keep the values of the first run, and \code{step_size}
+and \code{inv_metric} given again replace the adapted ones. A chain that ran
+to the end (also a warmup only run) continues its random number stream
+and thinning phase, so with the same model, data and controls the
+parameter draws equal those of one longer run with the same seed;
+draws of generated quantities that call \verb{_rng} functions differ.
+Element \code{config$resume} of the result records whether the continuation
+was exact and which controls were changed. With another model or data
+(with the same number of parameters) the chains start from their last
+state without their streams, with a warning. A chain stopped by an
+interrupt continues from its last complete transition with a new
+stream, and an interrupted warmup is not continued. Bind the draws of
+the two fits with \code{posterior::bind_draws(..., along = "iteration")}.}
 }
 \value{
 A \code{bayescomp_fit} object. An interrupt (Ctrl-C or Esc) stops

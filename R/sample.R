@@ -32,7 +32,13 @@
 #'   are used as starting points, or the names of JSON or R dump files (one
 #'   per chain, recycled). Parameters missing from a list or file are
 #'   initialized at random.
-#' @param algorithm `"nuts"`, `"hmc"` (static integration time), `"mala"`,
+#' @param algorithm `"nuts"`, `"walnuts"` (NUTS whose macro steps are
+#'   each split into as many leapfrog micro steps, a power of two, as keep
+#'   the energy error of the step below 0.3, so that funnels and other
+#'   targets with varying curvature need no reparameterization;
+#'   Bou-Rabee et al. 2025), `"hmc"` (static integration time), `"mala"`,
+#'   `"barker"` (the Barker proposal, a gradient based random walk that is
+#'   robust to the step size),
 #'   `"metropolis"`, `"slice"`, `"elliptical_slice"` (generalized
 #'   elliptical slice sampling around a Gaussian whose mean and covariance
 #'   are estimated during warmup) or `"fixed_param"` (parameters stay at
@@ -56,11 +62,36 @@
 #'   update one coordinate at a time.
 #' @param max_treedepth Maximum tree depth for NUTS.
 #' @param int_time Integration time for static HMC.
+#' @param antithetic Run the chains in pairs that share their random
+#'   numbers, the second chain of each pair drawing the negated momenta
+#'   (antithetic HMC, Piponi, Hoffman and Sountsov 2020). Each chain is a
+#'   valid chain on its own; the pairs are negatively correlated, so the
+#'   average over chains of the mean of a near odd function, such as a
+#'   coordinate of a near Gaussian posterior, has a much smaller variance.
+#'   One warmup chain per pair adapts the step size and metric, and both
+#'   chains of the pair start from its last state. The coupling holds best
+#'   for `algorithm = "hmc"` with an `int_time` that is not a multiple of
+#'   half the period of the posterior: on a 3-d normal the standard
+#'   deviation of the posterior mean estimate fell tenfold with HMC and by
+#'   30% with NUTS, whose trees of different depths lose the coupling.
+#'   Needs an even number of chains. ESS and MCSE treat the chains as
+#'   independent and so overstate the error.
+#' @param radial_moves After each transition, also propose scaling the
+#'   distance to the warmup mean by `exp(g)`, `g` normal with a scale tuned
+#'   toward acceptance 0.5 during warmup (Ostmeyer 2024). It costs one log
+#'   density per iteration and helps heavy tailed targets, where the distance
+#'   from the center mixes slowly: on a 10 dimensional Student t with 2
+#'   degrees of freedom the bulk ESS of the log radius under NUTS rose from
+#'   200 to 342.
 #' @param step_size_jitter Uniform random jitter of the step size in each
 #'   transition, as a fraction in \[0, 1\] (Stan's `stepsize_jitter`).
 #' @param adapt_engaged Adapt during warmup.
 #' @param adapt_metric Adapt the metric during warmup (when
-#'   `adapt_engaged`); `FALSE` adapts the step size only.
+#'   `adapt_engaged`); `FALSE` adapts the step size only. `TRUE` estimates
+#'   the inverse metric from the variance of the draws, as Stan does;
+#'   `"fisher"` (diagonal metric, NUTS and HMC) uses
+#'   `sqrt(var(draws) / var(gradients))`, which minimizes a Fisher
+#'   divergence and adapts faster (Seyboldt et al. 2026, as in nutpie).
 #' @param adapt_gamma,adapt_kappa,adapt_t0 Dual averaging constants.
 #' @param adapt_init_buffer,adapt_term_buffer,adapt_window Warmup windows.
 #' @param thin Keep every `thin`th draw.
@@ -74,9 +105,23 @@
 #'   when they finish.
 #' @param show_print Show output of Stan `print()` statements.
 #' @param resume A fit from `bayescomp_sample()` to continue: each chain
-#'   starts at its last draw with its adapted step size and metric, and runs
-#'   `iter_sampling` further iterations without warmup. Bind the draws of the
-#'   two fits with `posterior::bind_draws(..., along = "iteration")`.
+#'   starts at its state after the last transition with its adapted step
+#'   size and metric, and runs `iter_sampling` further iterations without
+#'   warmup. Transition controls that are not given again (`block`,
+#'   `max_treedepth`, `int_time`, `step_size_jitter`, `thin`, `show_print`,
+#'   `save_diagnostics`) keep the values of the first run, and `step_size`
+#'   and `inv_metric` given again replace the adapted ones. A chain that ran
+#'   to the end (also a warmup only run) continues its random number stream
+#'   and thinning phase, so with the same model, data and controls the
+#'   parameter draws equal those of one longer run with the same seed;
+#'   draws of generated quantities that call `_rng` functions differ.
+#'   Element `config$resume` of the result records whether the continuation
+#'   was exact and which controls were changed. With another model or data
+#'   (with the same number of parameters) the chains start from their last
+#'   state without their streams, with a warning. A chain stopped by an
+#'   interrupt continues from its last complete transition with a new
+#'   stream, and an interrupted warmup is not continued. Bind the draws of
+#'   the two fits with `posterior::bind_draws(..., along = "iteration")`.
 #' @return A `bayescomp_fit` object. An interrupt (Ctrl-C or Esc) stops
 #'   sampling and returns the chains that finished or, when none did, the
 #'   draws kept so far (parallel chains in forked processes are cut to the
@@ -95,29 +140,76 @@
 #' fit
 #' @export
 bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampling = 1000L,
-                             seed = NULL, init = 2, algorithm = c("nuts", "hmc", "mala", "metropolis", "slice", "elliptical_slice", "fixed_param"),
+                             seed = NULL, init = 2, algorithm = c("nuts", "walnuts", "hmc", "mala", "barker", "metropolis", "slice", "elliptical_slice", "fixed_param"),
                              metric = c("diag_e", "dense_e", "unit_e"), inv_metric = NULL,
                              step_size = NULL, adapt_delta = NULL, block = TRUE, max_treedepth = 10L,
-                             int_time = 2 * pi, step_size_jitter = 0, adapt_engaged = TRUE, adapt_metric = TRUE, adapt_gamma = 0.05,
+                             int_time = 2 * pi, radial_moves = FALSE, antithetic = FALSE, step_size_jitter = 0, adapt_engaged = TRUE, adapt_metric = TRUE, adapt_gamma = 0.05,
                              adapt_kappa = 0.75, adapt_t0 = 10, adapt_init_buffer = 75L,
                              adapt_term_buffer = 50L, adapt_window = 25L, thin = 1L,
                              save_warmup = FALSE, refresh = 200L, cores = getOption("mc.cores", 1L), show_print = TRUE,
                              save_diagnostics = FALSE, resume = NULL) {
   check_model(model)
+  if (isTRUE(antithetic) && is.null(resume) && as_count(iter_warmup, "iter_warmup") > 0L && isTRUE(adapt_engaged)) {
+    # the two chains of a pair stay coupled only with the same step size and
+    # metric, so one warmup chain per pair adapts them and both chains start
+    # from its last state and random number stream
+    a <- mget(names(formals()), environment())
+    if (as_count(chains, "chains", 1L) %% 2L != 0L) stop("'antithetic' needs an even number of chains", call. = FALSE)
+    a$algorithm <- match.arg(algorithm)
+    pa <- utils::modifyList(a, list(chains = chains %/% 2L, iter_sampling = 0L, antithetic = FALSE, save_warmup = FALSE))
+    pilot <- do.call(bayescomp_sample, pa)
+    two <- function(x) rep(x, each = 2L)
+    for (k in c("unconstrained", "final", "step_size", "inv_metric")) pilot[[k]] <- two(pilot[[k]])
+    attr(pilot, "antithetic_pilot") <- TRUE
+    fit <- do.call(bayescomp_sample, utils::modifyList(a, list(resume = pilot)))
+    fit$config$iter_warmup <- as_count(iter_warmup, "iter_warmup")
+    fit$config$resume <- NULL
+    return(fit)
+  }
   if (!is.null(resume)) {
     if (!inherits(resume, "bayescomp_fit") || !identical(resume$method, "sample") || is.null(resume$unconstrained))
       stop("'resume' must be a fit from bayescomp_sample()", call. = FALSE)
     if (ncol(resume$unconstrained[[1L]]) != model$dim)
       stop("the model and the fit in 'resume' have different numbers of parameters", call. = FALSE)
     chains <- length(resume$unconstrained)
-    algorithm <- resume$config$algorithm
-    metric <- resume$config$metric
+    old <- resume$config
+    if (!missing(algorithm) && !identical(algorithm[1L], old$algorithm))
+      warning(sprintf("'algorithm' is ignored when resuming: the chains continue with %s", old$algorithm), call. = FALSE)
+    algorithm <- old$algorithm
+    metric <- old$metric
     iter_warmup <- 0L
     adapt_engaged <- FALSE
+    # transition controls not given again continue as they were; the ones
+    # given with other values are recorded as a modified continuation
+    inherit <- c(block = "block", max_treedepth = "max_treedepth", int_time = "int_time",
+                 step_size_jitter = "step_size_jitter", thin = "thin", show_print = "print",
+                 save_diagnostics = "diagnostic")
+    changed <- character(0)
+    for (a in names(inherit)) {
+      prev <- old[[inherit[[a]]]]
+      if (is.null(prev)) next
+      if (eval(call("missing", as.name(a)))) assign(a, prev)
+      else if (!isTRUE(all.equal(get(a), prev, check.attributes = FALSE))) changed <- c(changed, a)
+    }
+    given_step <- !missing(step_size) && !is.null(step_size)
+    given_metric <- !missing(inv_metric) && !is.null(inv_metric)
+    changed <- c(changed, if (given_step) "step_size", if (given_metric) "inv_metric")
+    # an exact continuation needs the same model and data; anything else is
+    # a warm start from the last state
+    # (random numbers drawn in transformed data must also be the same)
+    same_model <- identical(model$code, resume$model$code) && identical(model$data, resume$model$data) &&
+      (!ir_calls_rng(model$ir$blocks[["transformed data"]]) ||
+         (!is.null(model$compiled$seed) && identical(model$compiled$seed, resume$model$compiled$seed)))
+    if (!same_model)
+      warning("the model or data differ from those of the fit in 'resume': its chains start from their last state, ",
+              "but without their random number streams, so this is not an exact continuation", call. = FALSE)
   }
   algorithm <- match.arg(algorithm)
   metric <- match.arg(metric)
   chains <- as_count(chains, "chains", min = 1L)
+  antithetic <- isTRUE(antithetic)
+  if (antithetic && (chains %% 2L != 0L || (!is.null(resume) && !isTRUE(attr(resume, "antithetic_pilot")))))
+    stop("'antithetic' needs an even number of chains and no 'resume'", call. = FALSE)
   iter_warmup <- as_count(iter_warmup, "iter_warmup")
   iter_sampling <- as_count(iter_sampling, "iter_sampling")
   thin <- as_count(thin, "thin", min = 1L)
@@ -132,7 +224,7 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   if (is.null(adapt_delta)) adapt_delta <- default_adapt_delta(algorithm, block)
   if (!(algorithm %in% c("slice", "elliptical_slice", "fixed_param")) && !(adapt_delta > 0 && adapt_delta < 1)) stop("'adapt_delta' must be in (0, 1)", call. = FALSE)
   if (is.null(step_size)) {
-    step_size <- switch(algorithm, nuts = 1, hmc = 1, slice = 2, elliptical_slice = 1, fixed_param = 1, mala = 1 / max(1, n)^(1 / 6),
+    step_size <- switch(algorithm, nuts = 1, walnuts = 1, hmc = 1, slice = 2, elliptical_slice = 1, fixed_param = 1, mala = 1 / max(1, n)^(1 / 6), barker = 1 / max(1, n)^(1 / 6),
                         metropolis = if (block) 2.38 / sqrt(max(1, n)) else 2.4)
   }
   if (!(is.numeric(step_size) && length(step_size) == 1L && step_size > 0)) stop("'step_size' must be positive", call. = FALSE)
@@ -151,7 +243,8 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   }
   cfg <- list(algorithm = algorithm, block = block, metric = metric, inv_metric = inv_metric, step_size = step_size,
               adapt_delta = adapt_delta, max_treedepth = as_count(max_treedepth, "max_treedepth", 1L),
-              int_time = int_time, step_size_jitter = step_size_jitter, adapt_engaged = adapt_engaged, adapt_metric = isTRUE(adapt_metric),
+              int_time = int_time, radial = isTRUE(radial_moves), step_size_jitter = step_size_jitter, adapt_engaged = adapt_engaged, adapt_metric = isTRUE(adapt_metric) || identical(adapt_metric, "fisher"),
+              fisher = identical(adapt_metric, "fisher") && metric == "diag_e" && algorithm %in% c("nuts", "walnuts", "hmc"),
               adapt_gamma = adapt_gamma, adapt_kappa = adapt_kappa, adapt_t0 = adapt_t0,
               adapt_init_buffer = as.integer(adapt_init_buffer), adapt_term_buffer = as.integer(adapt_term_buffer),
               adapt_window = as.integer(adapt_window), iter_warmup = iter_warmup, iter_sampling = iter_sampling,
@@ -161,19 +254,43 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   res <- run_chains(model, chains, seed, cores, function(id) {
     cf <- cfg
     if (!is.null(resume)) {
-      # continue the chain: its last draw, step size and metric, no warmup
-      q0 <- resume$unconstrained[[id]][nrow(resume$unconstrained[[id]]), ]
-      cf$step_size <- resume$step_size[[id]]
-      cf$inv_metric <- resume$inv_metric[[id]]
+      # continue the chain: its state after the last transition (the last
+      # draw for older fits), step size and metric, no warmup; a chain that
+      # finished also continues its random number stream
+      fin <- resume$final[[id]]
+      q0 <- fin$q %||% resume$unconstrained[[id]][nrow(resume$unconstrained[[id]]), ]
+      if (same_model && isTRUE(fin$exact) && !is.null(fin$rng)) assign(".Random.seed", fin$rng, envir = globalenv())
+      if (!given_step) cf$step_size <- resume$step_size[[id]]
+      if (!given_metric) cf$inv_metric <- resume$inv_metric[[id]]
+      # transition specific state (the center of elliptical slice sampling)
+      # and the count of sampling iterations, which keeps the thinning phase
+      cf$center <- fin$center
+      cf$radial_sd <- fin$radial_sd
+      cf$sampling_offset <- fin$n_sampling %||% 0L
     } else q0 <- find_init(model, init, id, gradient = !(algorithm %in% c("metropolis", "slice", "elliptical_slice", "fixed_param")))
+    cf$negate_momentum <- antithetic && id %% 2L == 0L
+    # generated quantities draw from their own substream of the chain's
+    # stream, so a continuation also continues them and their draws do not
+    # overlap the transitions of the next run
+    gq_rng <- if (!is.null(resume) && same_model && isTRUE(fin$exact) && !is.null(fin$gq_rng)) fin$gq_rng
+              else parallel::nextRNGSubStream(get(".Random.seed", envir = globalenv()))
     out <- if (n == 0L || algorithm == "fixed_param") fixed_param_chain(cf, q0) else run_hmc_chain(model, q0, cf, id)
+    assign(".Random.seed", gq_rng, envir = globalenv())
     # after an interrupt, a second one (a parallel chain is signaled again
     # by the parent) must not lose the draws kept
     out$gq <- if (isTRUE(out$interrupted)) suspendInterrupts(chain_write_draws(model, out$q, show_print))
               else chain_write_draws(model, out$q, show_print)
+    out$final$gq_rng <- get(".Random.seed", envir = globalenv())
     out
-  })
+  }, pairs = antithetic)
   res <- interrupted_chains(res)
+  if (!is.null(resume)) {
+    # exact only when every chain finished (was not interrupted) and kept
+    # its state and random number stream
+    complete <- length(resume$final) == chains && !isTRUE(resume$interrupted) &&
+      all(vapply(resume$final, function(f) isTRUE(f$exact) && !is.null(f$rng) && !is.null(f$gq_rng) && !is.null(f$q), TRUE))
+    cfg$resume <- list(exact = same_model && complete && !length(changed), changed = changed)
+  }
   fit <- make_fit(model, res, cfg, method = "sample", seed = seed, elapsed = proc.time()[["elapsed"]] - t0)
   fit$interrupted <- isTRUE(attr(res, "interrupted"))
   fit
@@ -227,10 +344,14 @@ check_model <- function(model) {
 # fixed_param (and models without parameters): the parameters stay at q0
 # and only generated quantities are produced; lp__ is 0 as in Stan
 fixed_param_chain <- function(cfg, q0 = numeric(0)) {
-  ns <- length(seq_len(cfg$iter_sampling)[(seq_len(cfg$iter_sampling) - 1L) %% cfg$thin == 0L])
+  # the thinning phase continues across resumed runs
+  off <- cfg$sampling_offset %||% 0L
+  ns <- sum((off + seq_len(cfg$iter_sampling) - 1L) %% cfg$thin == 0L)
   dg <- matrix(0, ns, 7L, dimnames = list(NULL, c("lp__", "accept_stat__", "stepsize__", "treedepth__", "n_leapfrog__", "divergent__", "energy__")))
+  rng <- if (exists(".Random.seed", envir = globalenv(), inherits = FALSE)) get(".Random.seed", envir = globalenv())
   list(q = matrix(q0, ns, length(q0), byrow = TRUE), diag = dg, step_size = NA_real_, inv_metric = numeric(0), n_warmup_saved = 0L,
-       time = c(warmup = 0, sampling = 0))
+       time = c(warmup = 0, sampling = 0),
+       final = list(q = q0, rng = rng, exact = TRUE, n_sampling = off + cfg$iter_sampling))
 }
 
 # Run `f(chain_id)` for every chain with independent RNG streams.
@@ -343,7 +464,7 @@ bind_chain_id <- function(model, id) {
   invisible()
 }
 
-run_chains <- function(model, chains, seed, cores, f) {
+run_chains <- function(model, chains, seed, cores, f, pairs = FALSE) {
   old_kind <- RNGkind()
   if (is.null(seed)) seed <- sample.int(.Machine$integer.max, 1L)
   had <- exists(".Random.seed", envir = globalenv(), inherits = FALSE)
@@ -358,7 +479,8 @@ run_chains <- function(model, chains, seed, cores, f) {
   streams <- vector("list", chains)
   s <- get(".Random.seed", envir = globalenv())
   for (i in seq_len(chains)) {
-    s <- parallel::nextRNGStream(s)
+    # antithetic pairs share one stream
+    if (!pairs || i %% 2L == 1L) s <- parallel::nextRNGStream(s)
     streams[[i]] <- s
   }
   rebind <- isTRUE(model$compiled$chain_id_auto) && chains > 1L

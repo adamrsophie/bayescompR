@@ -5,7 +5,7 @@
 \alias{bayescomp_posterior_predict}
 \title{Pointwise log likelihood and posterior predictive draws}
 \usage{
-bayescomp_log_lik(fit, format = c("matrix", "array"))
+bayescomp_log_lik(fit, format = c("matrix", "array"), group = NULL)
 
 bayescomp_posterior_predict(fit, format = c("matrix", "array"), seed = NULL)
 }
@@ -15,12 +15,16 @@ bayescomp_posterior_predict(fit, format = c("matrix", "array"), seed = NULL)
 \item{format}{\code{"matrix"} for a draws by observations matrix (chains
 stacked), \code{"array"} for an iterations by chains by observations array.}
 
+\item{group}{Optional vector with one entry per observation column and
+no missing values; the columns of each group are summed and named by
+the group, in the order the groups first appear.}
+
 \item{seed}{Seed for the predictive draws.}
 }
 \value{
-A matrix or array with one column (slice) per observation.
-\code{bayescomp_posterior_predict()} gives \code{NA} for distributions without an
-\verb{_rng} function.
+A matrix or array with one column (slice) per observation or
+group. \code{bayescomp_posterior_predict()} gives \code{NA} for distributions
+without an \verb{_rng} function.
 }
 \description{
 Evaluates the model block at each draw and records, for every sampling
@@ -28,8 +32,17 @@ statement (\code{y ~ dist(...)}) and every \verb{target += dist_lpdf(y | ...)} w
 left side is data, the normalized log density of each element of \code{y} and,
 for \code{bayescomp_posterior_predict()}, a draw from the matching \verb{_rng}
 function. Univariate statements contribute one column per element
-(\code{y[1]}, \code{y[2]}, ...); multivariate ones one column per statement.
-Truncated statements are not supported.
+(\code{y[1]}, \code{y[2]}, ...), with arguments such as cutpoints or a vector of
+log odds shared by all elements, and GLMs one column per row of \code{x}, as
+the equivalent unfused statement does. A multivariate statement is one
+joint observation, so it gives one log likelihood column, while its
+predictive draws have one column per element of \code{y}. Truncated
+statements are renormalized for each observation; their predictive draws
+are taken by inversion for the normal and by rejection otherwise. A
+user defined density is one joint observation per statement (one per
+iteration inside a loop) and has no predictive draws. \code{group} sums the
+log likelihood of observations that
+belong together, for leave one group out cross validation.
 }
 \examples{
 m <- bayescomp_model("data { int N; vector[N] y; } parameters { real mu; }

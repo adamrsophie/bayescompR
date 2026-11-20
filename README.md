@@ -3,7 +3,7 @@
 <!-- badges: start -->
 [![R-CMD-check](https://github.com/adamrsophie/bayescompR/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/adamrsophie/bayescompR/actions/workflows/R-CMD-check.yaml)
 [![pkgdown](https://github.com/adamrsophie/bayescompR/actions/workflows/pkgdown.yaml/badge.svg)](https://adamrsophie.github.io/bayescompR/)
-[![test-coverage](https://github.com/adamrsophie/bayescompR/actions/workflows/test-coverage.yaml/badge.svg)](https://github.com/adamrsophie/bayescompR/actions/workflows/test-coverage.yaml)
+[![Codecov test coverage](https://codecov.io/gh/adamrsophie/bayescompR/graph/badge.svg)](https://app.codecov.io/gh/adamrsophie/bayescompR)
 [![R-hub](https://github.com/adamrsophie/bayescompR/actions/workflows/rhub.yaml/badge.svg)](https://github.com/adamrsophie/bayescompR/actions/workflows/rhub.yaml)
 [![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
