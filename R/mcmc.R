@@ -190,7 +190,7 @@ lp_cache_fun <- function(st) {
 }
 
 default_adapt_delta <- function(algorithm, block) {
-  switch(algorithm, nuts = 0.8, hmc = 0.8, mala = 0.574, barker = 0.574, metropolis = if (block) 0.234 else 0.44, NA_real_)
+  switch(algorithm, nuts = 0.8, walnuts = 0.8, hmc = 0.8, mala = 0.574, barker = 0.574, metropolis = if (block) 0.234 else 0.44, NA_real_)
 }
 
 # Generalized elliptical slice sampling (Murray, Adams and MacKay 2010;
@@ -223,3 +223,4 @@ elliptical_transition <- function(st, q) {
   st$last <- list(q = q, lp = lp0)
   mh_out(q, lp0, 1, evals)
 }
+

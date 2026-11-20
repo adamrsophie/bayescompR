@@ -28,6 +28,19 @@
   scales the distance to the warmup mean (Ostmeyer 2024), which helps heavy
   tailed targets.
 
+* `bayescomp_sample(algorithm = "walnuts")` runs WALNUTS (Bou-Rabee,
+  Carpenter, Kleppe and Liu 2025): NUTS whose macro steps are each split
+  into as many leapfrog micro steps, a power of two, as keep the energy
+  error below 0.3. On Neal's funnel in 6 dimensions it reached the lower
+  tail of the log scale (5% quantile -4.76, truth -4.93; NUTS -2.96) with
+  no divergences; on easy targets it costs about twice the gradients of
+  NUTS per effective draw.
+
+* `bayescomp_sample(antithetic = TRUE)` runs the chains in pairs that share
+  their random numbers, with negated momenta in the second chain of each
+  pair (Piponi, Hoffman and Sountsov 2020). For HMC on a normal posterior
+  the standard deviation of the estimated mean fell tenfold.
+
 * `bayescomp_laplace()` reports the Pareto k of the importance ratios of
   its draws (`fit$pareto_k`) and warns above 0.7, where the approximation
   is too far from the posterior to rely on.

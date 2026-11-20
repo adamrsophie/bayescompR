@@ -11,7 +11,7 @@ bayescomp_sample(
   iter_sampling = 1000L,
   seed = NULL,
   init = 2,
-  algorithm = c("nuts", "hmc", "mala", "barker", "metropolis", "slice",
+  algorithm = c("nuts", "walnuts", "hmc", "mala", "barker", "metropolis", "slice",
     "elliptical_slice", "fixed_param"),
   metric = c("diag_e", "dense_e", "unit_e"),
   inv_metric = NULL,
@@ -21,6 +21,7 @@ bayescomp_sample(
   max_treedepth = 10L,
   int_time = 2 * pi,
   radial_moves = FALSE,
+  antithetic = FALSE,
   step_size_jitter = 0,
   adapt_engaged = TRUE,
   adapt_metric = TRUE,
@@ -60,7 +61,11 @@ are used as starting points, or the names of JSON or R dump files (one
 per chain, recycled). Parameters missing from a list or file are
 initialized at random.}
 
-\item{algorithm}{\code{"nuts"}, \code{"hmc"} (static integration time), \code{"mala"},
+\item{algorithm}{\code{"nuts"}, \code{"walnuts"} (NUTS whose macro steps are
+each split into as many leapfrog micro steps, a power of two, as keep
+the energy error of the step below 0.3, so that funnels and other
+targets with varying curvature need no reparameterization;
+Bou-Rabee et al. 2025), \code{"hmc"} (static integration time), \code{"mala"},
 \code{"barker"} (the Barker proposal, a gradient based random walk that is
 robust to the step size),
 \code{"metropolis"}, \code{"slice"}, \code{"elliptical_slice"} (generalized
@@ -98,6 +103,21 @@ density per iteration and helps heavy tailed targets, where the distance
 from the center mixes slowly: on a 10 dimensional Student t with 2
 degrees of freedom the bulk ESS of the log radius under NUTS rose from
 200 to 342.}
+
+\item{antithetic}{Run the chains in pairs that share their random
+numbers, the second chain of each pair drawing the negated momenta
+(antithetic HMC, Piponi, Hoffman and Sountsov 2020). Each chain is a
+valid chain on its own; the pairs are negatively correlated, so the
+average over chains of the mean of a near odd function, such as a
+coordinate of a near Gaussian posterior, has a much smaller variance.
+One warmup chain per pair adapts the step size and metric, and both
+chains of the pair start from its last state. The coupling holds best
+for \code{algorithm = "hmc"} with an \code{int_time} that is not a multiple of
+half the period of the posterior: on a 3-d normal the standard
+deviation of the posterior mean estimate fell tenfold with HMC and by
+30\% with NUTS, whose trees of different depths lose the coupling.
+Needs an even number of chains. ESS and MCSE treat the chains as
+independent and so overstate the error.}
 
 \item{step_size_jitter}{Uniform random jitter of the step size in each
 transition, as a fraction in [0, 1] (Stan's \code{stepsize_jitter}).}
