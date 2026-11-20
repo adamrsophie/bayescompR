@@ -35,8 +35,11 @@ sem_declare <- function(s, name, info, loc) {
 
 origin_data <- c("data", "transformed data")
 
-stan_check <- function(prog, external = character()) {
+stan_check <- function(prog, external = character(), internal = FALSE) {
   s <- sem_new()
+  # internal library functions (names ending in "__", which a program cannot
+  # declare) are only allowed in programs that bayescompR rewrote itself
+  s$internal <- internal
   ext <- list()
   b <- prog$blocks
   # functions: register signatures first (allows recursion and forward use)
@@ -898,8 +901,9 @@ sem_call <- function(s, e) {
                           paste(describe_sigs(s, uname), collapse = "\n")), e$loc)
   }
   sg <- res$sig
-  if (!isTRUE(sg$user) && is.null(stan_signatures[[stan_sig_key(uname)]])) stop_semantic(sprintf("unknown function '%s'", nm), e$loc)
-  if (!isTRUE(sg$user) && !stan_sig_ok(uname, types)) {
+  lib_ok <- isTRUE(sg$user) || (isTRUE(s$internal) && endsWith(uname, "__"))
+  if (!lib_ok && is.null(stan_signatures[[stan_sig_key(uname)]])) stop_semantic(sprintf("unknown function '%s'", nm), e$loc)
+  if (!lib_ok && !stan_sig_ok(uname, types)) {
     stop_semantic(sprintf("no matching signature for %s(%s); Stan %s defines:\n%s", nm,
                           paste(vapply(types, ty_str, ""), collapse = ", "), stan_signatures_version,
                           paste(utils::head(stan_sig_strings(uname), 20L), collapse = "\n")), e$loc)

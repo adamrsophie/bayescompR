@@ -159,3 +159,28 @@ test_that("loops whose invariant expressions read the target or have effects sta
   # an invariant expression without effects is still lifted out of the loop
   same_as_loop(paste(dd, "model { mu ~ normal(0, 1); for (n in 1:N) y[n] ~ normal(exp(mu), 1); }"), d, 0.2, loops = 1L)
 })
+
+test_that("two index reads with loop dependent positions are gathered", {
+  set.seed(3)
+  N <- 24; J <- 6; T <- 4
+  d <- list(N = N, J = J, T = T, id = sample(J, N, TRUE), t = sample(T, N, TRUE), y = rpois(N, 2), x = rnorm(N))
+  dd <- "data { int N; int J; int T; array[N] int id; array[N] int t; array[N] int y; vector[N] x; }"
+  u <- seq(-0.5, 0.5, length.out = 1 + J * T)
+  for (p in c("matrix[T, J] B;", "array[T, J] real B;"))
+    same_as_loop(paste(dd, "parameters { real a;", p, "} model { for (n in 1:N) y[n] ~ poisson_log(a + B[t[n], id[n]]); }"), d, u, 1L)
+  for (p in c("array[J] vector[T] b;", "array[J] row_vector[T] b;")) {
+    same_as_loop(paste(dd, "parameters { real a;", p, "} model { for (n in 1:N) y[n] ~ poisson_log(a + b[id[n]][t[n]]); }"), d, u, 1L)
+    # one position fixed, or the loop variable itself
+    same_as_loop(paste(dd, "parameters { real a;", p, "} model { for (n in 1:N) y[n] ~ poisson_log(a + x[n] * b[id[n]][2]); }"), d, u, 1L)
+    same_as_loop(paste(dd, "parameters { real a;", p, "} model { for (n in 1:T) target += normal_lpdf(x[n] | b[3][n], 1); }"), d, u, 1L)
+  }
+  same_as_loop(paste(dd, "parameters { real a; matrix[T, J] B; } model { for (n in 1:J) target += normal_lpdf(x[n] | B[2, n] + a, 1); }"), d, u, 1L)
+  # an index out of range is still an error
+  bad <- d; bad$t[3] <- T + 1L
+  m <- bayescomp_model(paste(dd, "parameters { matrix[T, J] B; } model { for (n in 1:N) y[n] ~ poisson_log(B[t[n], id[n]]); }"), data = bad)
+  expect_equal(attr(m$ir, "vectorized_loops"), 1L)
+  expect_error(bayescomp_log_prob(m, numeric(J * T)), "index out of range")
+  # the internal gather is not part of the language
+  expect_error(bayescomp_model("parameters { matrix[2, 2] B; } model { target += sum(gather2__(B, {1}, {2})); }"),
+               "unknown function")
+})

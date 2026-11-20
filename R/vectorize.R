@@ -24,6 +24,10 @@
 #     the loop) and `x[idx[n]]` with `x` a vector, row vector or one
 #     dimensional array, `X[n] * b` with `X` a matrix and `b` a vector, and
 #     `X[n, k]`,
+#   * `X[i, j]` with `X` a matrix or two dimensional real array, and
+#     `b[i][j]` with `b` an array of vectors or row vectors, where each of
+#     i and j is a position as above or does not depend on the loop; the
+#     elements are read with the internal function `gather2__`,
 #   * arithmetic (`+ - * / ^`, unary minus) on scalars,
 #   * elementwise functions of one scalar (exp, log, inv_logit, ...),
 #   * `dot_product(X[n], b)`.
@@ -54,13 +58,13 @@ vectorize_program <- function(ast, ir, external = character()) {
   }
   all <- rewrite(NULL)
   if (!all$done) return(ir)
-  ok <- tryCatch(stan_check(all$ast, external = external), bayescomp_error = function(e) NULL)
+  ok <- tryCatch(stan_check(all$ast, external = external, internal = TRUE), bayescomp_error = function(e) NULL)
   if (!is.null(ok)) return(vec_mark(ok, all$done))
   # one of the rewrites does not check: add them one at a time
   allow <- integer(0); best <- ir
   for (k in seq_len(all$found)) {
     r <- rewrite(c(allow, k))
-    chk <- tryCatch(stan_check(r$ast, external = external), bayescomp_error = function(e) NULL)
+    chk <- tryCatch(stan_check(r$ast, external = external, internal = TRUE), bayescomp_error = function(e) NULL)
     if (!is.null(chk)) { allow <- c(allow, k); best <- chk }
   }
   vec_mark(best, length(allow))
@@ -378,28 +382,15 @@ vec_expr <- function(a, t, ctx) {
 
 vec_index <- function(a, t, ctx) {
   n <- ctx$n
+  # b[i][j] on a one dimensional array of vectors is b[i, j]
+  if (identical(a$x$kind, "index") && identical(t$x$kind, "index") && vec_mentions(a$x, n) && length(a$idx) == 1L &&
+      length(a$x$idx) == 1L &&
+      identical((t$x$x$type$nd %||% 0L), 1L) && t$x$x$type$base %in% c("vector", "row_vector"))
+    return(vec_gather2(a$x$x, t$x$x, c(a$x$idx, a$idx), c(t$x$idx, t$idx), ctx))
   if (vec_mentions(a$x, n)) return(NULL)
   xt <- t$x$type
   nd <- xt$nd %||% 0L
-  # the vectorized position: the loop variable itself, or idx[n] for an
-  # integer array idx that does not depend on the loop
-  pos <- function(ia, it) {
-    if (!identical(ia$kind, "single")) return(NULL)
-    e <- ia$e
-    if (vec_is_n(e, n)) return(vec_range(ctx))
-    # x[n + c] or x[n - c] with an integer c that does not depend on the loop
-    if (identical(e$kind, "binop") && e$op %in% c("+", "-") && identical(it$e$kind, "binop") && vec_is_n(e$a, n) &&
-        !vec_mentions(e$b, n) && identical(it$e$b$type$base, "int") && (it$e$b$type$nd %||% 0L) == 0L) {
-      sh <- function(x) list(kind = "binop", op = e$op, a = list(kind = "paren", a = x, loc = e$loc),
-                             b = list(kind = "paren", a = e$b, loc = e$loc), loc = e$loc)
-      return(list(kind = "range", lo = sh(ctx$lo), hi = sh(ctx$hi), loc = ctx$loc))
-    }
-    if (identical(e$kind, "index") && identical(it$e$kind, "index") && !vec_mentions(e$x, n) &&
-        identical(it$e$x$type$base, "int") && (it$e$x$type$nd %||% 0L) == 1L && length(e$idx) == 1L &&
-        identical(e$idx[[1L]]$kind, "single") && vec_is_n(e$idx[[1L]]$e, n))
-      return(list(kind = "single", e = list(kind = "index", x = e$x, idx = list(vec_range(ctx)), loc = e$loc), loc = ia$loc))
-    NULL
-  }
+  pos <- function(ia, it) vec_pos(ia, it, ctx)
   if (length(a$idx) == 1L) {
     p <- pos(a$idx[[1L]], t$idx[[1L]])
     if (is.null(p)) return(NULL)
@@ -414,10 +405,58 @@ vec_index <- function(a, t, ctx) {
   if (length(a$idx) == 2L && nd == 0L && identical(xt$base, "matrix")) {
     p <- pos(a$idx[[1L]], t$idx[[1L]])
     k <- a$idx[[2L]]
-    if (is.null(p) || !identical(k$kind, "single") || vec_mentions(k, n) || !identical(t$idx[[2L]]$e$type$base, "int") ||
-        (t$idx[[2L]]$e$type$nd %||% 0L) != 0L) return(NULL)
-    a$idx <- list(p, k)
-    return(list(ast = a, dep = TRUE, kind = "vec"))
+    if (!is.null(p) && identical(k$kind, "single") && !vec_mentions(k, n) && identical(t$idx[[2L]]$e$type$base, "int") &&
+        (t$idx[[2L]]$e$type$nd %||% 0L) == 0L) {
+      a$idx <- list(p, k)
+      return(list(ast = a, dep = TRUE, kind = "vec"))
+    }
   }
+  if (length(a$idx) == 2L) return(vec_gather2(a$x, t$x, a$idx, t$idx, ctx))
   NULL
+}
+
+# the vectorized position: the loop variable itself, or idx[n] for an
+# integer array idx that does not depend on the loop
+vec_pos <- function(ia, it, ctx) {
+  n <- ctx$n
+  if (!identical(ia$kind, "single")) return(NULL)
+  e <- ia$e
+  if (vec_is_n(e, n)) return(vec_range(ctx))
+  # x[n + c] or x[n - c] with an integer c that does not depend on the loop
+  if (identical(e$kind, "binop") && e$op %in% c("+", "-") && identical(it$e$kind, "binop") && vec_is_n(e$a, n) &&
+      !vec_mentions(e$b, n) && identical(it$e$b$type$base, "int") && (it$e$b$type$nd %||% 0L) == 0L) {
+    sh <- function(x) list(kind = "binop", op = e$op, a = list(kind = "paren", a = x, loc = e$loc),
+                           b = list(kind = "paren", a = e$b, loc = e$loc), loc = e$loc)
+    return(list(kind = "range", lo = sh(ctx$lo), hi = sh(ctx$hi), loc = ctx$loc))
+  }
+  if (identical(e$kind, "index") && identical(it$e$kind, "index") && !vec_mentions(e$x, n) &&
+      identical(it$e$x$type$base, "int") && (it$e$x$type$nd %||% 0L) == 1L && length(e$idx) == 1L &&
+      identical(e$idx[[1L]]$kind, "single") && vec_is_n(e$idx[[1L]]$e, n))
+    return(list(kind = "single", e = list(kind = "index", x = e$x, idx = list(vec_range(ctx)), loc = e$loc), loc = ia$loc))
+  NULL
+}
+
+# x[i, j] (or x[i][j]) where the positions depend on the loop: the elements
+# are gathered by gather2__ with one integer array per position. A position
+# that does not depend on the loop is repeated.
+vec_gather2 <- function(x, tx, idx, tidx, ctx) {
+  n <- ctx$n
+  if (vec_mentions(x, n) || vec_effectful(x)) return(NULL)
+  xt <- tx$type; nd <- xt$nd %||% 0L
+  if (!((nd == 0L && identical(xt$base, "matrix")) || (nd == 2L && identical(xt$base, "real")) ||
+        (nd == 1L && xt$base %in% c("vector", "row_vector")))) return(NULL)
+  arr <- function(ia, it) {
+    if (!identical(ia$kind, "single") || !identical(it$e$type$base, "int") || (it$e$type$nd %||% 0L) != 0L) return(NULL)
+    if (!vec_mentions(ia$e, n)) {
+      if (vec_effectful(ia$e)) return(NULL)
+      return(vec_call("rep_array", list(ia$e, vec_size(ctx)), ctx$loc))
+    }
+    p <- vec_pos(ia, it, ctx)
+    if (is.null(p)) return(NULL)
+    if (identical(p$kind, "single")) return(p$e)
+    vec_call("linspaced_int_array", list(vec_size(ctx), p$lo, p$hi), ctx$loc)
+  }
+  ij <- Map(arr, idx, tidx)
+  if (any(vapply(ij, is.null, TRUE))) return(NULL)
+  list(ast = vec_call("gather2__", c(list(x), ij), ctx$loc), dep = TRUE, kind = "vec")
 }
