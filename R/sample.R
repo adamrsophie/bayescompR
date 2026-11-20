@@ -32,7 +32,21 @@
 #'   are used as starting points, or the names of JSON or R dump files (one
 #'   per chain, recycled). Parameters missing from a list or file are
 #'   initialized at random.
-#' @param algorithm `"nuts"`, `"hmc"` (static integration time), `"mala"`,
+#' @param algorithm `"nuts"`, `"walnuts"` (NUTS whose macro steps are
+#'   each split into as many leapfrog micro steps, a power of two, as keep
+#'   the energy error of the step below 0.3, so that funnels and other
+#'   targets with varying curvature need no reparameterization;
+#'   Bou-Rabee et al. 2025), `"hmc"` (static integration time), `"gist"`
+#'   (HMC whose number of steps is drawn below the U-turn length of each
+#'   trajectory, Bou-Rabee, Carpenter and Marsden 2024), `"malt"`
+#'   (Metropolis adjusted Langevin trajectories of length `int_time`, with
+#'   partial momentum refreshes between leapfrog steps, Riou-Durand and
+#'   Vogrinc 2023), `"aaps"` (the apogee to apogee path sampler, which
+#'   draws its proposal from five segments of the path between turning
+#'   points of the potential, Sherlock, Urbas and Ludkin 2023), `"mala"`,
+#'   `"automala"` (MALA that doubles or halves its step size each iteration
+#'   until the acceptance ratio falls between random bounds,
+#'   Biron-Lattes et al. 2024),
 #'   `"barker"` (the Barker proposal, a gradient based random walk that is
 #'   robust to the step size),
 #'   `"metropolis"`, `"slice"`, `"elliptical_slice"` (generalized
@@ -58,6 +72,15 @@
 #'   update one coordinate at a time.
 #' @param max_treedepth Maximum tree depth for NUTS.
 #' @param int_time Integration time for static HMC.
+#' @param antithetic Run the chains in pairs that share their random
+#'   numbers, the second chain of each pair drawing the negated momenta
+#'   (antithetic HMC, Piponi, Hoffman and Sountsov 2020). Each chain is a
+#'   valid chain on its own; the pairs are negatively correlated, so the
+#'   average over chains of the mean of a near odd function, such as a
+#'   coordinate of a near Gaussian posterior, has a much smaller variance.
+#'   The coupling holds best for `algorithm = "hmc"`; NUTS trees of
+#'   different depths lose it. Needs an even number of chains. ESS and
+#'   MCSE treat the chains as independent and so overstate the error.
 #' @param radial_moves After each transition, also propose scaling the
 #'   distance to the warmup mean by `exp(g)`, `g` normal with a scale tuned
 #'   toward acceptance 0.5 during warmup (Ostmeyer 2024). It costs one log
@@ -122,15 +145,32 @@
 #' fit
 #' @export
 bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampling = 1000L,
-                             seed = NULL, init = 2, algorithm = c("nuts", "hmc", "mala", "barker", "metropolis", "slice", "elliptical_slice", "fixed_param"),
+                             seed = NULL, init = 2, algorithm = c("nuts", "walnuts", "hmc", "gist", "malt", "aaps", "mala", "automala", "barker", "metropolis", "slice", "elliptical_slice", "fixed_param"),
                              metric = c("diag_e", "dense_e", "unit_e"), inv_metric = NULL,
                              step_size = NULL, adapt_delta = NULL, block = TRUE, max_treedepth = 10L,
-                             int_time = 2 * pi, radial_moves = FALSE, step_size_jitter = 0, adapt_engaged = TRUE, adapt_metric = TRUE, adapt_gamma = 0.05,
+                             int_time = 2 * pi, radial_moves = FALSE, antithetic = FALSE, step_size_jitter = 0, adapt_engaged = TRUE, adapt_metric = TRUE, adapt_gamma = 0.05,
                              adapt_kappa = 0.75, adapt_t0 = 10, adapt_init_buffer = 75L,
                              adapt_term_buffer = 50L, adapt_window = 25L, thin = 1L,
                              save_warmup = FALSE, refresh = 200L, cores = getOption("mc.cores", 1L), show_print = TRUE,
                              save_diagnostics = FALSE, resume = NULL) {
   check_model(model)
+  if (isTRUE(antithetic) && is.null(resume) && as_count(iter_warmup, "iter_warmup") > 0L && isTRUE(adapt_engaged)) {
+    # the two chains of a pair stay coupled only with the same step size and
+    # metric, so one warmup chain per pair adapts them and both chains start
+    # from its last state and random number stream
+    a <- mget(names(formals()), environment())
+    if (as_count(chains, "chains", 1L) %% 2L != 0L) stop("'antithetic' needs an even number of chains", call. = FALSE)
+    a$algorithm <- match.arg(algorithm)
+    pa <- utils::modifyList(a, list(chains = chains %/% 2L, iter_sampling = 0L, antithetic = FALSE, save_warmup = FALSE))
+    pilot <- do.call(bayescomp_sample, pa)
+    two <- function(x) rep(x, each = 2L)
+    for (k in c("unconstrained", "final", "step_size", "inv_metric")) pilot[[k]] <- two(pilot[[k]])
+    attr(pilot, "antithetic_pilot") <- TRUE
+    fit <- do.call(bayescomp_sample, utils::modifyList(a, list(resume = pilot)))
+    fit$config$iter_warmup <- as_count(iter_warmup, "iter_warmup")
+    fit$config$resume <- NULL
+    return(fit)
+  }
   if (!is.null(resume)) {
     if (!inherits(resume, "bayescomp_fit") || !identical(resume$method, "sample") || is.null(resume$unconstrained))
       stop("'resume' must be a fit from bayescomp_sample()", call. = FALSE)
@@ -172,6 +212,9 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   algorithm <- match.arg(algorithm)
   metric <- match.arg(metric)
   chains <- as_count(chains, "chains", min = 1L)
+  antithetic <- isTRUE(antithetic)
+  if (antithetic && (chains %% 2L != 0L || (!is.null(resume) && !isTRUE(attr(resume, "antithetic_pilot")))))
+    stop("'antithetic' needs an even number of chains and no 'resume'", call. = FALSE)
   iter_warmup <- as_count(iter_warmup, "iter_warmup")
   iter_sampling <- as_count(iter_sampling, "iter_sampling")
   thin <- as_count(thin, "thin", min = 1L)
@@ -186,7 +229,7 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   if (is.null(adapt_delta)) adapt_delta <- default_adapt_delta(algorithm, block)
   if (!(algorithm %in% c("slice", "elliptical_slice", "fixed_param")) && !(adapt_delta > 0 && adapt_delta < 1)) stop("'adapt_delta' must be in (0, 1)", call. = FALSE)
   if (is.null(step_size)) {
-    step_size <- switch(algorithm, nuts = 1, hmc = 1, slice = 2, elliptical_slice = 1, fixed_param = 1, mala = 1 / max(1, n)^(1 / 6), barker = 1 / max(1, n)^(1 / 6),
+    step_size <- switch(algorithm, nuts = 1, walnuts = 1, hmc = 1, gist = 1, malt = 1, aaps = 1, automala = 1, slice = 2, elliptical_slice = 1, fixed_param = 1, mala = 1 / max(1, n)^(1 / 6), barker = 1 / max(1, n)^(1 / 6),
                         metropolis = if (block) 2.38 / sqrt(max(1, n)) else 2.4)
   }
   if (!(is.numeric(step_size) && length(step_size) == 1L && step_size > 0)) stop("'step_size' must be positive", call. = FALSE)
@@ -206,7 +249,7 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
   cfg <- list(algorithm = algorithm, block = block, metric = metric, inv_metric = inv_metric, step_size = step_size,
               adapt_delta = adapt_delta, max_treedepth = as_count(max_treedepth, "max_treedepth", 1L),
               int_time = int_time, radial = isTRUE(radial_moves), step_size_jitter = step_size_jitter, adapt_engaged = adapt_engaged, adapt_metric = isTRUE(adapt_metric) || identical(adapt_metric, "fisher"),
-              fisher = identical(adapt_metric, "fisher") && metric == "diag_e" && algorithm %in% c("nuts", "hmc"),
+              fisher = identical(adapt_metric, "fisher") && metric == "diag_e" && algorithm %in% c("nuts", "walnuts", "hmc", "gist"),
               adapt_gamma = adapt_gamma, adapt_kappa = adapt_kappa, adapt_t0 = adapt_t0,
               adapt_init_buffer = as.integer(adapt_init_buffer), adapt_term_buffer = as.integer(adapt_term_buffer),
               adapt_window = as.integer(adapt_window), iter_warmup = iter_warmup, iter_sampling = iter_sampling,
@@ -230,6 +273,7 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
       cf$radial_sd <- fin$radial_sd
       cf$sampling_offset <- fin$n_sampling %||% 0L
     } else q0 <- find_init(model, init, id, gradient = !(algorithm %in% c("metropolis", "slice", "elliptical_slice", "fixed_param")))
+    cf$negate_momentum <- antithetic && id %% 2L == 0L
     # generated quantities draw from their own substream of the chain's
     # stream, so a continuation also continues them and their draws do not
     # overlap the transitions of the next run
@@ -243,7 +287,7 @@ bayescomp_sample <- function(model, chains = 4L, iter_warmup = 1000L, iter_sampl
               else chain_write_draws(model, out$q, show_print)
     out$final$gq_rng <- get(".Random.seed", envir = globalenv())
     out
-  })
+  }, pairs = antithetic)
   res <- interrupted_chains(res)
   if (!is.null(resume)) {
     # exact only when every chain finished (was not interrupted) and kept
@@ -425,7 +469,7 @@ bind_chain_id <- function(model, id) {
   invisible()
 }
 
-run_chains <- function(model, chains, seed, cores, f) {
+run_chains <- function(model, chains, seed, cores, f, pairs = FALSE) {
   old_kind <- RNGkind()
   if (is.null(seed)) seed <- sample.int(.Machine$integer.max, 1L)
   had <- exists(".Random.seed", envir = globalenv(), inherits = FALSE)
@@ -440,7 +484,8 @@ run_chains <- function(model, chains, seed, cores, f) {
   streams <- vector("list", chains)
   s <- get(".Random.seed", envir = globalenv())
   for (i in seq_len(chains)) {
-    s <- parallel::nextRNGStream(s)
+    # antithetic pairs share one stream
+    if (!pairs || i %% 2L == 1L) s <- parallel::nextRNGStream(s)
     streams[[i]] <- s
   }
   rebind <- isTRUE(model$compiled$chain_id_auto) && chains > 1L

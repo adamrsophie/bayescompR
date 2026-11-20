@@ -190,7 +190,7 @@ lp_cache_fun <- function(st) {
 }
 
 default_adapt_delta <- function(algorithm, block) {
-  switch(algorithm, nuts = 0.8, hmc = 0.8, mala = 0.574, barker = 0.574, metropolis = if (block) 0.234 else 0.44, NA_real_)
+  switch(algorithm, nuts = 0.8, walnuts = 0.8, hmc = 0.8, gist = 0.8, malt = 0.65, aaps = 0.8, mala = 0.574, automala = 0.574, barker = 0.574, metropolis = if (block) 0.234 else 0.44, NA_real_)
 }
 
 # Generalized elliptical slice sampling (Murray, Adams and MacKay 2010;
@@ -222,4 +222,48 @@ elliptical_transition <- function(st, q) {
   }
   st$last <- list(q = q, lp = lp0)
   mh_out(q, lp0, 1, evals)
+}
+
+# autoMALA (Biron-Lattes, Surjanovic, Syed, Campbell and Bouchard-Cote
+# 2024): each iteration draws soft bounds a < b on the acceptance ratio and
+# doubles or halves the initial step size until the one step leapfrog ratio
+# lies between them; the reversed proposal must select the same number of
+# doublings. The random diagonal preconditioner mixing of the paper is not
+# used: the adapted metric is.
+automala_select <- function(st, m, z, H0, la, lb) {
+  e <- st$eps; n <- 1L
+  zn <- leapfrog(st$pot, m, z, e)
+  l <- H0 - ps_H(m, zn); if (is.nan(l)) l <- -Inf
+  d <- (l >= lb) - (l <= la)
+  j <- 0L
+  if (d == 0) return(list(eps = e, j = 0L, n = n, z = zn))
+  repeat {
+    e <- e * 2^d; j <- j + d; n <- n + 1L
+    zn <- leapfrog(st$pot, m, z, e)
+    l <- H0 - ps_H(m, zn); if (is.nan(l)) l <- -Inf
+    if (d == 1 && l < lb) return(list(eps = e / 2, j = j - 1L, n = n, z = NULL))
+    if (d == -1 && l > la) return(list(eps = e, j = j, n = n, z = zn))
+    if (abs(j) > 50L) return(list(eps = e, j = j, n = n, z = zn))
+  }
+}
+automala_transition <- function(st, q) {
+  m <- st$metric
+  cached <- identical(st$last_q, q)
+  r <- if (cached) st$last_r else st$pot(q)
+  z <- list(q = q, p = metric_sample_p(m, length(q)), V = r$V, g = r$g)
+  H0 <- ps_H(m, z)
+  ab <- sort(stats::runif(2L)); la <- log(ab[1L]); lb <- log(ab[2L])
+  f <- automala_select(st, m, z, H0, la, lb)
+  zn <- f$z %||% leapfrog(st$pot, m, z, f$eps)
+  n <- f$n + is.null(f$z)
+  H1 <- ps_H(m, zn)
+  zb <- zn; zb$p <- -zb$p
+  b <- automala_select(st, m, zb, H1, la, lb)
+  n <- n + b$n
+  acc <- if (b$j == f$j && is.finite(H1)) min(1, exp(H0 - H1)) else 0
+  if (stats::runif(1) < acc) z <- zn
+  st$last_q <- z$q
+  st$last_r <- list(V = z$V, g = z$g)
+  st$automala_eps <- 0.5 * (f$eps + b$eps)
+  mh_out(z$q, -z$V, acc, n + !cached)
 }

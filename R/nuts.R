@@ -42,6 +42,8 @@ make_metric <- function(type, inv) {
 }
 metric_sample_p <- function(m, n) {
   u <- stats::rnorm(n)
+  # the second chain of an antithetic pair draws the negated momenta
+  if (isTRUE(m$neg)) u <- -u
   if (m$type == "diag_e") u / sqrt(m$inv) else backsolve(m$U, u)
 }
 metric_dtau <- function(m, p) if (m$type == "diag_e") m$inv * p else as.vector(m$inv %*% p)
@@ -74,8 +76,9 @@ nuts_criterion <- function(ps_minus, ps_plus, rho) sum(ps_plus * rho) > 0 && sum
 nuts_build_tree <- function(st, depth, sign, H0) {
   if (depth == 0L) {
     q_prev <- st$z$q
-    st$z <- leapfrog(st$pot, st$metric, st$z, sign * st$eps)
-    st$n_leapfrog <- st$n_leapfrog + 1L
+    st$z <- if (isTRUE(st$walnuts)) walnuts_step(st, st$z, sign * st$eps)
+            else leapfrog(st$pot, st$metric, st$z, sign * st$eps)
+    if (!isTRUE(st$walnuts)) st$n_leapfrog <- st$n_leapfrog + 1L
     # the inverse metric times the momentum serves both the kinetic energy
     # and the turning criterion; a dense metric makes it O(dim^2)
     ps <- metric_dtau(st$metric, st$z$p)
@@ -87,8 +90,9 @@ nuts_build_tree <- function(st, depth, sign, H0) {
       st$divergent <- TRUE
     }
     st$sum_metro <- st$sum_metro + if (H0 - h > 0) 1 else exp(H0 - h)
+    st$n_leaf <- st$n_leaf + 1L
     return(list(valid = !st$divergent, propose = st$z, psb = ps, pse = ps, rho = st$z$p,
-                pb = st$z$p, pe = st$z$p, lsw = H0 - h))
+                pb = st$z$p, pe = st$z$p, lsw = H0 - h + (st$z$lr %||% 0)))
   }
   init <- nuts_build_tree(st, depth - 1L, sign, H0)
   if (!init$valid) return(list(valid = FALSE))
@@ -96,7 +100,8 @@ nuts_build_tree <- function(st, depth, sign, H0) {
   if (!fin$valid) return(list(valid = FALSE))
   lsw <- lse2(init$lsw, fin$lsw)
   propose <- init$propose
-  if (fin$lsw > lsw || stats::runif(1) < exp(fin$lsw - lsw)) propose <- fin$propose
+  # a WALNUTS subtree can have zero weight throughout
+  if (fin$lsw > -Inf && (fin$lsw > lsw || stats::runif(1) < exp(fin$lsw - lsw))) propose <- fin$propose
   rho <- init$rho + fin$rho
   persist <- nuts_criterion(init$psb, fin$pse, rho) &&
     nuts_criterion(init$psb, fin$psb, init$rho + fin$pb) &&
@@ -119,6 +124,8 @@ nuts_transition <- function(st, q) {
   rho <- z$p
   lsw <- 0
   st$n_leapfrog <- 0L
+  st$n_leaf <- 0L
+  st$n_coarse <- 0L
   st$sum_metro <- 0
   st$divergent <- FALSE
   depth <- 0L
@@ -161,7 +168,11 @@ nuts_transition <- function(st, q) {
   }
   st$last_q <- z_sample$q
   st$last_r <- list(V = z_sample$V, g = z_sample$g)
-  list(q = z_sample$q, lp = -z_sample$V, accept_stat = if (st$n_leapfrog > 0L) st$sum_metro / st$n_leapfrog else 0,
+  # WALNUTS tunes the macro step so that a share adapt_delta of macro steps
+  # needs no refinement (Bou-Rabee et al. 2025 aim at about 80%); the energy
+  # error is controlled by the micro steps instead
+  list(q = z_sample$q, lp = -z_sample$V,
+       accept_stat = if (st$n_leaf == 0L) 0 else if (isTRUE(st$walnuts)) st$n_coarse / st$n_leaf else st$sum_metro / st$n_leaf,
        treedepth = depth, n_leapfrog = st$n_leapfrog, divergent = st$divergent,
        energy = ps_H(m, z_sample), p = z_sample$p, g = z_sample$g, div_q = if (st$divergent) st$div_q)
 }
@@ -309,6 +320,7 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   st <- new.env(parent = emptyenv())
   st$pot <- pot
   st$metric <- make_metric(cfg$metric, inv)
+  st$metric$neg <- isTRUE(cfg$negate_momentum)
   st$eps <- cfg$step_size
   st$max_depth <- cfg$max_treedepth
   st$max_deltaH <- 1000
@@ -319,15 +331,16 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
   st$lp_cache <- lp_cache_fun(st)
   st$block <- isTRUE(cfg$block)
   st$max_steps <- 32L
-  trans <- switch(cfg$algorithm, nuts = nuts_transition, hmc = hmc_transition, mala = mala_transition, barker = barker_transition,
+  st$walnuts <- cfg$algorithm == "walnuts"
+  trans <- switch(cfg$algorithm, nuts = nuts_transition, walnuts = nuts_transition, hmc = hmc_transition, gist = gist_transition, automala = automala_transition, malt = malt_transition, aaps = aaps_transition, mala = mala_transition, barker = barker_transition,
                   metropolis = metropolis_transition, slice = slice_transition,
                   elliptical_slice = elliptical_transition)
   st$center <- cfg$center %||% q0
-  hamiltonian <- cfg$algorithm %in% c("nuts", "hmc")
+  hamiltonian <- cfg$algorithm %in% c("nuts", "walnuts", "hmc", "gist", "malt", "aaps")
   nw <- cfg$iter_warmup
   ns <- cfg$iter_sampling
   adapt <- cfg$adapt_engaged && nw > 0L
-  tune_step <- adapt && !(cfg$algorithm %in% c("slice", "elliptical_slice"))
+  tune_step <- adapt && !(cfg$algorithm %in% c("slice", "elliptical_slice", "automala"))
   da <- dual_avg_new(cfg$adapt_delta, cfg$adapt_gamma, cfg$adapt_kappa, cfg$adapt_t0, mu = log(10 * cfg$step_size))
   w <- windows_new(nw, cfg$adapt_init_buffer, cfg$adapt_term_buffer, cfg$adapt_window)
   est <- est_new(n, dense)
@@ -380,6 +393,11 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
       if (it <= nw) rad_sd <- rad_sd * exp((a - 0.5) / sqrt(it))
     }
     st$eps <- eps_nominal
+    # autoMALA: the initial step size of the selector follows the geometric
+    # mean of the selected step sizes during warmup
+    if (!is.null(st$automala_eps) && it <= nw && adapt) {
+      st$eps <- exp(log(st$eps) + (log(st$automala_eps) - log(st$eps)) / min(it, 50))
+    }
     if (it <= nw && adapt) {
       if (tune_step) st$eps <- dual_avg_learn(da, s$accept_stat)
       if (cfg$adapt_metric) {
@@ -389,6 +407,7 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
           # a window of one draw has no variance estimate (as Stan, which
           # needs more than one sample): the metric stays as it is
           if (est$n > 1) st$metric <- make_metric(cfg$metric, if (fisher) est_fisher(est, estg) else est_value(est))
+          st$metric$neg <- isTRUE(cfg$negate_momentum)
           st$center <- est$mean
           est <- est_new(n, dense)
           if (fisher) estg <- est_new(n, FALSE)
@@ -444,4 +463,188 @@ run_hmc_chain <- function(model, q0, cfg, chain_id) {
        # interrupt can stop a transition halfway through its random numbers
        final = list(q = q, rng = get0(".Random.seed", envir = globalenv(), inherits = FALSE), exact = !stopped,
                     center = st$center, radial_sd = if (radial) rad_sd, n_sampling = off + max(0L, n_done - nw)))
+}
+
+# GIST (Bou-Rabee, Carpenter and Marsden 2024): the number of leapfrog
+# steps L is drawn uniformly from [max(1, floor(psi U)), U], where U is the
+# number of steps until the trajectory makes a U-turn; the proposal's own
+# U-turn length in the reversed direction enters the acceptance ratio. The
+# backward U-turn search reuses the forward states, so only the steps past
+# the start are new.
+gist_psi <- 0.5
+gist_transition <- function(st, q) {
+  m <- st$metric
+  cap <- 2L^st$max_depth
+  r <- if (identical(st$last_q, q)) st$last_r else st$pot(q)
+  z <- list(q = q, p = metric_sample_p(m, length(q)), V = r$V, g = r$g)
+  H0 <- ps_H(m, z)
+  # forward to the U-turn, storing every state
+  path <- list(z); H <- H0
+  repeat {
+    z <- leapfrog(st$pot, m, z, st$eps)
+    h <- ps_H(m, z); if (is.nan(h)) h <- Inf
+    path[[length(path) + 1L]] <- z; H <- c(H, h)
+    k <- length(path) - 1L
+    if (h - H0 > st$max_deltaH || sum((z$q - q) * metric_dtau(m, z$p)) < 0 || k >= cap) break
+  }
+  U1 <- k
+  lo1 <- max(1L, floor(gist_psi * U1))
+  L <- if (U1 > lo1) sample(lo1:U1, 1L) else U1
+  zL <- path[[L + 1L]]; HL <- H[L + 1L]
+  # backward from (q_L, -p_L): the states z_{L-1}, ..., z_0 with negated
+  # momentum, then new steps past the start
+  U2 <- 0L; n_new <- 0L; zb <- NULL
+  repeat {
+    U2 <- U2 + 1L
+    j <- L - U2
+    if (j >= 0L) { zj <- path[[j + 1L]]; hj <- H[j + 1L]; pj <- -zj$p }
+    else {
+      if (is.null(zb)) zb <- list(q = path[[1L]]$q, p = -path[[1L]]$p, V = path[[1L]]$V, g = path[[1L]]$g)
+      zb <- leapfrog(st$pot, m, zb, st$eps); n_new <- n_new + 1L
+      zj <- zb; hj <- ps_H(m, zb); if (is.nan(hj)) hj <- Inf; pj <- zb$p
+    }
+    if (hj - HL > st$max_deltaH || sum((zj$q - zL$q) * metric_dtau(m, pj)) < 0 || U2 >= cap) break
+  }
+  lo2 <- max(1L, floor(gist_psi * U2))
+  la <- H0 - HL + log(U1 - lo1 + 1) - log(U2 - lo2 + 1)
+  acc <- if (L >= lo2 && L <= U2 && is.finite(la)) min(1, exp(la)) else 0
+  out <- if (stats::runif(1) < acc) zL else path[[1L]]
+  st$last_q <- out$q
+  st$last_r <- list(V = out$V, g = out$g)
+  # the step size adapts to the energy error alone, as for NUTS: the
+  # path length part of the acceptance does not shrink with the step
+  acc_e <- if (is.finite(HL)) min(1, exp(H0 - HL)) else 0
+  list(q = out$q, lp = -out$V, accept_stat = acc_e, treedepth = 0L, n_leapfrog = U1 + n_new,
+       divergent = (max(H) - H0) > st$max_deltaH, energy = ps_H(m, out), p = out$p, g = out$g)
+}
+
+# MALT (Riou-Durand and Vogrinc 2023): a trajectory of OBABO steps of the
+# kinetic Langevin diffusion with one Metropolis test for the whole
+# trajectory, on the sum of the energy errors of the leapfrog parts (the
+# partial momentum refreshes O are exact). The damping is fixed at 1 on the
+# scale of the adapted metric, between HMC (0) and overdamped moves.
+malt_gamma <- 1
+malt_transition <- function(st, q) {
+  m <- st$metric
+  n <- length(q)
+  r <- if (identical(st$last_q, q)) st$last_r else st$pot(q)
+  z <- list(q = q, p = metric_sample_p(m, n), V = r$V, g = r$g)
+  z0 <- z
+  L <- max(1L, as.integer(st$int_time / st$eps))
+  eta <- exp(-malt_gamma * st$eps / 2)
+  s <- sqrt(1 - eta^2)
+  delta <- 0
+  for (i in seq_len(L)) {
+    z$p <- eta * z$p + s * metric_sample_p(m, n)
+    h0 <- ps_H(m, z)
+    z <- leapfrog(st$pot, m, z, st$eps)
+    h1 <- ps_H(m, z); if (is.nan(h1)) h1 <- Inf
+    delta <- delta + (h1 - h0)
+    if (!is.finite(delta)) break
+    z$p <- eta * z$p + s * metric_sample_p(m, n)
+  }
+  acc <- if (is.finite(delta)) min(1, exp(-delta)) else 0
+  if (stats::runif(1) > acc) z <- z0
+  st$last_q <- z$q
+  st$last_r <- list(V = z$V, g = z$g)
+  list(q = z$q, lp = -z$V, accept_stat = acc, treedepth = 0L, n_leapfrog = L,
+       divergent = delta > st$max_deltaH, energy = ps_H(m, z), p = z$p, g = z$g)
+}
+
+# AAPS (Sherlock, Urbas and Ludkin 2023): the leapfrog path is cut into
+# segments at apogees, where the potential stops rising; the current
+# segment is placed uniformly among K + 1 segments and the proposal is drawn
+# from all their points with weight pi(z) |x - x_current|^2 (their scheme
+# 3). The acceptance ratio compares the weighted squared distances of the
+# path to the current point and to the proposal.
+# ponytail: K is fixed; their tuning run for K is the upgrade
+aaps_K <- 4L
+aaps_transition <- function(st, q) {
+  m <- st$metric
+  cap <- 2L^st$max_depth
+  r <- if (identical(st$last_q, q)) st$last_r else st$pot(q)
+  z0 <- list(q = q, p = metric_sample_p(m, length(q)), V = r$V, g = r$g)
+  cseg <- sample.int(aaps_K + 1L, 1L) - 1L
+  rate <- function(z, dir) dir * sum(z$g * metric_dtau(m, z$p))  # dU/dt in forward time
+  # walk in one direction until the given number of apogees is passed;
+  # returns the points before the last apogee
+  walk <- function(dir, n_apo) {
+    z <- z0; if (dir < 0) z$p <- -z$p
+    out <- list(); s_prev <- rate(z, dir); k <- 0L; hit <- FALSE
+    repeat {
+      z <- leapfrog(st$pot, m, z, st$eps); k <- k + 1L
+      # a point whose position or energy overflowed ends the walk as a
+      # divergence; the same segments are walked from any of their points,
+      # so the reverse move sees it too
+      if (!is.finite(z$V) || !is.finite(ps_H(m, z)) || !all(is.finite(z$q)) || k >= cap) { hit <- TRUE; break }
+      s <- rate(z, dir)
+      # forward in time an apogee lies between a rise and a fall; walking
+      # backward the order of the two is reversed
+      if ((dir > 0 && s_prev > 0 && s <= 0) || (dir < 0 && s_prev <= 0 && s > 0)) {
+        n_apo <- n_apo - 1L
+        if (n_apo == 0L) break
+      }
+      out[[length(out) + 1L]] <- z; s_prev <- s
+    }
+    list(z = out, k = k, hit = hit)
+  }
+  fw <- walk(1, aaps_K - cseg + 1L)
+  bw <- walk(-1, cseg + 1L)
+  pts <- c(rev(bw$z), list(z0), fw$z)
+  X <- do.call(rbind, lapply(pts, `[[`, "q"))
+  H <- vapply(pts, function(z) ps_H(m, z), 0)
+  lw <- -(H - min(H))
+  d0 <- rowSums(sweep(X, 2L, q)^2)
+  w <- exp(lw) * d0
+  i <- if (sum(w) > 0) sample.int(length(pts), 1L, prob = w) else length(bw$z) + 1L
+  di <- rowSums(sweep(X, 2L, X[i, ])^2)
+  acc <- if (fw$hit || bw$hit) 0 else min(1, sum(exp(lw) * d0) / sum(exp(lw) * di))
+  # every point at the current one (no segment left the start): stay
+  if (!is.finite(acc)) acc <- 0
+  out <- if (stats::runif(1) < acc) pts[[i]] else z0
+  st$last_q <- out$q
+  st$last_r <- list(V = out$V, g = out$g)
+  # the step size adapts to the energy error along the path, as for NUTS
+  H0 <- ps_H(m, z0)
+  acc_e <- mean(pmin(1, exp(H0 - H[is.finite(H)])))
+  list(q = out$q, lp = -out$V, accept_stat = acc_e, treedepth = 0L, n_leapfrog = fw$k + bw$k,
+       divergent = fw$hit || bw$hit, energy = ps_H(m, out), p = out$p, g = out$g)
+}
+
+# WALNUTS (Bou-Rabee, Carpenter, Kleppe and Liu 2025): NUTS on a
+# grid of macro steps, each integrated with the fewest leapfrog micro steps,
+# a power of two, that keep the energy error of the macro step within
+# delta. Reversibility needs the reversed macro step to select the same
+# number of micro steps; when a smaller number would do in reverse, the
+# point and every later point in that direction get weight zero (the
+# deterministic choice of micro steps, which they find fastest in practice).
+walnuts_delta <- 0.3
+walnuts_max_micro <- 1024L
+walnuts_err <- function(st, z, h, ell) {
+  zz <- z
+  for (j in seq_len(ell)) zz <- leapfrog(st$pot, st$metric, zz, h / ell)
+  st$n_leapfrog <- st$n_leapfrog + ell
+  e <- abs(ps_H(st$metric, zz) - ps_H(st$metric, z))
+  list(z = zz, ok = is.finite(e) && e <= walnuts_delta)
+}
+walnuts_step <- function(st, z, h) {
+  lr <- z$lr %||% 0
+  ell <- 1L
+  repeat {
+    f <- walnuts_err(st, z, h, ell)
+    if (f$ok || ell >= walnuts_max_micro) break
+    ell <- 2L * ell
+  }
+  if (ell == 1L) st$n_coarse <- st$n_coarse + 1L
+  z1 <- f$z
+  # the reversed macro step from z1 must not succeed with fewer micro steps
+  if (is.finite(lr) && f$ok) {
+    k <- 1L
+    while (k < ell) {
+      if (walnuts_err(st, z1, -h, k)$ok) { lr <- -Inf; break }
+      k <- 2L * k
+    }
+  }
+  z1$lr <- lr
+  z1
 }

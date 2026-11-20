@@ -27,6 +27,27 @@ test_that("MALA, Metropolis and slice sampling target the posterior", {
   check_moments(fit)
 })
 
+test_that("WALNUTS, GIST, MALT, AAPS and autoMALA target the posterior", {
+  skip_on_cran()
+  m <- bayescomp_model(target_code)
+  n <- if (long_tests()) 1000L else 300L
+  for (a in c("walnuts", "gist", "malt", "aaps", "automala")) {
+    fit <- bayescomp_sample(m, chains = 2, iter_warmup = n, iter_sampling = n, algorithm = a, seed = 7, refresh = 0)
+    check_moments(fit)
+  }
+})
+
+test_that("antithetic chain pairs are valid and negatively correlated", {
+  skip_on_cran()
+  m <- bayescomp_model("parameters { vector[3] x; } model { x ~ normal(1, 2); }")
+  expect_error(bayescomp_sample(m, chains = 3, antithetic = TRUE), "even number")
+  fit <- bayescomp_sample(m, chains = 2, iter_warmup = 300, iter_sampling = 500, algorithm = "hmc",
+                          antithetic = TRUE, seed = 7, refresh = 0)
+  x <- fit$draws[, , "x[1]"]
+  expect_lt(abs(mean(x) - 1), 0.3)
+  expect_lt(stats::cor(x[, 1] - 1, x[, 2] - 1), -0.5)
+})
+
 test_that("radial moves keep the target and resume exactly", {
   skip_on_cran()
   m <- bayescomp_model(target_code)
