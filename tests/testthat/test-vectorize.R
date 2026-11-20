@@ -184,3 +184,19 @@ test_that("two index reads with loop dependent positions are gathered", {
   expect_error(bayescomp_model("parameters { matrix[2, 2] B; } model { target += sum(gather2__(B, {1}, {2})); }"),
                "unknown function")
 })
+
+test_that("an element of a loop invariant matrix times a group vector is one product", {
+  set.seed(4)
+  N <- 24; J <- 6; T <- 3
+  d <- list(N = N, J = J, T = T, id = sample(J, N, TRUE), t = sample(T, N, TRUE), y = rpois(N, 2))
+  dd <- "data { int N; int J; int T; array[N] int id; array[N] int t; array[N] int y; }
+    parameters { real<lower=0, upper=0.9> rho; vector<lower=0>[T] s; array[J] vector[T] z; }
+    transformed parameters { matrix[T, T] L = cholesky_decompose(add_diag(rep_matrix(rho, T, T), 1 - rho)); }"
+  u <- seq(-0.5, 0.5, length.out = 1 + T + J * T)
+  for (body in c("for (n in 1:N) y[n] ~ poisson_log((L * z[id[n]])[t[n]]);",
+                 "for (n in 1:N) y[n] ~ poisson_log(1 + (diag_pre_multiply(s, L) * z[id[n]])[t[n]]);",
+                 "for (n in 1:N) y[n] ~ poisson_log((L * z[id[n]])[2]);"))
+    same_as_loop(paste(dd, "model {", body, "}"), d, u, 1L)
+  # a matrix that changes with the loop stays a loop
+  same_as_loop(paste(dd, "model { for (n in 1:N) y[n] ~ poisson_log((n * L * z[id[n]])[t[n]]); }"), d, u, 0L)
+})

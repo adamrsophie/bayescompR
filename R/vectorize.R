@@ -28,6 +28,9 @@
 #     `b[i][j]` with `b` an array of vectors or row vectors, where each of
 #     i and j is a position as above or does not depend on the loop; the
 #     elements are read with the internal function `gather2__`,
+#   * `(A * x[g[n]])[k]` with `A` a matrix and `x` an array of vectors that
+#     do not depend on the loop, read as element [k, g[n]] of the single
+#     product `A * to_matrix(x)`,
 #   * arithmetic (`+ - * / ^`, unary minus) on scalars,
 #   * elementwise functions of one scalar (exp, log, inv_logit, ...),
 #   * `dot_product(X[n], b)`.
@@ -387,7 +390,7 @@ vec_index <- function(a, t, ctx) {
       length(a$x$idx) == 1L &&
       identical((t$x$x$type$nd %||% 0L), 1L) && t$x$x$type$base %in% c("vector", "row_vector"))
     return(vec_gather2(a$x$x, t$x$x, c(a$x$idx, a$idx), c(t$x$idx, t$idx), ctx))
-  if (vec_mentions(a$x, n)) return(NULL)
+  if (vec_mentions(a$x, n)) return(vec_index_product(a, t, ctx))
   xt <- t$x$type
   nd <- xt$nd %||% 0L
   pos <- function(ia, it) vec_pos(ia, it, ctx)
@@ -459,4 +462,26 @@ vec_gather2 <- function(x, tx, idx, tidx, ctx) {
   ij <- Map(arr, idx, tidx)
   if (any(vapply(ij, is.null, TRUE))) return(NULL)
   list(ast = vec_call("gather2__", c(list(x), ij), ctx$loc), dep = TRUE, kind = "vec")
+}
+
+# (A * x[g])[k] with A a matrix that does not depend on the loop and x an
+# array of vectors: the products for all groups are one matrix product,
+# A * to_matrix(x) (whose columns are A * x[j]), and the loop reads its
+# elements [k, g]. This costs one product per group instead of one per
+# iteration.
+vec_index_product <- function(a, t, ctx) {
+  n <- ctx$n
+  ax <- a$x
+  while (identical(ax$kind, "paren")) ax <- ax$a
+  tx <- t$x
+  while (identical(tx$kind, "paren")) tx <- tx$a
+  if (length(a$idx) != 1L || !identical(ax$kind, "binop") || !identical(tx$kind, "binop") || ax$op != "*") return(NULL)
+  A <- ax$a; tA <- tx$a; xg <- ax$b; txg <- tx$b
+  if (vec_mentions(A, n) || vec_effectful(A) || !identical(tA$type$base, "matrix") || (tA$type$nd %||% 0L) != 0L) return(NULL)
+  if (!identical(xg$kind, "index") || !identical(txg$kind, "index") || length(xg$idx) != 1L) return(NULL)
+  xt <- txg$x$type
+  if (!identical(xt$base, "vector") || (xt$nd %||% 0L) != 1L || vec_mentions(xg$x, n) || vec_effectful(xg$x)) return(NULL)
+  P <- list(kind = "binop", op = "*", a = A, b = vec_call("to_matrix", list(xg$x), ctx$loc), loc = ax$loc)
+  tP <- list(kind = "binop", type = ty("matrix", 0L))
+  vec_gather2(P, tP, c(a$idx, xg$idx), c(t$idx, txg$idx), ctx)
 }

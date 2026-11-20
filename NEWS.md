@@ -6,7 +6,10 @@
   positions, such as `B[t[n], id[n]]` on a matrix or two dimensional array
   and `b[id[n]][t[n]]` on an array of vectors, into one gather. A Poisson
   model with a compound symmetry random effect over 240 rows written this way
-  takes about a tenth of the time per gradient.
+  takes about a tenth of the time per gradient. An element of a product
+  with a group vector, `(L * z[id[n]])[t[n]]` with `L` the same in every
+  iteration, is read from the one product `L * to_matrix(z)` instead of a
+  product per row.
 
 * `bayescomp_sample(algorithm = "barker")` adds the Barker proposal, a
   gradient based random walk that flips a Gaussian step toward the gradient
